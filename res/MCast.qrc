@@ -1,0 +1,25 @@
+<!DOCTYPE RCC>
+<!--
+    程序图标的 Qt 版本。
+
+    为什么同一个图标要放两份（MCast.rc 里一份、这里一份）：
+
+      MCast.rc  —— 编进 exe 的资源里。资源管理器、以及系统按 exe 认程序身份
+                   的地方（比如媒体面板那条会话的名字和图标）读的是它。
+
+      MCast.qrc —— 编进 Qt 自己的资源系统里，给 QApplication::setWindowIcon 用。
+                   任务栏、Alt+Tab、窗口左上角用的是**窗口图标**，Windows 不会
+                   自动拿 exe 资源顶上去；而 Qt 在窗口图标为空时会把它重置成
+                   系统那个通用的"白纸"图标。这一份就是喂给它的。
+
+    四个尺寸是给不同场合挑的：16/32 是任务栏，48 是 Alt+Tab，256 是高 DPI 和
+    放大镜。都用 PNG：Qt 读 PNG 是内置能力，不需要任何图片格式插件。
+-->
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file alias="mcast-16.png">mcast-16.png</file>
+        <file alias="mcast-32.png">mcast-32.png</file>
+        <file alias="mcast-48.png">mcast-48.png</file>
+        <file alias="mcast-256.png">mcast-256.png</file>
+    </qresource>
+</RCC>

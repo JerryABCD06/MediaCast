@@ -1,0 +1,21 @@
+<!--
+    新界面（QML）的资源清单。
+
+    为什么编进资源而不是散在文件系统里：QML 文件散着放的话，构建目录里就得跟着
+    一份、发布包里还得再拷一次，两处容易对不上。编进 exe 就只有一份，永远不会
+    "程序装了但界面文件没拷过去"。
+
+    FluentUI 那个模块不在这里 —— 它是个带 DLL 的 QML 插件，只能放文件系统
+    （CMake 会把它拷到 exe 旁边的 qml/FluentUI）。
+
+    注意 TopNav.qml **不在**这个清单里。它是我们自己写的顶栏备选（支持图标、
+    支持左右分列），现在没在用，所以不编进 exe。哪天要用，在下面加一行
+    <file alias="TopNav.qml">../src/ui/qml/TopNav.qml</file> 就行。
+-->
+<RCC>
+    <qresource prefix="/ui">
+        <file alias="NewUiWindow.qml">../src/ui/qml/NewUiWindow.qml</file>
+        <file alias="CastPage.qml">../src/ui/qml/CastPage.qml</file>
+        <file alias="SettingsPage.qml">../src/ui/qml/SettingsPage.qml</file>
+    </qresource>
+</RCC>
