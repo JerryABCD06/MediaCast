@@ -140,6 +140,7 @@ bool MpvCore::start()
     m_thread = std::thread(&MpvCore::eventLoop, this);
 
     emit statusChanged(QStringLiteral("libmpv 已就绪"));
+    emit runningChanged();
     return true;
 }
 
@@ -157,6 +158,7 @@ void MpvCore::shutdown()
     if (m_mpv) {
         mpv_terminate_destroy(m_mpv);
         m_mpv = nullptr;
+        emit runningChanged();
     }
 }
 
@@ -355,8 +357,20 @@ void MpvCore::setVideoWindow(quintptr windowId)
 
 void MpvCore::applyStartupOptions(mpv_handle *mpv)
 {
-    // 基类没有"画面往哪出"这回事 —— 子类才做得了这个决定。
-    Q_UNUSED(mpv);
+    if (m_outputMode != RenderApiOutput)
+        return;   // WindowOutput：vo 用 mpv 自己的默认，窗口由子类用 wid 指定
+
+    // ── render API 这条路要设的两项 ──────────────────────────────────────
+    //
+    // vo=libmpv 是硬性前提。不设它，mpv 会自己去开视频输出 —— 而那时候
+    // 渲染上下文还没建好（它要到渲染线程上、GL 上下文当前时才能建），
+    // 于是直接报 "No render context set" 然后放弃：视频永远出不来。
+    // 这个坑是实测踩出来的，不是从文档上看来的。
+    mpv_set_option_string(mpv, "vo", "libmpv");
+
+    // 渲染上下文是 OpenGL 的，GPU 后端也得跟着钉成 OpenGL。不钉的话 mpv 在
+    // Windows 上默认去用 d3d11，跟我们的上下文对不上。
+    mpv_set_option_string(mpv, "gpu-api", "opengl");
 }
 
 QVector<PictureControlInfo> MpvCore::pictureControls() const

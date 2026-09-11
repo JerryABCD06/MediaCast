@@ -8,7 +8,11 @@
 #include <QTime>
 #include <QtQml/qqml.h>
 
+#include <memory>
+
 #include "core/LibMpvPlayer.h"
+#include "core/MpvCore.h"
+#include "core/MpvQmlItem.h"
 #include "platform/windows/WindowsMediaControls.h"
 #include "protocols/dlna/DlnaRenderer.h"
 #include "ui/MainWindow.h"
@@ -113,9 +117,45 @@ int main(int argc, char *argv[])
     //   LibMpvPlayer   —— 内嵌 libmpv，画面画进我们自己的窗口（当前用这个）
     //   MpvMediaPlayer —— 外部 mpv.exe + 命名管道（保留着，排查问题时能换回来，
     //                     但它需要把 mpv.exe 的路径传给 start()）
-    LibMpvPlayer player;
-    DlnaRenderer   renderer(&player);
-    MainWindow     window(&renderer);
+    // ── 播放后端 ─────────────────────────────────────────────────────────
+    //
+    // 【过渡开关】两套界面现在还并存，而**一个 mpv 实例只能有一条画面输出
+    // 路径**（mpv 的 vo 只能设一次，wid 和 render API 互斥）。所以画面只可能
+    // 出现在其中一边：
+    //
+    //   false → LibMpvPlayer 走 wid，画面画进旧界面的画面区。
+    //           手机投屏时电脑上能看到画面 —— 现在就是这条。
+    //   true  → MpvCore 走 render API，画面由新的 QML 界面渲染。
+    //           代价是旧界面的画面区会变成空的。
+    //
+    // DLNA 那一层**两条路都不受影响** —— 它只认 MediaPlayer 接口，不关心
+    // 画面往哪出。等旧界面退场之后，这个开关就能删掉，只剩上面那条。
+    constexpr bool kRenderVideoInNewUi = false;
+
+    std::unique_ptr<MpvCore> ownedPlayer;
+    if (kRenderVideoInNewUi) {
+        auto core = std::make_unique<MpvCore>();
+        core->setOutputMode(MpvCore::RenderApiOutput);
+        ownedPlayer = std::move(core);
+    } else {
+        // 构造里已经把自己设成 WindowOutput。
+        ownedPlayer = std::make_unique<LibMpvPlayer>();
+    }
+    MpvCore *player = ownedPlayer.get();
+
+    // 播放器注册给 QML，和 UiState 同样的道理 —— QML 引擎只借不拥有这个对象，
+    // 所以 ownedPlayer 必须声明在 newUi 之前（后声明的先析构）。必须注册在
+    // **创建之前**，所以放在这儿而不是上面 UiState 那一段。
+    //
+    // 从 QML 那边看到的是 MpvCore 这一层，看不到底下是哪个外壳 —— 界面不该
+    // 关心画面往哪出。MpvCore 注册成"不可创建"：它只能由 C++ 造。
+    qmlRegisterUncreatableType<MpvCore>("MediaCast", 1, 0, "MpvCore",
+                                        QStringLiteral("MpvCore 只能由 C++ 创建"));
+    qmlRegisterType<MpvQmlItem>("MediaCast", 1, 0, "MpvQmlItem");
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Player", player);
+
+    DlnaRenderer renderer(player);
+    MainWindow   window(&renderer);
 
     // Windows 自己的媒体面板（按音量键弹出来的那个）。
     // 它在结构上很特别：**既是显示端，又是控制端**。所以显示的部分照界面那样接，
@@ -190,7 +230,7 @@ int main(int argc, char *argv[])
     // 媒体面板要等窗口真的存在之后才能挂 —— 它认的是窗口号。
     mediaControls.attachToWindow(static_cast<quintptr>(window.winId()));
 
-    player.start();
+    player->start();
     renderer.start();
 
     return app.exec();

@@ -5,12 +5,20 @@
 LibMpvPlayer::LibMpvPlayer(QObject *parent)
     : MpvCore(parent)
 {
+    // 这个外壳走的是"画进原生窗口"那条路。写出来而不是靠默认值，是因为
+    // 这个决定会影响 mpv 的启动选项，值得在代码里看得见。
+    setOutputMode(WindowOutput);
 }
 
 LibMpvPlayer::~LibMpvPlayer() = default;
 
 void LibMpvPlayer::applyStartupOptions(mpv_handle *mpv)
 {
+    // 先让基类把它那套（如果当前模式需要）设上，再加我们自己的。
+    // 现在 WindowOutput 模式下基类什么都不做，但这条链路要显式，免得将来
+    // 基类加了什么东西这边悄悄漏掉。
+    MpvCore::applyStartupOptions(mpv);
+
     if (m_windowId == 0 || !mpv)
         return;
 

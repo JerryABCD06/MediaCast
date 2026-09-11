@@ -21,14 +21,25 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: 8
-            color: "transparent"
+            color: "#10000000"
+            clip: true
             border.width: 1
             border.color: FluTheme.dividerColor
 
+            // 视频，就是场景图里的一个普通图层 —— 可以被裁剪、被别的控件压住。
+            // 旧的 Widgets 界面做不到这件事，那边视频是一个独立的原生子窗口。
+            MpvQmlItem {
+                anchors.fill: parent
+                // Player 是 main.cpp 注册进来的播放器。画面往哪出由 C++ 那边的
+                // 输出模式决定，这里只负责"把它画出来"。
+                core: Player
+            }
+
             FluText {
                 anchors.centerIn: parent
-                text: qsTr("视频区（待接入）")
-                font: FluTextStyle.Subtitle
+                visible: !Player.running
+                text: qsTr("播放器未就绪")
+                font: FluTextStyle.Body
                 textColor: FluTheme.fontTertiaryColor
             }
         }

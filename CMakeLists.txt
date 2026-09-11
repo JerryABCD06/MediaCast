@@ -56,6 +56,8 @@ qt_add_executable(MCast
     src/core/NowPlaying.cpp
     src/core/MpvCore.h
     src/core/MpvCore.cpp
+    src/core/MpvQmlItem.h
+    src/core/MpvQmlItem.cpp
     src/core/LibMpvPlayer.h
     src/core/LibMpvPlayer.cpp
     src/core/MpvMediaPlayer.h

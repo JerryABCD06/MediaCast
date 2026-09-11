@@ -44,9 +44,49 @@ class MpvCore : public MediaPlayer
 {
     Q_OBJECT
 
+    /// 引擎起来了没有。QML 那边靠它决定要不要显示"未就绪"的占位文字 ——
+    /// 写成属性而不是只留个 isRunning() 方法，是因为 QML 读不了 C++ 的方法。
+    Q_PROPERTY(bool running READ isRunning NOTIFY runningChanged)
+
 public:
+    /**
+     * 画面往哪出。
+     *
+     * **一个 mpv 实例只能走一条路** —— wid 和 render API 是互斥的，因为
+     * mpv 的 `vo` 决定了它怎么开视频输出，而这个选项只能在初始化前设一次。
+     * 想在两个界面上同时看到画面是做不到的，只能二选一。
+     *
+     * 必须在 start() 之前设好，之后再改没有意义（改了也只在下次 start() 生效）。
+     */
+    enum OutputMode {
+        /** 画进一个原生窗口。LibMpvPlayer 那条路（mpv 的 wid 选项）。 */
+        WindowOutput,
+
+        /** 由调用方自己用 mpv 的 render API 渲染。QML 那条路。 */
+        RenderApiOutput,
+    };
+    Q_ENUM(OutputMode)
+
     explicit MpvCore(QObject *parent = nullptr);
     ~MpvCore() override;
+
+    /** 定下画面往哪出。只在 start() 之前调有意义。 */
+    void setOutputMode(OutputMode mode) { m_outputMode = mode; }
+    OutputMode outputMode() const { return m_outputMode; }
+
+    /**
+     * mpv 实例本身。start() 之前是 nullptr。
+     *
+     * 为什么放开到 public：**用 render API 渲染就必须拿到它** —— 建渲染上下文、
+     * 每一帧渲染，第一个参数都是这个句柄。走这条路的是 MpvQmlItem，它不继承
+     * MpvCore（要继承 QQuickFramebufferObject），所以 protected 挡不住它、
+     * 也不该挡。
+     *
+     * 用的人请只做"外壳该做的事"（设输出选项、建渲染上下文）；播放命令和状态
+     * 一律走这个类自己的方法，别绕过去 —— 绕过去就等于跳过了状态机，项目早期
+     * 那几个难查的 bug 全是这么来的。
+     */
+    mpv_handle *handle() const { return m_mpv; }
 
     /** 建好 mpv 实例（不加载任何东西）。 */
     bool start();
@@ -55,6 +95,17 @@ public:
     void shutdown();
 
     bool isRunning() const { return m_mpv != nullptr; }
+
+signals:
+    /** isRunning() 的取值变了。 */
+    void runningChanged();
+
+    // 这行 public: 不能省。moc 的规则是"从 signals: 开始、后面全当信号"，
+    // 直到遇到下一个访问说明符才停 —— 少了它，下面那些普通成员函数会被当成
+    // 信号，moc 直接报 "Not a signal declaration"。
+    // （signals: 展开成 public 加一个给 moc 看的标记，所以它对 C++ 的访问控制
+    //   是多余的、对 moc 不是 —— 别当成废话删掉。）
+public:
 
     // ── MediaPlayer ──────────────────────────────────────────────────────
 
@@ -97,14 +148,6 @@ public:
 
 protected:
     /**
-     * mpv 实例。给子类在运行中改选项用。start() 之前是 nullptr。
-     *
-     * 为什么放开这个：子类要设的那些选项（wid 就是）是"这个外壳特有的"，
-     * 基类不该知道；但设置动作得落到同一个 mpv 实例上。
-     */
-    mpv_handle *handle() const { return m_mpv; }
-
-    /**
      * 在 mpv_initialize() 之前调一次，让子类设"只能初始化前设"的选项。
      *
      * 为什么需要这个口子：mpv 的某些选项必须在初始化之前设好（wid 就是），
@@ -128,6 +171,7 @@ private:
     mpv_handle *m_mpv = nullptr;
     std::thread m_thread;
     std::atomic<bool> m_stopRequested{false};
+    OutputMode m_outputMode = WindowOutput;
 
     std::atomic<double> m_positionSec{0.0};
     std::atomic<double> m_durationSec{0.0};
