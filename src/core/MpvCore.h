@@ -221,6 +221,14 @@ private:
     std::atomic<bool> m_rendererAttached{false};
 
     /**
+     * 片子播到头了没有（mpv 的 eof-reached）。
+     *
+     * 只有 play() 用它：播完之后再按播放，得先回到 0，否则一放开又立刻 EOF，
+     * 用户看到的是"按了没反应"。开了 keep-open 之后文件还在手上，所以能重放。
+     */
+    std::atomic<bool> m_eofReached{false};
+
+    /**
      * 渲染面还没就绪时，先攒在这儿的那条地址。
      *
      * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。

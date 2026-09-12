@@ -168,12 +168,10 @@ Item {
                     iconSize: 24
                     iconColor: "#FFFFFFFF"
                     contentDescription: showPlay ? qsTr("播放") : qsTr("暂停")
-                    onClicked: {
-                        if (showPlay)
-                            Playback.play()
-                        else
-                            Playback.pause()
-                    }
+                    // 按下去该干什么由状态机说了算（规则只有一份，在
+                    // PlaybackController::togglePlayPause）。上面那个 showPlay
+                    // 只管画哪个图标。
+                    onClicked: Playback.togglePlayPause()
                 }
 
                 // 壳子：下一个

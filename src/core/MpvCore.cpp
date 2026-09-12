@@ -69,6 +69,7 @@ enum PropertyId {
     IdPause    = 3,
     IdVolume   = 4,
     IdMute     = 5,
+    IdEof      = 6,
 };
 
 /** 把 mpv 的返回码翻成人能看的话。 */
@@ -105,6 +106,18 @@ bool MpvCore::start()
     // 没文件也保持运行，等着我们发 loadfile。
     mpv_set_option_string(m_mpv, "idle", "yes");
 
+    // **播完了别把文件卸掉。**
+    //
+    // mpv 默认（keep-open=no）一到文件末尾就把文件卸了。卸掉之后再按播放，
+    // play() 只是设 pause=0 —— 手上却没文件，结果就是那句老熟人：
+    // "状态显示正在播放、画面全黑、位置永远是 0"。
+    //
+    // 这个 bug 以前修过一次（见 stop() 里那段），但**只修了"按停止"那条路**；
+    // "让片子自然播完"走的是另一个入口（mpv 自己到 EOF），照样翻车。
+    // 开了这个之后，播完会停在最后一帧、文件还在手上，再由 play() 里的
+    // "播完了就从头来"把它重新放起来。
+    mpv_set_option_string(m_mpv, "keep-open", "yes");
+
     // 和进程版一样的理由：关掉 mpv 自带的一切控制。用户能直接操作的地方，就是能绕过
     // 状态机的地方 —— 那正是前面三处 bug 的根因。
     mpv_set_option_string(m_mpv, "osc", "no");
@@ -130,6 +143,7 @@ bool MpvCore::start()
     mpv_observe_property(m_mpv, IdTimePos,  "time-pos", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, IdDuration, "duration", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, IdPause,    "pause",    MPV_FORMAT_FLAG);
+    mpv_observe_property(m_mpv, IdEof,      "eof-reached", MPV_FORMAT_FLAG);
     mpv_observe_property(m_mpv, IdVolume,   "volume",   MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, IdMute,     "mute",     MPV_FORMAT_FLAG);
 
@@ -199,6 +213,19 @@ void MpvCore::eventLoop()
             case IdPause: {
                 const bool paused = prop->data && (*static_cast<int *>(prop->data) != 0);
                 emit pausedChanged(paused);
+                break;
+            }
+            case IdEof: {
+                const bool eof = prop->data && (*static_cast<int *>(prop->data) != 0);
+                const bool wasEof = m_eofReached.exchange(eof);
+
+                // **"播完了"这件事现在只能从这儿报出去。**
+                //
+                // 开了 keep-open 之后，mpv 到末尾不再卸文件，于是 END_FILE 事件
+                // 根本不来 —— 上层就永远以为自己还在播。以前靠 END_FILE 报，
+                // 现在靠 eof-reached 由 false 变 true 这一下报。
+                if (eof && !wasEof)
+                    emit ended();
                 break;
             }
             case IdVolume: {
@@ -332,6 +359,20 @@ void MpvCore::play()
 {
     if (!m_mpv)
         return;
+
+    // **播完了再按播放，就是"从头再放一遍"。**
+    //
+    // 不先回到 0 的话，mpv 手上还停在那条片子的末尾（keep-open 让它把文件留着了），
+    // 一放开就立刻又到 EOF —— 用户看到的是"按了播放，什么也没发生"。
+    //
+    // 注意这里只看"播没播到头"。用户自己按的「停止」走的是 stop()，那条路会把
+    // 位置归零，eof-reached 也是 false，不会误判。
+    if (m_eofReached.load()) {
+        const char *args[] = { "seek", "0", "absolute", nullptr };
+        mpv_command(m_mpv, args);
+        m_eofReached.store(false);
+    }
+
     int flag = 0;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
 }

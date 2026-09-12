@@ -187,7 +187,12 @@ PlaybackController::CastState PlaybackController::castState() const
     if (!m_peerConnected)
         return CastState::NoViewer;
 
-    if (!hasMedia())
+    // 用 idle 而不是 !hasMedia：**停着的也算"没在放"**。
+    //
+    // 这两个判据的差别就在 Stopped 上：hasMedia 说"会话还在"，idle 说"屏幕上空了"。
+    // 界面要的是后者 —— 片子自然播完之后，胶囊该回到"已连接"，而不是继续写着
+    // "正在投屏"。（关窗口前要不要警告看的是另一个，用的是 hasMedia，别改错。）
+    if (isIdle())
         return CastState::ViewerIdle;
 
     switch (m_nowPlaying.kind) {
@@ -220,6 +225,17 @@ void PlaybackController::pause()
     if (m_player)
         m_player->pause();
     setState(State::Paused);
+}
+
+void PlaybackController::togglePlayPause()
+{
+    // "停止"和"播完了"这两种情况下 paused 都是 false，但按下去该是**播放**
+    // （播完了还会由播放器那边先回到 0，见 MpvCore::play）。所以判断的是
+    // "现在屏幕上是不是在走"，不是 paused 取反。
+    if (isIdle() || isPaused())
+        play();
+    else
+        pause();
 }
 
 void PlaybackController::stop()

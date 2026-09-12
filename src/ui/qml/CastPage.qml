@@ -46,7 +46,11 @@ Item {
                 // Player 是 main.cpp 注册进来的播放器。画面往哪出由 C++ 那边的
                 // 输出模式决定，这里只负责"把它画出来"。
                 core: Player
-                visible: !Playback.idle
+
+                // **这里故意没有 visible 绑定。** 以前写的是 `visible: !Playback.idle`，
+                // 结果片子自然播完（状态变 Stopped）时它自己藏了起来 —— 恰好踩中上面
+                // 说的那个坑：一停止渲染，mpv 的视频输出就死了，再点播放只会得到一块
+                // 纯黑。空着的时候靠下面那块面板**盖住**它就行，它自己一直画着。
             }
 
             // ── 点画面 = 播放/暂停 ──────────────────────────────────────
@@ -56,12 +60,11 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 enabled: Playback.hasMedia
-                onClicked: {
-                    if (Playback.paused)
-                        Playback.play()
-                    else
-                        Playback.pause()
-                }
+                // 「该播还是该暂停」是个状态机问题，规则在 PlaybackController 里
+                // （togglePlayPause）。界面上有两处要用它，各写一份的话迟早只有
+                // 一处被改到 —— 这次就是这么来的：片子播完之后这里还在判 paused，
+                // 于是点一下变成"暂停"，什么都没发生。
+                onClicked: Playback.togglePlayPause()
             }
 
             // ── 中间那块提示 ────────────────────────────────────────────
