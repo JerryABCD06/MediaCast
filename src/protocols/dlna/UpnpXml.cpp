@@ -390,13 +390,40 @@ QString UpnpXml::transportActionsFor(const QString &transportState,
                                      bool hasNext,
                                      bool hasPrevious)
 {
-    // 没有媒体的时候，什么传输操作都不成立（SetAVTransportURI 不在这个列表里，
-    // 它永远可用）。
-    if (transportState == QLatin1String("NO_MEDIA_PRESENT"))
-        return QString();
+    // ── 这个列表是"现在哪些按钮能用"，**必须跟着状态走** ────────────────────
+    //
+    // 关键在 Play 和 Pause **互斥**：
+    //
+    //   正在播  -> Pause,Stop,Seek    （不能再给 Play）
+    //   暂停中  -> Play,Stop,Seek     （不能再给 Pause）
+    //   停着    -> Play,Stop,Seek
+    //   切换中  -> Stop
+    //   没内容  -> 空（SetAVTransportURI 不在这个列表里，它永远可用）
+    //
+    // 踩过：这里原先是**写死的** Play,Pause,Stop,Seek，不管什么状态都四个全给。
+    // 结果手机上的播放/暂停图标从头到尾不变 —— 事件送达了、手机也回了 200 OK、
+    // 传输状态和进度都对，只有那个按钮纹丝不动。因为控制点判断"该显示播放还是
+    // 暂停"，依据就是这个列表（这也是它唯一的用处）。
+    //
+    // 顺带一提：vivo 相册和 BubbleUPnP 都是这么做的，所以两个一起不灵。
+    QStringList actions;
 
-    QStringList actions = { QStringLiteral("Play"), QStringLiteral("Pause"),
-                            QStringLiteral("Stop"), QStringLiteral("Seek") };
+    if (transportState == QLatin1String("NO_MEDIA_PRESENT")) {
+        return QString();
+    }
+    else if (transportState == QLatin1String("PLAYING")) {
+        actions << QStringLiteral("Pause");
+    }
+    else if (transportState == QLatin1String("TRANSITIONING")) {
+        actions << QStringLiteral("Stop");
+        return actions.join(QLatin1Char(','));   // 切换中就别报 Seek 了
+    }
+    else {
+        // PAUSED_PLAYBACK / STOPPED，以及任何没预料到的值。给 Play 是安全的。
+        actions << QStringLiteral("Play");
+    }
+
+    actions << QStringLiteral("Stop") << QStringLiteral("Seek");
 
     // Next / Previous 只在真的有地方可去的时候才报。
     //

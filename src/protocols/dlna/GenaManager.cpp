@@ -267,6 +267,9 @@ QByteArray GenaManager::eventBodyFor(const QString &service) const
         "<Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/AVT/\">"
         "<InstanceID val=\"0\">"
         "<TransportState val=\"%1\"/>"
+        // TransportStatus 是标准变量，真实渲染器都会带上一个 OK。
+        // 我们原来没发，讲究一点的解析器会觉得这条事件不完整。
+        "<TransportStatus val=\"OK\"/>"
         "<CurrentTransportActions val=\"%2\"/>"
         "<CurrentPlayMode val=\"%3\"/>"
         "<NumberOfTracks val=\"%4\"/>"
