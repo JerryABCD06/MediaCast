@@ -57,6 +57,11 @@ DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
             emit muteChanged(muted);
         });
 
+        // 总时长也给事件层留一份：控制点拿它画进度条、判断"有没有东西可放"。
+        // 它不单独成事件，跟着之后每一条 AVTransport 事件一起出去。
+        connect(m_ctl, &PlaybackController::durationChanged,
+                m_gena, &GenaManager::setMediaDuration);
+
         // 界面要显示的状态也一并转发 —— 这样界面就不必认识播放器。
         connect(m_ctl, &PlaybackController::playerStatusChanged, this, &DlnaRenderer::playerStatusChanged);
         // 播放器的状态变化同时也写进日志。不然"到底启没启动"在事后无从查起。

@@ -44,6 +44,12 @@ public:
     /** 传输状态变了：更新缓存并推给订阅了 AVTransport 的客户端。 */
     void pushTransportState(const QString &state);
 
+    /**
+     * 媒体总时长（秒）。只缓存，不单独推送 —— 之后每一条 AVTransport 事件都会
+     * 带上它。控制点靠它画进度条、判断"现在到底有没有东西可放"。
+     */
+    void setMediaDuration(double seconds);
+
     /** 音量或静音变了。 */
     void pushRendering(int volume, bool muted);
 
@@ -142,6 +148,8 @@ private:
     // 队列那几项也要缓存，理由和上面一样：新订阅者一来就得收到一份完整的现状。
     bool    m_hasNext = false;
     bool    m_hasPrevious = false;
+    /** 缓存的总时长，形如 "0:00:27"。见 setMediaDuration()。 */
+    QString m_mediaDuration = QStringLiteral("0:00:00");
     QString m_nextUri;
     QString m_playMode = QStringLiteral("NORMAL");
 

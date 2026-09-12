@@ -9,6 +9,8 @@
 #include <QNetworkProxy>
 #include <QSharedPointer>
 
+#include <cmath>
+
 namespace {
 
 const int kTimeoutSeconds = 1800;
@@ -163,6 +165,26 @@ void GenaManager::pushTransportState(const QString &state)
     pushToService(QStringLiteral("AVTransport"));
 }
 
+void GenaManager::setMediaDuration(double seconds)
+{
+    if (!std::isfinite(seconds) || seconds < 0.0)
+        seconds = 0.0;
+
+    const qint64 total = static_cast<qint64>(seconds);
+    const QString text = QStringLiteral("%1:%2:%3")
+                             .arg(total / 3600)
+                             .arg((total % 3600) / 60, 2, 10, QLatin1Char('0'))
+                             .arg(total % 60, 2, 10, QLatin1Char('0'));
+
+    if (text == m_mediaDuration)
+        return;
+
+    m_mediaDuration = text;
+
+    // 时长变了通常意味着换了内容 —— 顺手推一条，让控制点把进度条重新标定。
+    pushToService(QStringLiteral("AVTransport"));
+}
+
 void GenaManager::pushRendering(int volume, bool muted)
 {
     if (m_lastVolume == volume && m_lastMuted == muted)
@@ -262,34 +284,42 @@ QByteArray GenaManager::eventBodyFor(const QString &service) const
         return xml.toUtf8();
     }
 
-    // 其余的按 AVTransport 处理。
+    // ── AVTransport 的 LastChange ────────────────────────────────────────
+    //
+    // **这一段是照 Macast 抄的。** Macast 是成熟的 DLNA 渲染器，手机跟它配合是
+    // 好的；我们原来在事件里塞的是一份"全量快照"，其中包含 AVTransportURI、
+    // CurrentTrackURI，以及**两整坨 DIDL 元数据**（转义过两遍的长 XML）。
+    //
+    // 少发那两坨不只是省字节：事件是丢给控制点**解析**的，里面塞的结构化内容
+    // 越多，它解析出岔子、然后整条事件被丢掉的机会就越大 —— 而且这种失败完全
+    // 静默（HTTP 层照样回 200，日志里只能看到"对方回了 200 OK"）。
+    // 手机上"收到了却不改播放/暂停按钮"就是这么一类毛病。
+    //
+    // Macast 在事件里只发几个标量：TransportState / TransportStatus /
+    // CurrentMediaDuration / CurrentTrackDuration / CurrentTrack / NumberOfTracks。
+    // 我们在它那个集合上加回了 CurrentTransportActions（控制点靠它决定哪些按钮
+    // 能用，Play 和 Pause 必须互斥，见 UpnpXml::transportActionsFor）。
     const QString lastChange = QStringLiteral(
         "<Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/AVT/\">"
         "<InstanceID val=\"0\">"
         "<TransportState val=\"%1\"/>"
-        // TransportStatus 是标准变量，真实渲染器都会带上一个 OK。
-        // 我们原来没发，讲究一点的解析器会觉得这条事件不完整。
         "<TransportStatus val=\"OK\"/>"
-        "<CurrentTransportActions val=\"%2\"/>"
-        "<CurrentPlayMode val=\"%3\"/>"
-        "<NumberOfTracks val=\"%4\"/>"
-        "<AVTransportURI val=\"%5\"/>"
-        "<AVTransportURIMetaData val=\"%6\"/>"
-        "<CurrentTrackURI val=\"%7\"/>"
-        "<CurrentTrackMetaData val=\"%8\"/>"
-        "<NextAVTransportURI val=\"%9\"/>"
+        "<CurrentMediaDuration val=\"%2\"/>"
+        "<CurrentTrackDuration val=\"%3\"/>"
+        "<CurrentTrack val=\"%4\"/>"
+        "<NumberOfTracks val=\"%5\"/>"
+        "<CurrentPlayMode val=\"%6\"/>"
+        "<CurrentTransportActions val=\"%7\"/>"
         "</InstanceID></Event>")
-        // 九项一次填完，不要一个一个链式 arg —— 链式的话，某个参数里只要含 "%1"
-        // 这种字样，下一轮就会把内容替换进去。地址里带百分号编码（%E5%8E%9F）很常见。
+        // 一次填完，不要一个一个链式 arg —— 链式的话，某个参数里只要含 "%1"
+        // 这种字样，下一轮就会把内容替换进去。
         .arg(m_lastTransportState,
-             UpnpXml::transportActionsFor(m_lastTransportState, m_hasNext, m_hasPrevious),
-             m_playMode,
+             m_mediaDuration,
+             m_mediaDuration,
              m_hasMedia ? QStringLiteral("1") : QStringLiteral("0"),
-             UpnpXml::escapeText(m_mediaUri),
-             UpnpXml::escapeText(m_mediaMetadata),
-             UpnpXml::escapeText(m_mediaUri),
-             UpnpXml::escapeText(m_mediaMetadata),
-             UpnpXml::escapeText(m_nextUri));
+             m_hasMedia ? QStringLiteral("1") : QStringLiteral("0"),
+             m_playMode,
+             UpnpXml::transportActionsFor(m_lastTransportState, m_hasNext, m_hasPrevious));
     return propertysetWithLastChange(lastChange);
 }
 
@@ -336,12 +366,17 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
         "SID: %4\r\n"
         "SEQ: %5\r\n"
         "CONTENT-LENGTH: %6\r\n"
+        // SERVER 是 UPnP 规范里"建议带上"的一项，真实渲染器都带（Macast 也带）。
+        // TIMEOUT 也一样 —— 有些控制点会顺手拿它，不发它是不完整的。
+        "SERVER: %7\r\n"
+        "TIMEOUT: Second-1800\r\n"
         "Connection: close\r\n\r\n")
         .arg(path, url.host())
         .arg(port)
         .arg(sid)
         .arg(sequence)
         .arg(body.size())
+        .arg(QStringLiteral("Windows/10.0 UPnP/1.0 MediaCast/0.1"))
         .toUtf8();
 
     // 用裸 socket，不用高层的 HTTP 客户端：NOTIFY 是个很少见的动词，
