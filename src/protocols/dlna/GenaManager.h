@@ -91,6 +91,25 @@ private:
          * 连着失败够多次就把它丢掉；推成功一次就清零。
          */
         int       failures = 0;
+
+        /**
+         * 这个订阅现在**有一条 NOTIFY 正在路上**。
+         *
+         * 这一条是关键。GENA 的规矩是订阅者按 SEQ **严格递增**来处理事件：
+         * 它等 5 却先收到 6，就必须丢掉；而丢掉之后它的期待值还是 5，
+         * 于是**后面每一条都对不上、全被丢掉** —— 手机那边的状态从此冻住，
+         * 界面上播放/暂停再也不变（进度条倒是照常，因为那是它自己轮询
+         * GetPositionInfo 问来的）。
+         *
+         * 而我们原来是每变一次状态就新开一条 TCP 连接，两条挨着发的时候
+         * 谁先到就说不准了 —— 实测真的乱过（SEQ=6 比 SEQ=5 先到）。
+         *
+         * 所以：同一个订阅同一时刻只允许一条在途，后面的先攒着。
+         */
+        bool      busy = false;
+
+        /** 在途那条发完之后，还要不要再发一条（按**那时候**的最新状态）。 */
+        bool      resend = false;
     };
 
     void prune();
@@ -99,6 +118,8 @@ private:
     /** 这一次推成功 / 失败了。失败够多次就把订阅丢掉。 */
     void noteSendOk(const QString &sid);
     void noteSendFailed(const QString &sid);
+    /** 在途的那条结束了（成功、失败、超时都算），该发的下一条在这儿发。 */
+    void finishSend(const QString &sid);
     QByteArray eventBodyFor(const QString &service) const;
 
     QHash<QString, Subscription> m_subscriptions;

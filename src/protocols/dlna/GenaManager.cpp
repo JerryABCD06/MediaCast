@@ -109,12 +109,32 @@ QByteArray GenaManager::handleSubscribe(const QString &service,
     sub.service = service;
     sub.callbackUrl = callback;
     sub.expiresAt = QDateTime::currentDateTime().addSecs(kTimeoutSeconds);
+    // **先把"在途"占上。** 首条事件要等应答发出去之后才发（原因见下），
+    // 这中间万一有状态变化要推，它只会记一个 resend —— 不会抢在首条前面
+    // 出去把 SEQ 顺序打乱。
+    sub.busy = true;
     m_subscriptions.insert(sid, sub);
 
     emit logMessage(QStringLiteral("事件订阅 %1  ->  %2").arg(service, callback));
 
-    // 立刻推一条当前状态。少了这一步，严格的控制点会认为设备不提供事件功能。
-    sendEvent(sid, eventBodyFor(service));
+    // ── 首条事件不能跟订阅应答抢跑 ────────────────────────────────────────
+    //
+    // 少了首条事件，严格的控制点会认为设备根本不提供事件功能；但**发早了
+    // 一样要命**。原来这里就是立刻发，于是应答和"SEQ=0 的事件"几乎同时出去。
+    // 控制点得先从应答里把 SID 记下来，才认得那条事件 —— 抢输了的控制点会把
+    // SEQ=0 丢掉，而它的期待值就停在 0；我们下一条发的是 SEQ=1，一对不上又丢……
+    // **从此每一条都被丢掉**，手机上的播放/暂停再也不变（进度条没事，那是它
+    // 自己轮询 GetPositionInfo 问的）。
+    //
+    // 所以延后一小会儿再发：让应答先到、控制点先把 SID 记好。
+    QTimer::singleShot(100, this, [this, sid, service] {
+        auto it = m_subscriptions.find(sid);
+        if (it == m_subscriptions.end())
+            return;   // 这中间已经退订了
+
+        it->busy = false;
+        sendEvent(sid, eventBodyFor(service));   // 这一条拿到 SEQ=0
+    });
 
     return httpResponse(200, QStringLiteral("OK"),
                         QStringLiteral("SID: %1\r\nTIMEOUT: %2\r\n").arg(sid, kTimeoutHeader));
@@ -276,6 +296,21 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     if (it == m_subscriptions.end())
         return;
 
+    // ── 同一个订阅同一时刻只允许一条 NOTIFY 在路上 ────────────────────────
+    //
+    // 这不是为了省资源，是为了**顺序**。GENA 要求订阅者按 SEQ 严格递增处理：
+    // 它等 5 却先收到 6 就必须丢掉，而且丢掉之后期待值还是 5 —— 后面每一条
+    // 都对不上，全被丢。表现就是手机上的播放/暂停状态从此冻住不再变。
+    //
+    // 我们原来是每变一次状态就新开一条 TCP 连接，两条挨着发谁先到说不准，
+    // 实测真的乱过（SEQ=6 比 SEQ=5 先到）。所以这里改成：在途的时候只做个
+    // 记号，等那条结束再按**那时候**的最新状态补一条。
+    if (it->busy) {
+        it->resend = true;
+        return;
+    }
+    it->busy = true;
+
     const QUrl url(it->callbackUrl);
     if (!url.isValid() || url.host().isEmpty()) {
         emit logMessage(QStringLiteral("回调地址无效，丢掉这个订阅：%1").arg(it->callbackUrl));
@@ -361,6 +396,7 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
                             .arg(sequence)
                             .arg(status));
         socket->disconnectFromHost();
+        finishSend(sid);
     });
 
     connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
@@ -375,6 +411,7 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
                             .arg(port)
                             .arg(socket->errorString()));
         noteSendFailed(sid);
+        finishSend(sid);
         socket->deleteLater();
     });
 
@@ -403,6 +440,7 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
         }
 
         noteSendFailed(sid);
+        finishSend(sid);
         socket->abort();
         socket->deleteLater();
     });
@@ -435,4 +473,23 @@ void GenaManager::noteSendFailed(const QString &sid)
                         .arg(it->failures)
                         .arg(it->callbackUrl));
     m_subscriptions.erase(it);
+}
+
+void GenaManager::finishSend(const QString &sid)
+{
+    auto it = m_subscriptions.find(sid);
+    if (it == m_subscriptions.end())
+        return;
+
+    it->busy = false;
+
+    if (!it->resend)
+        return;
+
+    it->resend = false;
+
+    // 攒着的那次**重新取一遍当前状态**，而不是把当初那条原样再发一遍。
+    // 中间可能又变了好几回（播放→暂停→播放），发最新的那一个才是对的，
+    // 中间态没人关心。
+    sendEvent(sid, eventBodyFor(it->service));
 }
