@@ -131,7 +131,7 @@ int main(int argc, char *argv[])
     //
     // DLNA 那一层**两条路都不受影响** —— 它只认 MediaPlayer 接口，不关心
     // 画面往哪出。等旧界面退场之后，这个开关就能删掉，只剩上面那条。
-    constexpr bool kRenderVideoInNewUi = false;
+    constexpr bool kRenderVideoInNewUi = true;
 
     std::unique_ptr<MpvCore> ownedPlayer;
     if (kRenderVideoInNewUi) {
@@ -160,6 +160,10 @@ int main(int argc, char *argv[])
     // 协议无关的那一层：传输状态机、队列三格、当前媒体。DLNA 只跟它说话，
     // 不直接碰播放器 —— 将来加别的协议时，那个协议也接在这儿。
     PlaybackController playback(player);
+
+    // 控制器也给 QML —— 新界面靠它判断"现在屏幕上是不是空的"，
+    // 好决定显示画面还是显示投屏指引。
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Playback", &playback);
 
     DlnaRenderer renderer(&playback);
     MainWindow   window(&renderer);

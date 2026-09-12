@@ -43,6 +43,16 @@ class PlaybackController : public QObject
 {
     Q_OBJECT
 
+    /**
+     * 屏幕上是不是"空的"。
+     *
+     * 空 = 手上没内容，或者内容已经停住。**加载中、播放中、暂停中都不算空** ——
+     * 那三种情况下用户看到的是同一条内容，画面该留着。
+     *
+     * 界面用它决定"显示画面还是显示投屏指引"。做成属性是因为 QML 读不了方法。
+     */
+    Q_PROPERTY(bool idle READ isIdle NOTIFY idleChanged)
+
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
@@ -173,6 +183,7 @@ public:
     // ── 状态读取（取缓存，立刻返回）──────────────────────────────────────
 
     State state() const { return m_state; }
+    bool isIdle() const { return m_state == State::NoMedia || m_state == State::Stopped; }
     LoadStatus loadStatus() const { return m_loadStatus; }
 
     NowPlaying nowPlaying() const { return m_nowPlaying; }
@@ -201,6 +212,9 @@ signals:
 
     /** 状态变了。协议层拿它去翻成自己那套词。 */
     void stateChanged(State state);
+
+    /** 上面那个 idle 变了。界面靠它切换"画面 / 投屏指引"。 */
+    void idleChanged();
 
     /** "正在播放什么"变了（换片子，或者会话结束）。 */
     void nowPlayingChanged(const NowPlaying &info);

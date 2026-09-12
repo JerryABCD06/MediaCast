@@ -297,6 +297,28 @@ void MpvCore::stop()
 {
     if (!m_mpv)
         return;
+
+    // 「停止」的语义是**停下，但媒体还装着** —— 之后再按播放要能接着放。
+    //
+    // 所以这里**不能**用 mpv 的 `stop` 命令：那条命令会把文件整个卸掉，之后
+    // play() 只设 pause=0，手上却没文件，结果就是"状态显示正在播放、画面全黑、
+    // 位置永远是 0"。这个 bug 存在了很久，因为它只在"停止 → 再播放"这条路径上
+    // 出现，而回归测试一直只测"暂停 → 播放"。
+    //
+    // 正确做法：暂停 + 回到开头。两条命令都是对**当前这条**生效，不卸载。
+    int flag = 1;
+    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
+
+    const char *seek[] = {"seek", "0", "absolute", nullptr};
+    mpv_command(m_mpv, seek);
+}
+
+void MpvCore::unload()
+{
+    if (!m_mpv)
+        return;
+
+    // 这个才是"卸掉"。会话结束（挂断投送）时用。
     const char *command[] = {"stop", nullptr};
     mpv_command(m_mpv, command);
 }

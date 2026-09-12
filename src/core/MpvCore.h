@@ -113,6 +113,7 @@ public:
     void play() override;
     void pause() override;
     void stop() override;
+    void unload() override;
     void seekTo(double seconds) override;
     void setVolumePercent(int percent) override;
     void setMuted(bool muted) override;

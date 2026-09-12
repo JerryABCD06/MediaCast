@@ -123,6 +123,9 @@ void PlaybackController::setState(State state)
     if (m_state == state)
         return;
 
+    // 空/不空只在这几种状态之间跳变，所以要记下改之前的答案再比。
+    const bool wasIdle = isIdle();
+
     m_state = state;
 
     // 日志里那串英文是给排查用的，和协议无关 —— 谁都能看懂 PLAYING 是什么。
@@ -139,6 +142,9 @@ void PlaybackController::setState(State state)
 
     emit logMessage(QStringLiteral("传输状态 -> %1").arg(QLatin1String(nameOf(state))));
     emit stateChanged(state);
+
+    if (isIdle() != wasIdle)
+        emit idleChanged();
 }
 
 // ── 命令 ─────────────────────────────────────────────────────────────────
@@ -366,7 +372,7 @@ void PlaybackController::endSession()
     // 只是停着"，控制点收到它会认为会话还在、只是没在播 —— 手机上的投屏界面就会
     // 一直挂着。NoMedia 才是"我这儿什么都没有了"。
     if (m_player)
-        m_player->stop();              // 播放器回到空闲，下次投送不用重启
+        m_player->unload();            // 真的卸掉 —— 会话都断了，不该再留着上一条
 
     m_loadWatchdog->stop();            // 手都断了，别再等那条片子了
     m_loadStatus = LoadStatus::Ok;

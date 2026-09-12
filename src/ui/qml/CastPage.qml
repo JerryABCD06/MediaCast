@@ -26,21 +26,77 @@ Item {
             border.width: 1
             border.color: FluTheme.dividerColor
 
+            // ── 画面 ────────────────────────────────────────────────────
+            //
             // 视频，就是场景图里的一个普通图层 —— 可以被裁剪、被别的控件压住。
             // 旧的 Widgets 界面做不到这件事，那边视频是一个独立的原生子窗口。
+            //
+            // **它必须一直可见、一直在渲染**，连"空着的时候"也一样。
+            //
+            // 踩过的坑：一开始空着的时候把它 visible: false 隐藏掉，看着挺好，
+            // 但 mpv 在 render API 模式下是靠我们每帧调一次渲染来推进画面的；
+            // 一旦没有渲染调用，它的视频输出就停了 —— 再按播放也起不来。
+            // 实测表现：状态显示"正在播放"，但位置一直是 0、画面全黑。
+            //
+            // 所以空着的时候是**盖住**它（见下面那块面板），不是藏起它。
             MpvQmlItem {
                 anchors.fill: parent
                 // Player 是 main.cpp 注册进来的播放器。画面往哪出由 C++ 那边的
                 // 输出模式决定，这里只负责"把它画出来"。
                 core: Player
+                visible: !Playback.idle
             }
 
-            FluText {
-                anchors.centerIn: parent
-                visible: !Player.running
-                text: qsTr("播放器未就绪")
-                font: FluTextStyle.Body
-                textColor: FluTheme.fontTertiaryColor
+            // ── 投屏指引 ────────────────────────────────────────────────
+            //
+            // 一行内容都没有的时候盖在画面上。不透明，所以下面的黑画面看不见。
+            // 用页面同色而不是纯白，是为了让它看起来是"这一块空着"，而不是
+            // 贴了一张白纸上去。
+            Rectangle {
+                anchors.fill: parent
+                color: FluTheme.backgroundColor
+                visible: Playback.idle
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 80, 520)
+                    spacing: 12
+
+                    FluText {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("把手机上的内容投到这里")
+                        font: FluTextStyle.Title
+                    }
+
+                    FluDivider { Layout.fillWidth: true }
+
+                    FluText {
+                        Layout.fillWidth: true
+                        text: qsTr("① 手机连到和这台电脑同一个 Wi-Fi")
+                        font: FluTextStyle.Body
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+                    FluText {
+                        Layout.fillWidth: true
+                        text: qsTr("② 在手机的视频或相册里点「投屏」「投射」")
+                        font: FluTextStyle.Body
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+                    FluText {
+                        Layout.fillWidth: true
+                        text: qsTr("③ 在设备列表里选中这台电脑")
+                        font: FluTextStyle.Body
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+
+                    FluText {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 6
+                        text: qsTr("支持 DLNA 的应用都能用：手机自带的相册、BubbleUPnP 等")
+                        font: FluTextStyle.Caption
+                        textColor: FluTheme.fontTertiaryColor
+                    }
+                }
             }
         }
 
