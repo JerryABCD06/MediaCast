@@ -47,7 +47,17 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     connect(m_player, &MediaPlayer::ready, this, [this] {
         m_loadWatchdog->stop();
         m_loadStatus = LoadStatus::Ok;
-        setState(State::Playing);
+
+        // **只在"还在准备"的时候才翻。**
+        //
+        // 加载要花时间（控制点的地址尤其慢），这中间用户或者控制点完全可能已经
+        // 按了停止/暂停。那时候这一声"加载好了"就不该把对方的意思顶掉 ——
+        // 实测表现是"手机上按了停止，电脑上立刻又开始放"（15 毫秒内翻回来）。
+        //
+        // 这一条同时管住了三种情况，不用各记各的标志：加载期间按了停止、
+        // 按了暂停、以及看门狗等不下去先放弃了。
+        if (m_state == State::Preparing)
+            setState(State::Playing);
     });
 
     // 看门狗从"真正开始加载"那一刻开始跑，不是从调用 load() 那一刻。

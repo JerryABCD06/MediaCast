@@ -229,6 +229,17 @@ private:
     std::atomic<bool> m_eofReached{false};
 
     /**
+     * 文件加载好之后要不要自己开播。
+     *
+     * 平时是 true：投上来一条就该放。**但 stop() 和 pause() 会把它按下去** ——
+     * 加载要花时间（网络地址尤其慢），用户完全可能在"还在加载"的时候就让停，
+     * 那时候这一声"加载好了"要是照常开播，就成了"我明明停了，它自己又放起来"。
+     *
+     * 只在 eventLoop 和调用线程之间传，用原子量省得加锁。
+     */
+    std::atomic<bool> m_playOnLoad{true};
+
+    /**
      * 渲染面还没就绪时，先攒在这儿的那条地址。
      *
      * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。

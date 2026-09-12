@@ -276,8 +276,13 @@ void MpvCore::eventLoop()
             // 放在这儿、而不是 loadNow() 里：命令是排队执行的，在发 loadfile 那一瞬间
             // 旧文件还在手上，那时候放开 pause 会在旧文件的末尾再滚一圈、又报一次播完。
             // 等到这一声，新文件已经就位了，放开就是干干净净地开始放。
-            int flag = 0;
-            mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
+            // 只有"没人喊过停/暂停"的时候才放开。加载期间控制点按了停止的话，
+            // 文件照样加载（它得知道这条能不能放），但**不许自己开播** ——
+            // 否则状态机会说"停了"，画面却在放。
+            if (m_playOnLoad.load()) {
+                int flag = 0;
+                mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
+            }
 
             emit ready();
             break;
@@ -368,6 +373,10 @@ void MpvCore::setRendererAttached(bool attached)
 
 void MpvCore::loadNow(const QString &uri)
 {
+    // 新的一条内容：加载好就该放。stop()/pause() 会把这一位按下去（见头文件），
+    // 这里是把它扳回来 —— 不然"停止之后又投一条"就永远等不到自动播放了。
+    m_playOnLoad.store(true);
+
     // 换片子的时候先把缓存的进度清掉。
     //
     // 不清的话，从"发出 loadfile"到"mpv 真的把新文件打开"之间有个空档，那会儿
@@ -405,6 +414,9 @@ void MpvCore::play()
         m_eofReached.store(false);
     }
 
+    // 用户让放了 —— 加载还没结束的话，等它加载好也接着放。
+    m_playOnLoad.store(true);
+
     int flag = 0;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
 }
@@ -413,6 +425,10 @@ void MpvCore::pause()
 {
     if (!m_mpv)
         return;
+
+    // 同上，反着来：加载还没结束就按了暂停，那加载好也别自己开播。
+    m_playOnLoad.store(false);
+
     int flag = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
 }
@@ -421,6 +437,10 @@ void MpvCore::stop()
 {
     if (!m_mpv)
         return;
+
+    // **加载期间就被喊停**的话，这一句是关键：文件还是会加载完，但加载好那一声
+    // 不会再把它放开（见 MPV_EVENT_FILE_LOADED 那段）。
+    m_playOnLoad.store(false);
 
     // 「停止」的语义是**停下，但媒体还装着** —— 之后再按播放要能接着放。
     //
@@ -441,6 +461,8 @@ void MpvCore::unload()
 {
     if (!m_mpv)
         return;
+
+    m_playOnLoad.store(false);
 
     // 这个才是"卸掉"。会话结束（挂断投送）时用。
     const char *command[] = {"stop", nullptr};
