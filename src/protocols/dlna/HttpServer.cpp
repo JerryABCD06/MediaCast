@@ -166,6 +166,11 @@ void HttpServer::onDisconnected()
 
 void HttpServer::respond(QTcpSocket *socket, const QByteArray &request)
 {
+    // 谁在跟我们说话。日志里少了这个，就分不清"手机的请求"和"我自己测试脚本的
+    // 请求" —— 排查"手机上收不到"的时候，这两种混在一起什么都看不出来。
+    const QString client = socket->peerAddress().toString()
+                         + QLatin1Char(':') + QString::number(socket->peerPort());
+
     // 头和体之间空一行分开。我们只服务短请求，一次读进来就够。
     const int headerEnd = request.indexOf("\r\n\r\n");
     const QByteArray headerBytes = request.left(headerEnd);
@@ -210,8 +215,8 @@ void HttpServer::respond(QTcpSocket *socket, const QByteArray &request)
         const bool isFault = response.contains(QLatin1String("<s:Fault>"));
         status = isFault ? 500 : 200;
         payload = response.toUtf8();
-        emit logMessage(QStringLiteral("SOAP %1#%2  请求体 %3 字节 -> %4")
-                            .arg(service, soapAction)
+        emit logMessage(QStringLiteral("SOAP %1#%2  来自 %3  请求体 %4 字节 -> %5")
+                            .arg(service, soapAction, client)
                             .arg(bodyBytes.size())
                             .arg(isFault ? QStringLiteral("失败") : QStringLiteral("成功")));
 
@@ -223,6 +228,8 @@ void HttpServer::respond(QTcpSocket *socket, const QByteArray &request)
                && m_gena) {
         // "/AVTransport/event" 的第二段是服务名。
         const QString service = path.section(QLatin1Char('/'), 1, 1);
+
+        emit logMessage(QStringLiteral("HTTP %1 %2  来自 %3").arg(method, path, client));
 
         // 事件订阅的应答格式和 SOAP 完全不是一回事，由 GenaManager 直接给整块应答头，
         // 这里原样写出去就行。

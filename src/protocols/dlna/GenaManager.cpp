@@ -7,6 +7,7 @@
 #include <QUrl>
 #include <QUuid>
 #include <QNetworkProxy>
+#include <QSharedPointer>
 
 namespace {
 
@@ -286,15 +287,6 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     const QString path = url.path().isEmpty() ? QStringLiteral("/") : url.path();
     const int sequence = it->sequence++;
 
-    // 把解析结果记下来。上一版这里没有任何输出，结果"订阅成功但事件一条没发出去"
-    // 只能靠抓包反推，绕了很大一圈。
-    emit logMessage(QStringLiteral("推送事件 -> %1:%2%3  SEQ=%4  %5 字节")
-                        .arg(url.host())
-                        .arg(port)
-                        .arg(path)
-                        .arg(sequence)
-                        .arg(body.size()));
-
     const QByteArray head = QStringLiteral(
         "NOTIFY %1 HTTP/1.1\r\n"
         "HOST: %2:%3\r\n"
@@ -329,25 +321,81 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     // 而且从道理上讲，DLNA 的事件推送目标永远在同一个局域网里，经过代理本身就是错的。
     socket->setProxy(QNetworkProxy::NoProxy);
 
-    connect(socket, &QTcpSocket::connected, socket, [socket, head, body] {
+    // **只在连接真的建立之后才记一条"推送事件"。**
+    //
+    // 早先这行打在连接之前，看着像"发出去了"，其实是"打算发" —— 排查
+    // "手机上收不到"的时候，满屏的"推送事件"会把真相盖住（真相是底下那行
+    // "连接被拒绝"）。日志要能一眼看出哪条到了、哪条没到。
+    //
+    // 而且**写完不是就完事了**：NOTIFY 是个请求，规范要求对方回一条 200。
+    // 早先我们写完就断，于是"手机到底认没认这条事件"根本看不出来。现在等
+    // 对方的应答，日志里那条"对方回了「HTTP/1.1 200 OK」"才是真凭据。
+    // （对方不回也不算错 —— 有的控制点就是闷头收 —— 五秒等不到就记一笔收工。）
+    auto replied = QSharedPointer<bool>::create(false);
+
+    connect(socket, &QTcpSocket::connected, socket,
+            [socket, head, body] {
         socket->write(head);
         socket->write(body);
         socket->flush();
+    });
+
+    connect(socket, &QTcpSocket::readyRead, socket,
+            [this, socket, replied, url, port, sequence] {
+        const QByteArray reply = socket->readAll();
+        *replied = true;
+
+        // 只取第一行（"HTTP/1.1 200 OK"）。正文不重要，本机测试时对方回的
+        // 东西也五花八门。
+        const int eol = reply.indexOf("\r\n");
+        const QString status =
+            QString::fromLatin1(reply.left(eol < 0 ? reply.size() : eol)).trimmed();
+
+        emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  对方回了「%4」")
+                            .arg(url.host())
+                            .arg(port)
+                            .arg(sequence)
+                            .arg(status));
         socket->disconnectFromHost();
     });
+
     connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+
+    // 失败也要说清楚**发去哪**失败了。只有"连接被拒绝"的话，多订阅一多就
+    // 分不清是哪个设备/哪个端口的问题。
     connect(socket, &QTcpSocket::errorOccurred, socket,
-            [this, socket](QAbstractSocket::SocketError) {
-        emit logMessage(QStringLiteral("事件推送失败：%1").arg(socket->errorString()));
+            [this, socket, url, port](QAbstractSocket::SocketError) {
+        emit logMessage(QStringLiteral("事件推送失败 -> %1:%2：%3")
+                            .arg(url.host())
+                            .arg(port)
+                            .arg(socket->errorString()));
         socket->deleteLater();
     });
 
-    // 对方已经不在了的话，连不上会拖很久。五秒还没连上就放弃。
+    // 连不上、或者连上了对方一直不回话，都不能无限等下去。
     auto *guard = new QTimer(socket);
     guard->setSingleShot(true);
-    connect(guard, &QTimer::timeout, socket, [socket] {
-        if (socket->state() != QAbstractSocket::UnconnectedState)
-            socket->abort();
+    connect(guard, &QTimer::timeout, socket,
+            [this, socket, replied, url, port, sequence] {
+        if (*replied)
+            return;   // 已经在断开的路上了
+
+        if (socket->state() == QAbstractSocket::ConnectedState) {
+            emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  "
+                                           "写完了，但对方一直没回话")
+                                .arg(url.host())
+                                .arg(port)
+                                .arg(sequence));
+        } else if (socket->state() != QAbstractSocket::UnconnectedState) {
+            emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  "
+                                           "五秒还没连上，放弃")
+                                .arg(url.host())
+                                .arg(port)
+                                .arg(sequence));
+        }
+
+        socket->abort();
+        socket->deleteLater();
     });
     guard->start(5000);
 
