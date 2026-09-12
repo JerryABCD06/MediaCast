@@ -286,6 +286,8 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     const int port = url.port(80);
     const QString path = url.path().isEmpty() ? QStringLiteral("/") : url.path();
     const int sequence = it->sequence++;
+    // 后面那些 lambda 是异步跑的，那时 it 早就不能用了，所以先拷出来。
+    const QString service = it->service;
 
     const QByteArray head = QStringLiteral(
         "NOTIFY %1 HTTP/1.1\r\n"
@@ -341,9 +343,10 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     });
 
     connect(socket, &QTcpSocket::readyRead, socket,
-            [this, socket, replied, url, port, sequence] {
+            [this, socket, replied, url, port, sequence, service, sid] {
         const QByteArray reply = socket->readAll();
         *replied = true;
+        noteSendOk(sid);
 
         // 只取第一行（"HTTP/1.1 200 OK"）。正文不重要，本机测试时对方回的
         // 东西也五花八门。
@@ -351,7 +354,8 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
         const QString status =
             QString::fromLatin1(reply.left(eol < 0 ? reply.size() : eol)).trimmed();
 
-        emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  对方回了「%4」")
+        emit logMessage(QStringLiteral("推送事件 %1 -> %2:%3  SEQ=%4  对方回了「%5」")
+                            .arg(service)
                             .arg(url.host())
                             .arg(port)
                             .arg(sequence)
@@ -364,11 +368,13 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     // 失败也要说清楚**发去哪**失败了。只有"连接被拒绝"的话，多订阅一多就
     // 分不清是哪个设备/哪个端口的问题。
     connect(socket, &QTcpSocket::errorOccurred, socket,
-            [this, socket, url, port](QAbstractSocket::SocketError) {
-        emit logMessage(QStringLiteral("事件推送失败 -> %1:%2：%3")
+            [this, socket, url, port, service, sid](QAbstractSocket::SocketError) {
+        emit logMessage(QStringLiteral("事件推送失败 %1 -> %2:%3：%4")
+                            .arg(service)
                             .arg(url.host())
                             .arg(port)
                             .arg(socket->errorString()));
+        noteSendFailed(sid);
         socket->deleteLater();
     });
 
@@ -376,28 +382,57 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
     auto *guard = new QTimer(socket);
     guard->setSingleShot(true);
     connect(guard, &QTimer::timeout, socket,
-            [this, socket, replied, url, port, sequence] {
+            [this, socket, replied, url, port, sequence, service, sid] {
         if (*replied)
             return;   // 已经在断开的路上了
 
         if (socket->state() == QAbstractSocket::ConnectedState) {
-            emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  "
+            emit logMessage(QStringLiteral("推送事件 %1 -> %2:%3  SEQ=%4  "
                                            "写完了，但对方一直没回话")
+                                .arg(service)
                                 .arg(url.host())
                                 .arg(port)
                                 .arg(sequence));
         } else if (socket->state() != QAbstractSocket::UnconnectedState) {
-            emit logMessage(QStringLiteral("推送事件 -> %1:%2  SEQ=%3  "
+            emit logMessage(QStringLiteral("推送事件 %1 -> %2:%3  SEQ=%4  "
                                            "五秒还没连上，放弃")
+                                .arg(service)
                                 .arg(url.host())
                                 .arg(port)
                                 .arg(sequence));
         }
 
+        noteSendFailed(sid);
         socket->abort();
         socket->deleteLater();
     });
     guard->start(5000);
 
     socket->connectToHost(url.host(), static_cast<quint16>(port));
+}
+
+void GenaManager::noteSendOk(const QString &sid)
+{
+    auto it = m_subscriptions.find(sid);
+    if (it != m_subscriptions.end())
+        it->failures = 0;
+}
+
+void GenaManager::noteSendFailed(const QString &sid)
+{
+    auto it = m_subscriptions.find(sid);
+    if (it == m_subscriptions.end())
+        return;
+
+    // 挨个儿失败几次就判定这个回调地址已经没人听了。控制点的回调服务器本来
+    // 就是会消失的（App 退出、换端口重新订阅），留着它只会让之后每一次状态
+    // 变化都白开一条连接，并且把日志淹掉 —— 排查的时候，满屏的"连接被拒绝"
+    // 会把真正有用的那几行盖住。
+    if (++it->failures < 5)
+        return;
+
+    emit logMessage(QStringLiteral("连着 %1 次推不出去，丢掉这个订阅：%2")
+                        .arg(it->failures)
+                        .arg(it->callbackUrl));
+    m_subscriptions.erase(it);
 }

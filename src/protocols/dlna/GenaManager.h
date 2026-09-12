@@ -82,11 +82,23 @@ private:
         QString   callbackUrl;    // 控制点留下的回调地址
         int       sequence = 0;   // SEQ，从 0 开始递增
         QDateTime expiresAt;
+        /**
+         * 连着推不出去几次了。
+         *
+         * 控制点的回调服务器是会消失的 —— App 退出了、崩了、或者干脆换了
+         * 一个端口重新订阅。那些死地址如果我们一直捶下去，日志里全是
+         * "连接被拒绝"，真正有用的那几条会被淹掉，也是白费连接。
+         * 连着失败够多次就把它丢掉；推成功一次就清零。
+         */
+        int       failures = 0;
     };
 
     void prune();
     void pushToService(const QString &service);
     void sendEvent(const QString &sid, const QByteArray &body);
+    /** 这一次推成功 / 失败了。失败够多次就把订阅丢掉。 */
+    void noteSendOk(const QString &sid);
+    void noteSendFailed(const QString &sid);
     QByteArray eventBodyFor(const QString &service) const;
 
     QHash<QString, Subscription> m_subscriptions;
