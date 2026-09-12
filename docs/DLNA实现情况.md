@@ -78,15 +78,46 @@ src/
 只有一条连接（0 号），而且不是"建"出来的 —— 控制点直接 SetAVTransportURI 就开播了。
 
 ### GENA（状态变化主动推给控制点）
-SUBSCRIBE / UNSUBSCRIBE / 续订，`LastChange` 里报：
+SUBSCRIBE / UNSUBSCRIBE / 续订。`LastChange` 里报什么，是**照着 Macast 来的**
+（Macast 是成熟的 DLNA 渲染器，手机跟它配合是好的；源码在
+`source\Macast-main`）：
 
-- AVTransport：TransportState、CurrentTransportActions、CurrentPlayMode、
-  NumberOfTracks、AVTransportURI、AVTransportURIMetaData、CurrentTrackURI、
-  CurrentTrackMetaData、NextAVTransportURI
+- AVTransport：TransportState、TransportStatus、CurrentMediaDuration、
+  CurrentTrackDuration、CurrentTrack、NumberOfTracks、CurrentPlayMode、
+  CurrentTransportActions
 - RenderingControl：Volume、Mute、Brightness、Contrast、Sharpness
 - ConnectionManager：SourceProtocolInfo、SinkProtocolInfo
 
 Volume/Mute 带 `channel="Master"`，画面那三项**不带** —— 规范如此，多了少了都不行。
+
+> ⚠️ **不要在事件里放 DIDL 元数据。**
+>
+> 原来 AVTransport 的事件是一份"全量快照"，里面带着 AVTransportURI /
+> CurrentTrackURI，以及**两整坨转义过两遍的 DIDL 元数据**（一条九百多字节）。
+>
+> 症状：手机端播放/暂停图标永远不变，进度条却正常。事件其实送到了、手机也回了
+> `200 OK`、XML 也合法 —— 但它的解析器处理不了那么多东西，**整条事件被静默
+> 丢掉**。改成只发几个标量之后，vivo 和 BubbleUPnP 立刻就对上了。
+>
+> 教训：事件是丢给控制点**解析**的，结构化内容越多，被丢掉的概率越大，而且这种
+> 失败完全静默 —— HTTP 层照常 200，日志里只看到"对方回了 200 OK"。
+>
+> 代价：事件里不再有 URI/元数据，所以电脑上按「上一首/下一首」时手机不会跟着换
+> 标题。那件事本来就没人跟（见"待定/待测"），先这么放着。
+
+### 三条踩了很久才踩明白的规矩
+
+1. **`CurrentTransportActions` 必须跟着状态走，`Play` 和 `Pause` 互斥。**
+   控制点就是靠这个列表决定播放/暂停按钮长什么样的。永远两个都给，它只能推出
+   "还在播"。见 `UpnpXml::transportActionsFor()`。
+
+2. **同一个订阅，同一时刻只允许一条 NOTIFY 在途**，后面的先攒着、按最新状态补发。
+   两条挨着发会乱序到达，而控制点按 SEQ **严格递增**处理：它等 5 却先收到 6 就要
+   丢掉，而且丢掉之后期待值不会前进 —— **后面每一条都会被丢掉**，状态从此冻住。
+
+3. **首条事件（SEQ=0）不能跟订阅应答抢跑。** 控制点得先从应答里拿到 SID 才认得
+   那条事件；抢输了它就把 SEQ=0 丢掉，期待值停在 0，之后每一条都对不上。
+   所以现在延后 100 毫秒再发首条 —— 让应答先出去。
 
 ---
 
