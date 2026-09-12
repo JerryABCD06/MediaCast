@@ -437,9 +437,9 @@ void GenaManager::sendEvent(const QString &sid, const QByteArray &body)
                                 .arg(url.host())
                                 .arg(port)
                                 .arg(sequence));
+            noteSendFailed(sid);
         }
 
-        noteSendFailed(sid);
         finishSend(sid);
         socket->abort();
         socket->deleteLater();
