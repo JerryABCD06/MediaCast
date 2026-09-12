@@ -91,6 +91,14 @@ signals:
      */
     void subscriptionCountChanged(int count);
 
+    /**
+     * 控制点又来搭理我们了：新订阅、或者续订。
+     *
+     * 和 subscriptionCountChanged 不是一回事 —— **续订不改变订阅数**，
+     * 但它同样证明"对方还在"。界面判断"连着没有"要的是这个，不是那个数。
+     */
+    void subscriptionActivity();
+
 private:
     struct Subscription {
         QString   service;        // AVTransport / RenderingControl / ConnectionManager

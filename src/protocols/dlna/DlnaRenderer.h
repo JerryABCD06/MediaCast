@@ -185,6 +185,13 @@ private:
     /** 把两个子模块的状态拼成一行，界面只需要认一个信号。 */
     void updateStatus();
 
+    /**
+     * 重新算一遍"有没有投送方连着"，喂给控制器。
+     *
+     * 判据是"有订阅 **且** 不是我们主动挂断的"，理由见 endSession() 里那段注释。
+     */
+    void refreshPeerConnected();
+
     PlaybackController *m_ctl = nullptr;
     SsdpService *m_ssdp = nullptr;
     HttpServer  *m_http = nullptr;
@@ -197,4 +204,15 @@ private:
 
     /** 是不是在接收投送。托盘那个「暂停接收投送」就是它。 */
     bool    m_accepting = true;
+
+    /**
+     * 我们这边主动挂断过（老界面的「断开投屏」、托盘勿扰）。
+     *
+     * 手机那边的 GENA 订阅这时候往往还在 —— 它只是把投屏横幅收起来，没退订。
+     * 光看订阅数会一直显示"已连接"，用户看到的是"我明明断开了，界面还说连着"。
+     *
+     * 这个标记等对方再次订阅/续订才清掉。**注意不是删订阅** —— 删了的话，
+     * 对方要是还开着投屏界面又不重新订阅，就成"听不见我们"的半隐状态了。
+     */
+    bool    m_disconnectedByUs = false;
 };

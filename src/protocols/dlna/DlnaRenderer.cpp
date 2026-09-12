@@ -88,9 +88,13 @@ DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     // 为什么由协议层喂、而不是界面自己去问 DNLA：**"谁连着"只有这一层知道**，
     // 界面不该认识 GENA 是什么。控制器那边给的是一个中性属性（peerConnected），
     // 将来接 AirPlay 之类，那边也往里报一声就行。
-    connect(m_gena, &GenaManager::subscriptionCountChanged, this, [this](int count) {
-        if (m_ctl)
-            m_ctl->setPeerConnected(count > 0);
+    connect(m_gena, &GenaManager::subscriptionCountChanged, this, [this](int) {
+        refreshPeerConnected();
+    });
+    connect(m_gena, &GenaManager::subscriptionActivity, this, [this] {
+        // 对方又搭理我们了（新订阅或续订）—— 之前那条"是我们主动挂断的"作废。
+        m_disconnectedByUs = false;
+        refreshPeerConnected();
     });
     connect(m_soap, &SoapHandler::logMessage, this, &DlnaRenderer::logMessage);
     connect(m_gena, &GenaManager::logMessage, this, &DlnaRenderer::logMessage);
@@ -166,6 +170,10 @@ void DlnaRenderer::pauseAccepting()
     m_accepting = false;
     emit acceptingChanged(false);
     emit logMessage(QStringLiteral("已暂停接收投送：设备已从网络上消失"));
+
+    // 设备都从网络上消失了，界面更不该说"已连接"。理由和 endSession 那段一样。
+    m_disconnectedByUs = true;
+    refreshPeerConnected();
 }
 
 void DlnaRenderer::resumeAccepting()
@@ -215,6 +223,28 @@ void DlnaRenderer::endSession()
     // 光把状态归零还不够：有些控制点会一直把设备记成"当前投屏目标"，界面上那条
     // 横幅不肯消。让它暂时从网络上消失一下，控制点才会真的放下这个会话。
     m_ssdp->announceGoingAwayBriefly();
+
+    // **我们主动挂断的，界面就别再显示"已连接"了。**
+    //
+    // 手机那边的 GENA 订阅这时候往往还在 —— 它只是把投屏那条横幅收起来，
+    // 并没有退订（退订要等它真的离开投屏界面）。光看订阅数会一直显示"已连接"，
+    // 用户看到的是"我明明断开了，界面还说连着"。
+    //
+    // 所以记一个"是我们挂的"，等对方**再搭理我们**（重新订阅、续订、或者又投了
+    // 东西）才清掉。有个细节不能省：**不能真的把订阅删掉** —— 对方要是还开着
+    // 投屏界面、并且不再重新订阅，那它就成"听不见我们"的那种半隐状态了，
+    // 那正是我们花很久才修掉的那个毛病。
+    m_disconnectedByUs = true;
+    refreshPeerConnected();
+}
+
+void DlnaRenderer::refreshPeerConnected()
+{
+    if (!m_ctl)
+        return;
+
+    // 有人订阅、并且不是我们主动挂断的 —— 才算"连着"。
+    m_ctl->setPeerConnected(m_gena->subscriptionCount() > 0 && !m_disconnectedByUs);
 }
 
 void DlnaRenderer::next()

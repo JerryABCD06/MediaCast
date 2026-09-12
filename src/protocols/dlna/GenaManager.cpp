@@ -91,6 +91,7 @@ QByteArray GenaManager::handleSubscribe(const QString &service,
 
         it->expiresAt = QDateTime::currentDateTime().addSecs(kTimeoutSeconds);
         emit logMessage(QStringLiteral("事件订阅续订：%1").arg(existingSid));
+        emit subscriptionActivity();
         return httpResponse(200, QStringLiteral("OK"),
                             QStringLiteral("SID: %1\r\nTIMEOUT: %2\r\n")
                                 .arg(existingSid, kTimeoutHeader));
@@ -119,6 +120,7 @@ QByteArray GenaManager::handleSubscribe(const QString &service,
 
     emit logMessage(QStringLiteral("事件订阅 %1  ->  %2").arg(service, callback));
     notifyCountIfChanged();
+    emit subscriptionActivity();
 
     // ── 首条事件不能跟订阅应答抢跑 ────────────────────────────────────────
     //

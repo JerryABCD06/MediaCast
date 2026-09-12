@@ -100,6 +100,12 @@ FluWindow {
 
         onBackClicked: window.page = 0
         onSettingsClicked: window.page = 1
+        onDisconnectClicked: {
+            // 和"关窗口时确认断开"走的是同一条路：Shell 把意思发出去，main() 把它
+            // 接在 DlnaRenderer::endSession 上（结束会话、推事件、让设备在网络里
+            // 消失一下再回来）。界面不认识 DLNA，也不该认识。
+            Shell.endCasting()
+        }
         onInfoClicked: {
             // TODO：「关于」那一类信息。先留空壳。
         }
@@ -111,6 +117,7 @@ FluWindow {
         // 用了那个处理函数（居中、登记、显示），实例上再写一个有可能把它顶掉。
         onReady: {
             window.setHitTestVisible(topBar.backButton)
+            window.setHitTestVisible(topBar.disconnectButton)
             window.setHitTestVisible(topBar.infoButton)
             window.setHitTestVisible(topBar.settingsButton)
         }

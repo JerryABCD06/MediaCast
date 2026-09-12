@@ -47,6 +47,8 @@ FluAppBar {
     signal backClicked()
     signal infoClicked()
     signal settingsClicked()
+    /** 用户点了「断开连接」—— 具体怎么断是 main() 那边接到门面上的事。 */
+    signal disconnectClicked()
 
     /**
      * 顶栏把自己建好了。
@@ -61,6 +63,7 @@ FluAppBar {
 
     // 把自己的按钮暴露出去 —— NewUiWindow 要拿它们去登记"这些不是标题栏"。
     readonly property alias backButton: btn_back
+    readonly property alias disconnectButton: btn_disconnect
     readonly property alias infoButton: btn_info
     readonly property alias settingsButton: btn_settings
 
@@ -199,6 +202,32 @@ FluAppBar {
         anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter
         spacing: 2
+
+        // 「断开连接」：带边框的文字按钮（不是强调色那版），只在真有活儿的
+        // 时候出现 —— 没连着的时候摆一个"断开连接"出来只会让人犯嘀咕。
+        FluButton {
+            id: btn_disconnect
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredHeight: 30
+            Layout.rightMargin: 6
+            visible: Playback.castState !== Playback.NoViewer
+            contentDescription: qsTr("断开连接")
+            onClicked: bar.disconnectClicked()
+
+            // FluButton 的内容项本来就是一个 FluText，这里换成"图标 + 文字"。
+            contentItem: Row {
+                spacing: 6
+                FluIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconSource: FluentIcons.DisconnectDisplay
+                    iconSize: 14
+                }
+                FluText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("断开连接")
+                }
+            }
+        }
 
         FluIconButton {
             id: btn_info
