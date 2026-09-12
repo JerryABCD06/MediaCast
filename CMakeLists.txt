@@ -62,6 +62,9 @@ qt_add_executable(MCast
     src/core/PlaybackController.cpp
     src/core/AppSettings.h
     src/core/AppSettings.cpp
+    # 语言：有哪些、现在用哪个、哪个键对应哪句话。界面和托盘都走它。
+    src/core/Tr.h
+    src/core/Tr.cpp
     src/core/LibMpvPlayer.h
     src/core/LibMpvPlayer.cpp
     src/core/MpvMediaPlayer.h
@@ -104,6 +107,7 @@ qt_add_executable(MCast
     res/MCast.rc
     res/MCast.qrc
     res/QmlUi.qrc
+    res/Lang.qrc
 )
 
 # 跨目录的 include 写成 "core/LibMpvPlayer.h" 这样从 src 起算的路径 ——
@@ -172,26 +176,19 @@ set_target_properties(MCast PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-# ── 翻译 ─────────────────────────────────────────────────────────────────
+# ── 语言 ─────────────────────────────────────────────────────────────────
 #
-# 这一版只覆盖**新界面和托盘** —— 旧界面不动，文字还是硬编码在代码里。
+# 语言文件是 lang/*.json，明文，**不编译** —— 加一种语言就是往那个目录里丢一个
+# 文件，程序启动时自己扫。所以这里没有 lupdate / lrelease 那一套（.ts / .qm /
+# qt_add_translations 全都不用了），只做一件事：把整个目录拷到 exe 旁边。
 #
-# qt_add_translations 干三件事：把 .ts 编成 .qm、把 .qm 塞进 exe 的资源、
-# 另外挂一个 update_translations 目标（在 Qt Creator 的构建菜单里能单独跑，
-# 用来把新增的 tr()/qsTr() 收进 .ts）。
+# 规矩（文件格式、meta 两个字段、键名怎么起、怎么加一种语言）写在
+# lang/README.md 里。
 #
-# SOURCES 里必须显式列出 QML 文件。我们的 QML 是塞在普通 .qrc 里的，不是
-# qt_add_qml_module 建的模块，qt_add_translations 自己发现不了它们 ——
-# 所以**每加一个 QML 文件都要在这里补一行**，漏了的话 lupdate 收不到它的字符串，
-# 界面上那部分就永远是中文。
-#
-# 规矩（源语言为什么是中文、哪些字符串该翻哪些不该、怎么加一种新语言）
-# 写在 i18n/README.md 里 —— 别写进 .ts，lupdate 每次都会把里面的注释吃掉。
-qt_add_translations(MCast
-    TS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/i18n/MCast_en_US.ts"
-    SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml/NewUiWindow.qml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml/CastPage.qml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml/SettingsPage.qml"
-    RESOURCE_PREFIX "/i18n"
-)
+# 唯一编进 exe 的是基准语言 en_US.json（见 res/Lang.qrc）：lang 目录被删了、
+# 或者发布时漏拷的时候靠它兜底 —— 界面最坏是英文，不会是满屏键名。
+add_custom_command(TARGET MCast POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/lang"
+            "$<TARGET_FILE_DIR:MCast>/lang"
+    COMMENT "复制语言文件到构建目录")

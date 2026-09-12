@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "name": "简体中文",
+    "system": ["zh_CN", "zh_Hans_CN", "zh_SG", "zh_Hans_SG"]
+  },
+
+  "strings": {
+    "tray_open_main": "打开主界面",
+    "tray_open_test": "打开测试界面",
+    "tray_pause": "暂停接收投送",
+    "tray_resume": "恢复接收投送",
+    "tray_quit": "退出",
+
+    "ui_settings_language_system": "跟随系统"
+  }
+}

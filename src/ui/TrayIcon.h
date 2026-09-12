@@ -20,6 +20,10 @@ class DlnaRenderer;
 //   暂停接收投送    暂时从网络上消失（"勿扰"），再点一次恢复
 //   退出            真的退出
 //
+// 这四句文字走的是**键名**（tray_open_main 那几个），译文在 lang/*.json 里。
+// 语言一变由 main() 叫一声 retranslate() —— QMenu 是死的，装个新翻译器不会
+// 自己重画，得有人把文字重新设一遍。
+//
 // 一个约定：
 //
 // **它只认识门面，而且不碰任何窗口。** 手上只有 DlnaRenderer —— "暂停接收"这种事
@@ -38,6 +42,9 @@ public:
 
     /** 把图标亮出来。 */
     void show();
+
+    /** 按当前语言把那几句菜单文字重新设一遍。换语言的时候调。 */
+    void retranslate();
 
 signals:
     void logMessage(const QString &text);
@@ -64,4 +71,5 @@ private:
     QAction *m_openMainAction = nullptr;
     QAction *m_openTestAction = nullptr;
     QAction *m_acceptAction = nullptr;
+    QAction *m_quitAction = nullptr;
 };

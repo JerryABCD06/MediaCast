@@ -34,12 +34,22 @@ Item {
     /** 现在看的是哪个类目：0 = 界面，1 = 投送。 */
     property int category: 0
 
-    /** 语言列表：显示名 + 传给 UiState 的代码。空字符串 = 跟随系统。 */
-    readonly property var languages: [
-        { title: qsTr("跟随系统"), code: "" },
-        { title: "中文", code: "zh_CN" },
-        { title: "English", code: "en_US" }
-    ]
+    /**
+     * 语言列表：显示名 + 传给 UiState 的代码。空字符串 = 跟随系统。
+     *
+     * **这些是扫出来的，不是写死的。** Tr 启动时扫过 exe 旁边的 lang/ 目录，
+     * 往那个目录里丢一个 json 文件，这里就多一项 —— 加语言不用改代码。
+     *
+     * 语言名用文件里写的那句原文（中文文件里写"简体中文"，英文文件里写
+     * "English"），**不翻译**：翻成 "Chinese" 反而让不懂英文的人认不出来。
+     */
+    readonly property var languages: {
+        var list = [ { title: qsTr("ui_settings_language_system"), code: "" } ]
+        var found = Tr.languages()
+        for (var i = 0; i < found.length; ++i)
+            list.push({ title: found[i].name, code: found[i].code })
+        return list
+    }
 
     /** 深浅模式：显示名 + UiState.ThemeMode 的值。 */
     readonly property var themeModes: [

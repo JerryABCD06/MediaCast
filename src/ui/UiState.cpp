@@ -1,6 +1,7 @@
 #include "UiState.h"
 
 #include "core/AppSettings.h"
+#include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -34,9 +35,10 @@ QString themeModeName(int mode)
 
 } // namespace
 
-UiState::UiState(AppSettings *settings, QObject *parent)
+UiState::UiState(AppSettings *settings, Tr *tr, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
+    , m_tr(tr)
 {
     // 先把设置文件里的值读进来 —— 它们是"上次关掉时的样子"。
     if (m_settings) {
@@ -75,11 +77,11 @@ UiState::~UiState()
 {
     // 析构前把翻译器摘下来。installTranslator 存的是裸指针，不摘的话
     // 对象没了它还留着 —— 退出那一刻正好用到翻译就是野指针。
-    if (m_appTranslator) {
-        QCoreApplication::removeTranslator(m_appTranslator);
-        delete m_appTranslator;
-        m_appTranslator = nullptr;
-    }
+    //
+    // 注意 Tr **只摘不删** —— 它是 main() 那边造的，比这里活得久。
+    if (m_tr)
+        QCoreApplication::removeTranslator(m_tr);
+
     if (m_qtTranslator) {
         QCoreApplication::removeTranslator(m_qtTranslator);
         delete m_qtTranslator;
@@ -93,24 +95,6 @@ bool UiState::dark() const
     // 交给 Qt：colorScheme 设成 Unknown 时它跟随系统，设成 Light/Dark
     // 时它就返回我们设的那个。三种模式都问到同一个答案。
     return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
-}
-
-QString UiState::systemLanguageCode()
-{
-    // 只取系统语言清单里的**第一个**，不能把 QLocale::system() 整个拿去用。
-    //
-    // Qt 在 Windows 上会把用户在系统设置里排过的所有语言都列出来当候选。
-    // 一台装了「中文(简体) + 英文(美国)」的机器上实测拿到的是：
-    //
-    //   zh-Hans-CN | zh-CN | zh-Hans | zh | en-Latn-US | en-US | en-Latn | en
-    //
-    // QTranslator::load 会顺着这一串往下找，中文那几项没有对应的 .qm 时
-    // 就一路落到英文去，结果中文系统上弹出英文界面。只认第一个就没这问题。
-    const QLocale systemLocale = QLocale::system();
-    const QStringList uiLanguages = systemLocale.uiLanguages();
-    if (uiLanguages.isEmpty())
-        return systemLocale.name();
-    return QLocale(uiLanguages.constFirst()).name();
 }
 
 void UiState::setThemeMode(int mode)
@@ -166,29 +150,30 @@ void UiState::applyLanguage()
 {
     // 换语言 = 先把旧的摘干净，再装新的。不先摘就装，两个翻译器同时挂着，
     // 查表按安装顺序来，结果会变成"一半新语言一半旧语言"。
-    if (m_appTranslator) {
-        QCoreApplication::removeTranslator(m_appTranslator);
-        delete m_appTranslator;
-        m_appTranslator = nullptr;
-    }
+    if (m_tr)
+        QCoreApplication::removeTranslator(m_tr);
+
     if (m_qtTranslator) {
         QCoreApplication::removeTranslator(m_qtTranslator);
         delete m_qtTranslator;
         m_qtTranslator = nullptr;
     }
 
-    const QLocale locale(m_language.isEmpty() ? systemLanguageCode() : m_language);
-
-    // 一、我们自己的字符串。找不到就什么都不装，那时显示的正是源码原文，
-    //     也就是中文。所以中文环境下即使一个 .qm 都没有也不影响。
-    auto *appTranslator = new QTranslator(this);
-    if (appTranslator->load(locale, QStringLiteral("MCast"),
-                            QStringLiteral("_"), QStringLiteral(":/i18n"))) {
-        m_appTranslator = appTranslator;
-        QCoreApplication::installTranslator(m_appTranslator);
-    } else {
-        delete appTranslator;
+    // 一、我们自己的字符串，也就是界面和托盘上那些。
+    //
+    //     Tr 本身就是个 QTranslator，查的是 lang/*.json。先让它把表换成
+    //     当前语言，再装上 —— 顺序反了的话，装上去的会是上一张表。
+    //
+    //     装成"空表"也要装：查不到的键它返回空串，Qt 会继续往下走到源码原文。
+    //     旧界面那些还没搬过来的中文就是靠这条路保持原样的。
+    if (m_tr) {
+        m_tr->setLanguage(m_language);
+        QCoreApplication::installTranslator(m_tr);
     }
+
+    // 该用哪个 locale 由 Tr 说了算：语言文件在不在、系统语言跟哪个对得上，
+    // 只有它知道。它给的代码一定是有效的（最坏是基准语言）。
+    const QLocale locale(m_tr ? m_tr->effectiveLanguage() : QStringLiteral("en_US"));
 
     // 二、Qt 自己的字符串，也就是"原生控件"那一半。
     //

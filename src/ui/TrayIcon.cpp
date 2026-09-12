@@ -11,17 +11,19 @@ TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     : QObject(parent)
     , m_renderer(renderer)
 {
-    m_openMainAction = new QAction(tr("打开主界面"), this);
+    // 文字一律写键名 —— 真正的字在 lang/*.json 里，tr() 会去 Tr 那儿查。
+    // 查不到就显示键名本身，那也是底（说明这个键漏了）。
+    m_openMainAction = new QAction(tr("tray_open_main"), this);
     connect(m_openMainAction, &QAction::triggered, this, &TrayIcon::openMainUiRequested);
 
-    m_openTestAction = new QAction(tr("打开测试界面"), this);
+    m_openTestAction = new QAction(tr("tray_open_test"), this);
     connect(m_openTestAction, &QAction::triggered, this, &TrayIcon::openTestUiRequested);
 
-    m_acceptAction = new QAction(tr("暂停接收投送"), this);
+    m_acceptAction = new QAction(tr("tray_pause"), this);
     connect(m_acceptAction, &QAction::triggered, this, &TrayIcon::toggleAccepting);
 
-    auto *quitAction = new QAction(tr("退出"), this);
-    connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
+    m_quitAction = new QAction(tr("tray_quit"), this);
+    connect(m_quitAction, &QAction::triggered, qApp, &QApplication::quit);
 
     // 菜单没有窗口可以挂（托盘不持有任何窗口），所以由我们自己拿着、自己删。
     // QSystemTrayIcon 只是引用它，不接管所有权。
@@ -31,7 +33,7 @@ TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     m_menu->addSeparator();
     m_menu->addAction(m_acceptAction);
     m_menu->addSeparator();
-    m_menu->addAction(quitAction);
+    m_menu->addAction(m_quitAction);
 
     m_tray = new QSystemTrayIcon(this);
 
@@ -97,14 +99,26 @@ void TrayIcon::toggleAccepting()
     refreshMenu();
 }
 
+void TrayIcon::retranslate()
+{
+    // QMenu / QAction 拿到的是一句话，不是一个"会跟着翻译器变的东西" ——
+    // 换语言不会自己重画，得有人把文字重新设一遍。main() 那边接到
+    // UiState::languageChanged 就调这儿。
+    m_openMainAction->setText(tr("tray_open_main"));
+    m_openTestAction->setText(tr("tray_open_test"));
+    m_quitAction->setText(tr("tray_quit"));
+
+    // 这一句的文字跟状态走，refreshMenu 里一起管。
+    refreshMenu();
+}
+
 void TrayIcon::refreshMenu()
 {
     const bool accepting = m_renderer ? m_renderer->isAccepting() : false;
 
     // 不做成可勾选的：文字本身就说清楚了当前点下去会发生什么，不用再配个勾。
     //
-    // 这两个字符串每次状态变都要重新取一遍 —— tr() 是即时查表的，
-    // 不是构造时定死的。以后要是支持"运行中切语言"，这里天然就对。
-    m_acceptAction->setText(accepting ? tr("暂停接收投送")
-                                      : tr("恢复接收投送"));
+    // 每次都重新取一遍 —— tr() 是即时查表的，不是构造时定死的，所以
+    // "运行中切语言"这件事在这儿天然就对。
+    m_acceptAction->setText(accepting ? tr("tray_pause") : tr("tray_resume"));
 }

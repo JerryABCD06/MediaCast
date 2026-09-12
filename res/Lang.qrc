@@ -1,0 +1,16 @@
+<!--
+    基准语言（英文）那一份表，编进 exe。
+
+    为什么要编一份进去：语言文件是放在 exe 旁边的 lang/ 目录里的，那目录有可能
+    被删、被挪、或者发布的时候漏拷 —— 那时候程序还是得能看。有了这一份兜底，
+    最坏情况是界面变英文，而不是满屏的 ui_settings_language。
+
+    它和磁盘上那份 lang/en_US.json 是**同一个文件**，不是抄出来的第二份：
+    这里引的是源码树里那个路径，磁盘上有就用磁盘上那份（改错别字不用重新编译），
+    没有才用这一份。
+-->
+<RCC>
+    <qresource prefix="/lang">
+        <file alias="en_US.json">../lang/en_US.json</file>
+    </qresource>
+</RCC>

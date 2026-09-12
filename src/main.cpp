@@ -15,6 +15,7 @@
 #include "core/MpvCore.h"
 #include "core/MpvQmlItem.h"
 #include "core/PlaybackController.h"
+#include "core/Tr.h"
 #include "platform/windows/WindowsMediaControls.h"
 #include "protocols/dlna/DlnaRenderer.h"
 #include "ui/MainWindow.h"
@@ -46,6 +47,52 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
 
+    // ── 日志落盘 ─────────────────────────────────────────────────────────
+    //
+    // 这一段落放在这里（而不是像别处一样按"谁用到谁"往后放），是因为下面
+    // **语言那一段自己就要写日志** —— 扫到几个语言文件、用的哪个，正是排查
+    // "界面怎么是英文的"时第一眼要看的东西，丢了就没法查。
+    //
+    // 界面上一行标签只显示最后一条，排查问题时根本不够用；有文件才能看到完整
+    // 的先后顺序。（这是临时脚手架 —— 做正式界面时，日志位置会挪到用户目录下。）
+    QFile logFile(QCoreApplication::applicationDirPath() + QStringLiteral("/MCast.log"));
+
+    // 追加而不是覆盖：上一次运行的日志往往正是要查的那一份。大到一定体积才清一次。
+    if (logFile.exists() && logFile.size() > 2 * 1024 * 1024)
+        logFile.remove();
+
+    const bool logOk = logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+    if (!logOk)
+        qWarning("日志文件打不开，日志只显示在界面上");
+    else
+        logFile.write(QStringLiteral("\n===== 程序启动 %1 =====\n")
+                          .arg(QDateTime::currentDateTime().toString(Qt::ISODate))
+                          .toUtf8());
+
+    // 写日志的格式只留这一处，别处都调它 —— 两处各写各的，迟早长短不一。
+    auto writeLog = [&logFile](const QString &text) {
+        logFile.write(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")).toUtf8());
+        logFile.write("  ");
+        logFile.write(text.toUtf8());
+        logFile.write("\n");
+        logFile.flush();
+    };
+
+    // ── 语言 ─────────────────────────────────────────────────────────────
+    //
+    // 有哪些语言、哪个键对应哪句话、系统语言该对到哪个 —— 全在 Tr 里，它扫的是
+    // exe 旁边的 lang/ 目录（明文 JSON，不编译）。加一种语言就是往那个目录里丢
+    // 一个文件，见 lang/README.md。
+    //
+    // **必须先 scan 再建 UiState**：UiState 一造好就会去问 Tr "现在该用哪个语言"，
+    // 那时候清单还没扫出来，跟随系统就会一路落到基准语言去。
+    Tr tr;
+    QObject::connect(&tr, &Tr::logMessage, writeLog);
+    tr.scan();
+
+    // 给 QML 一份 —— 设置页的语言列表就是它扫出来的那些。
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Tr", &tr);
+
     // ── 界面状态：语言 + 深浅 ────────────────────────────────────────────
     //
     // 这两样**只在这里存一份**。QML 那套界面和原生 Qt 控件（文件对话框、
@@ -60,7 +107,7 @@ int main(int argc, char *argv[])
     // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
     // 用户想改直接拿记事本改，不用翻界面。
     AppSettings settings;
-    UiState uiState(&settings);
+    UiState uiState(&settings, &tr);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
     // 设置页直接读这一份 —— 它是"唯一的那一份"，界面不该再存副本。
     // 名字叫 Settings 而不是 AppSettings：QML 那边写 `Settings.castNewCast`
@@ -96,32 +143,6 @@ int main(int argc, char *argv[])
     appIcon.addFile(QStringLiteral(":/icons/mcast-48.png"),  QSize(48, 48));
     appIcon.addFile(QStringLiteral(":/icons/mcast-256.png"), QSize(256, 256));
     QApplication::setWindowIcon(appIcon);
-
-    // 日志同时写一份到文件。界面上一行标签只显示最后一条，排查问题时根本不够用；
-    // 有文件才能看到完整的先后顺序。
-    // （这是临时脚手架 —— 做正式界面时，日志位置会挪到用户目录下。）
-    QFile logFile(QCoreApplication::applicationDirPath() + QStringLiteral("/MCast.log"));
-
-    // 追加而不是覆盖：上一次运行的日志往往正是要查的那一份。大到一定体积才清一次。
-    if (logFile.exists() && logFile.size() > 2 * 1024 * 1024)
-        logFile.remove();
-
-    const bool logOk = logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
-    if (!logOk)
-        qWarning("日志文件打不开，日志只显示在界面上");
-    else
-        logFile.write(QStringLiteral("\n===== 程序启动 %1 =====\n")
-                          .arg(QDateTime::currentDateTime().toString(Qt::ISODate))
-                          .toUtf8());
-
-    // 写日志的格式只留这一处，别处都调它 —— 两处各写各的，迟早长短不一。
-    auto writeLog = [&logFile](const QString &text) {
-        logFile.write(QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")).toUtf8());
-        logFile.write("  ");
-        logFile.write(text.toUtf8());
-        logFile.write("\n");
-        logFile.flush();
-    };
 
     // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
     // 用户想改直接拿记事本改，不用翻界面。
@@ -283,6 +304,10 @@ int main(int argc, char *argv[])
                      &newUi, &NewUiWindow::show);
     QObject::connect(&uiState, &UiState::languageChanged,
                      &newUi, &NewUiWindow::retranslate);
+    // 托盘菜单那几句是死的 —— QMenu 不会自己重画，得有人把文字重新设一遍。
+    // （新界面那边靠 QML 的绑定重算，这里靠这一句。）
+    QObject::connect(&uiState, &UiState::languageChanged,
+                     &tray, &TrayIcon::retranslate);
 
     // ── 设置文件接到网络上那几项 ─────────────────────────────────────────
     //

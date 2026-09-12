@@ -5,6 +5,7 @@
 
 class QTranslator;
 class AppSettings;
+class Tr;
 
 // UiState —— 界面的**唯一状态源**：现在是哪种语言、要深色还是浅色。
 //
@@ -24,9 +25,15 @@ class AppSettings;
 //   二、**不认识任何窗口或 QML 引擎。** 它只发信号。谁想跟着变，谁自己连。
 //      语言变化要重算 qsTr() 的话，得由持有引擎的那一方去调 retranslate()。
 //
-//   三、**原生 Qt 控件是重点。** 只装自己的 .qm 是不够的 —— 文件对话框上
+//   三、**原生 Qt 控件是重点。** 光装我们自己的翻译是不够的 —— 文件对话框上
 //      那些"打开/取消"是 Qt 自己画的，得装 Qt 自带的 qtbase_*.qm 才会变语言；
 //      深色也不是设个 QML 属性就完事，得动 QStyleHints 的 colorScheme。
+//
+// ── 语言这一项和 Tr 怎么分工 ──────────────────────────────────────────────
+//
+//   这里存的是**用户选的是哪个**（写进设置文件里那个 ui.language），
+//   **有哪些语言、哪个键对应哪句话、系统语言该对到哪个**在 Tr 里（它才知道
+//   lang 目录里有什么）。所以构造时要给它一个 Tr，切语言时由这儿去换表。
 class UiState : public QObject
 {
     Q_OBJECT
@@ -50,7 +57,7 @@ public:
      * 告诉这里（写属性），真正的改变由这里的信号广播出去，每个界面再跟着变。
      * 这条链路是单向的，界面在收到广播之前不会自己动。
      */
-    explicit UiState(AppSettings *settings, QObject *parent = nullptr);
+    explicit UiState(AppSettings *settings, Tr *tr, QObject *parent = nullptr);
     ~UiState() override;
 
     int themeMode() const { return m_themeMode; }
@@ -73,14 +80,13 @@ private:
     void applyTheme();
     void applyLanguage();
 
-    /** 当前该用哪个 locale。只看系统语言清单里的**第一个**，原因见 .cpp。 */
-    static QString systemLanguageCode();
-
     int m_themeMode = System;
     QString m_language;   // 空 = 跟随系统
 
-    QTranslator *m_appTranslator = nullptr;   // 我们自己的 MCast_*.qm
-    QTranslator *m_qtTranslator  = nullptr;   // Qt 自带原生控件的 qtbase_*.qm
+    /** 我们自己那套（查的是 lang/*.json）。**只借不拥有** —— 它归 main()。 */
+    Tr *m_tr = nullptr;
+
+    QTranslator *m_qtTranslator = nullptr;   // Qt 自带原生控件的 qtbase_*.qm
 
     /** 设置文件。初始值从它读，改动写回它。可以为空（没有设置也能跑）。 */
     AppSettings *m_settings = nullptr;
