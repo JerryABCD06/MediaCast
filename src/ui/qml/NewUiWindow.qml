@@ -14,7 +14,9 @@ import "components"
 FluWindow {
     id: window
 
-    title: qsTr("Media Cast")
+    // 产品名，不翻译 —— 所以**不套 qsTr**。套了的话哪天有人做了个语言文件
+    // 顺手把它翻成中文，任务栏和窗口标题上的名字就跟着变了。
+    title: "Media Cast"
     width: 1000
     height: 740
 
@@ -96,7 +98,7 @@ FluWindow {
         id: topBar
 
         mode: window.page === 0 ? 0 : 1
-        pageTitle: qsTr("设置")
+        pageTitle: qsTr("ui_nav_settings")
 
         onBackClicked: window.page = 0
         onSettingsClicked: window.page = 1
@@ -166,10 +168,18 @@ FluWindow {
     FluContentDialog {
         id: dialog_end_cast
 
-        title: qsTr("正在投送")
-        message: qsTr("关掉窗口会结束这次投送，手机上也会断开。确定要关吗？")
-        negativeText: qsTr("取消")
-        positiveText: qsTr("关闭并断开")
+        // 库自带的宽度是 400（逻辑像素），那是按中文短句定的。英文那句
+        // "Closing the window will end this cast..." 在 400 里要折成两行，
+        // 而这个对话框的高度是按"一行"算出来的 —— 折行之后**第二行会被切掉**，
+        // 按钮上的 "Close and disconnect" 也会被挤到框外。
+        //
+        // 加宽到 560 之后两边都能容下。以后加语言时如果哪句更长，先看这儿。
+        width: 560
+
+        title: qsTr("ui_close_dialog_title")
+        message: qsTr("ui_close_dialog_text")
+        negativeText: qsTr("ui_common_cancel")
+        positiveText: qsTr("ui_close_dialog_confirm")
         buttonFlags: FluContentDialogType.NegativeButton | FluContentDialogType.PositiveButton
 
         // 取消：什么都不做。窗口还在原地，投送照常。

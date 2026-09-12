@@ -17,7 +17,7 @@ import FluentUI
 //
 //     TipTooltip {
 //         target: btn_something
-//         text: qsTr("...")
+//         text: qsTr("ui_topbar_settings")   // 键名，译文在 lang/*.json
 //         below: true                      // 贴着窗口上沿的才需要
 //         visible: btn_something.hovered   // 什么时候弹，由调用方说了算
 //     }

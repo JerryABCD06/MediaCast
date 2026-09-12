@@ -131,7 +131,9 @@ Item {
 
                 FluText {
                     width: parent.width
-                    text: qsTr("（标题占位）")
+                    // 还没接上真标题。**这是兜底，不是占位符** —— 以后接上
+                    // NowPlaying 之后，读不到标题时才落回这一句，别把它删了。
+                    text: qsTr("ui_mediabar_title_unknown")
                     font: FluTextStyle.BodyStrong
                     textColor: "#FFFFFFFF"
                     elide: Text.ElideRight
@@ -140,7 +142,7 @@ Item {
 
                 FluText {
                     width: parent.width
-                    text: qsTr("（副标题占位）")
+                    text: qsTr("ui_mediabar_subtitle_unknown")
                     font: FluTextStyle.Caption
                     textColor: "#B3FFFFFF"
                     elide: Text.ElideRight
@@ -160,7 +162,7 @@ Item {
                     iconSource: FluentIcons.Previous
                     iconSize: 18
                     iconColor: "#FFFFFFFF"
-                    contentDescription: qsTr("上一个")
+                    contentDescription: qsTr("ui_mediabar_previous")
                 }
 
                 // 真的：播放 / 暂停
@@ -173,7 +175,8 @@ Item {
                     iconSource: showPlay ? FluentIcons.Play : FluentIcons.Pause
                     iconSize: 24
                     iconColor: "#FFFFFFFF"
-                    contentDescription: showPlay ? qsTr("播放") : qsTr("暂停")
+                    contentDescription: showPlay ? qsTr("ui_mediabar_play")
+                                                 : qsTr("ui_mediabar_pause")
                     // 按下去该干什么由状态机说了算（规则只有一份，在
                     // PlaybackController::togglePlayPause）。上面那个 showPlay
                     // 只管画哪个图标。
@@ -185,7 +188,7 @@ Item {
                     iconSource: FluentIcons.Next
                     iconSize: 18
                     iconColor: "#FFFFFFFF"
-                    contentDescription: qsTr("下一个")
+                    contentDescription: qsTr("ui_mediabar_next")
                 }
             }
 
@@ -201,7 +204,7 @@ Item {
                     iconSource: FluentIcons.Subtitles
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
-                    contentDescription: qsTr("字幕")
+                    contentDescription: qsTr("ui_mediabar_subtitles")
                 }
 
                 // 壳子：音量。以后点它**在按钮上方**弹一条纵向的 FluSlider
@@ -210,7 +213,7 @@ Item {
                     iconSource: FluentIcons.Volume
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
-                    contentDescription: qsTr("音量")
+                    contentDescription: qsTr("ui_mediabar_volume")
                 }
 
                 // 壳子：显示效果调节。以后开**独立窗口**（不是这里的弹层），
@@ -219,7 +222,7 @@ Item {
                     iconSource: FluentIcons.Brightness
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
-                    contentDescription: qsTr("显示效果")
+                    contentDescription: qsTr("ui_mediabar_picture")
                 }
 
                 // 壳子：全屏 / 退出全屏。图标是两态，接的时候按 window.visibility 换。
@@ -227,7 +230,7 @@ Item {
                     iconSource: FluentIcons.FullScreen
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
-                    contentDescription: qsTr("全屏")
+                    contentDescription: qsTr("ui_mediabar_fullscreen")
                 }
             }
         }

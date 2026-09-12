@@ -15,10 +15,13 @@ import FluentUI
 //
 //     SettingsCard {
 //         icon: FluentIcons.Globe
-//         title: qsTr("语言")
-//         subtitle: qsTr("界面上的文字用哪种语言")
+//         title: qsTr("ui_settings_language")
+//         subtitle: qsTr("ui_settings_language_desc")
 //         FluComboBox { model: [...] }
 //     }
+//
+// 注意 title / subtitle 走的是**键名**，不是中文原文 —— 键名和译文在
+// lang/*.json 里，规矩见 lang/README.md。
 FluFrame {
     id: card
 

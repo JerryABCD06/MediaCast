@@ -88,8 +88,8 @@ Item {
                     FluText {
                         Layout.alignment: Qt.AlignHCenter
                         text: Playback.castState === Playback.ViewerIdle
-                              ? qsTr("已经连上了 —— 在手机上挑一个视频、音乐或图片")
-                              : qsTr("把手机上的内容投到这里")
+                              ? qsTr("ui_cast_hint_connected")
+                              : qsTr("ui_cast_hint_idle")
                         font: FluTextStyle.Title
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
@@ -99,19 +99,19 @@ Item {
 
                     FluText {
                         Layout.fillWidth: true
-                        text: qsTr("① 手机连到和这台电脑同一个 Wi-Fi")
+                        text: qsTr("ui_cast_hint_step1")
                         font: FluTextStyle.Body
                         textColor: FluTheme.fontSecondaryColor
                     }
                     FluText {
                         Layout.fillWidth: true
-                        text: qsTr("② 在手机的视频或相册里点「投屏」「投射」")
+                        text: qsTr("ui_cast_hint_step2")
                         font: FluTextStyle.Body
                         textColor: FluTheme.fontSecondaryColor
                     }
                     FluText {
                         Layout.fillWidth: true
-                        text: qsTr("③ 在设备列表里选中这台电脑")
+                        text: qsTr("ui_cast_hint_step3")
                         font: FluTextStyle.Body
                         textColor: FluTheme.fontSecondaryColor
                     }
@@ -119,7 +119,7 @@ Item {
                     FluText {
                         Layout.fillWidth: true
                         Layout.topMargin: 6
-                        text: qsTr("支持 DLNA 的应用都能用：手机自带的相册、BubbleUPnP 等")
+                        text: qsTr("ui_cast_hint_apps")
                         font: FluTextStyle.Caption
                         textColor: FluTheme.fontTertiaryColor
                     }

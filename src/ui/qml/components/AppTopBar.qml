@@ -89,10 +89,10 @@ FluAppBar {
 
     // 窗口那三个按钮的提示文字（FluAppBar 的公开属性，默认是英文）。
     // 下面那三份 TipTooltip 直接读它们，所以改词只改这一处。
-    minimizeText: qsTr("最小化")
-    restoreText: qsTr("还原")
-    maximizeText: qsTr("最大化")
-    closeText: qsTr("关闭")
+    minimizeText: qsTr("ui_window_minimize")
+    restoreText: qsTr("ui_window_restore")
+    maximizeText: qsTr("ui_window_maximize")
+    closeText: qsTr("ui_window_close")
 
     Component.onCompleted: bar.ready()
 
@@ -110,13 +110,13 @@ FluAppBar {
 
     readonly property string pillText: {
         switch (Playback.castState) {
-        case Playback.NoViewer:     return qsTr("未连接")
-        case Playback.ViewerIdle:   return qsTr("已连接")
-        case Playback.ViewerVideo:  return qsTr("正在投屏")
-        case Playback.ViewerAudio:  return qsTr("正在播放音乐")
-        case Playback.ViewerImage:  return qsTr("正在显示图片")
+        case Playback.NoViewer:     return qsTr("ui_topbar_state_disconnected")
+        case Playback.ViewerIdle:   return qsTr("ui_topbar_state_connected")
+        case Playback.ViewerVideo:  return qsTr("ui_topbar_state_casting")
+        case Playback.ViewerAudio:  return qsTr("ui_topbar_state_audio")
+        case Playback.ViewerImage:  return qsTr("ui_topbar_state_image")
         }
-        return qsTr("未连接")
+        return qsTr("ui_topbar_state_disconnected")
     }
 
     // ── 左：主界面模式 ──────────────────────────────────────────────────
@@ -196,7 +196,7 @@ FluAppBar {
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Back
             iconSize: 16
-            contentDescription: qsTr("返回")
+            contentDescription: qsTr("ui_topbar_back")
             tipBelow: true
             onClicked: bar.backClicked()
         }
@@ -228,7 +228,7 @@ FluAppBar {
             Layout.preferredHeight: 30
             Layout.rightMargin: 6
             visible: Playback.castState !== Playback.NoViewer
-            contentDescription: qsTr("断开连接")
+            contentDescription: qsTr("ui_topbar_disconnect")
             onClicked: bar.disconnectClicked()
 
             // FluButton 的内容项本来就是一个 FluText，这里换成"图标 + 文字"。
@@ -241,7 +241,7 @@ FluAppBar {
                 }
                 FluText {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: qsTr("断开连接")
+                    text: qsTr("ui_topbar_disconnect")
                 }
             }
         }
@@ -252,7 +252,7 @@ FluAppBar {
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Info
             iconSize: 16
-            contentDescription: qsTr("信息")
+            contentDescription: qsTr("ui_topbar_info")
             tipBelow: true
             onClicked: bar.infoClicked()
         }
@@ -263,7 +263,7 @@ FluAppBar {
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Settings
             iconSize: 16
-            contentDescription: qsTr("设置")
+            contentDescription: qsTr("ui_topbar_settings")
             tipBelow: true
             onClicked: bar.settingsClicked()
         }

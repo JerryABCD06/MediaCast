@@ -20,7 +20,7 @@ import FluentUI
 //
 //     TipIconButton {
 //         iconSource: FluentIcons.Settings
-//         contentDescription: qsTr("设置")     // 提示的文字就是从这儿来的
+//         contentDescription: qsTr("ui_topbar_settings")   // 提示的文字就是从这儿来的
 //         tipBelow: true                       // 只有贴着窗口上沿的才需要
 //         onClicked: ...
 //     }

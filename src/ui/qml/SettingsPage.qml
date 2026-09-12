@@ -53,16 +53,16 @@ Item {
 
     /** 深浅模式：显示名 + UiState.ThemeMode 的值。 */
     readonly property var themeModes: [
-        { title: qsTr("跟随系统"), mode: UiState.System },
-        { title: qsTr("浅色"), mode: UiState.Light },
-        { title: qsTr("深色"), mode: UiState.Dark }
+        { title: qsTr("ui_settings_theme_system"), mode: UiState.System },
+        { title: qsTr("ui_settings_theme_light"), mode: UiState.Light },
+        { title: qsTr("ui_settings_theme_dark"), mode: UiState.Dark }
     ]
 
     /** 广播间隔的几档。数字是毫秒。 */
     readonly property var broadcastIntervals: [5000, 10000, 30000, 60000]
 
     function intervalLabel(ms) {
-        return qsTr("%1 秒").arg(ms / 1000)
+        return qsTr("ui_settings_interval_seconds").arg(ms / 1000)
     }
 
     RowLayout {
@@ -80,9 +80,9 @@ Item {
 
             Repeater {
                 model: [
-                    { title: qsTr("界面"), icon: FluentIcons.Personalize },
-                    { title: qsTr("投送"), icon: FluentIcons.Project },
-                    { title: qsTr("关于"), icon: FluentIcons.Info }
+                    { title: qsTr("ui_settings_category_ui"), icon: FluentIcons.Personalize },
+                    { title: qsTr("ui_settings_category_cast"), icon: FluentIcons.Project },
+                    { title: qsTr("ui_settings_category_about"), icon: FluentIcons.Info }
                 ]
 
                 delegate: Rectangle {
@@ -162,8 +162,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 0
                     icon: FluentIcons.Globe
-                    title: qsTr("语言")
-                    subtitle: qsTr("界面上的文字用哪种语言。跟随系统就是跟 Windows 走")
+                    title: qsTr("ui_settings_language")
+                    subtitle: qsTr("ui_settings_language_desc")
 
                     FluComboBox {
                         Layout.preferredWidth: 150
@@ -183,8 +183,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 0
                     icon: FluentIcons.Personalize
-                    title: qsTr("深浅模式")
-                    subtitle: qsTr("界面的亮暗。跟随系统就是跟 Windows 走")
+                    title: qsTr("ui_settings_theme")
+                    subtitle: qsTr("ui_settings_theme_desc")
 
                     FluComboBox {
                         Layout.preferredWidth: 150
@@ -209,8 +209,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 1
                     icon: FluentIcons.Send
-                    title: qsTr("接受新的投送")
-                    subtitle: qsTr("关掉之后，这台电脑会从手机的可投屏设备里消失（等于勿扰）")
+                    title: qsTr("ui_settings_accept")
+                    subtitle: qsTr("ui_settings_accept_desc")
 
                     // 不写 `checked: Settings.castNewCast` 这种绑定：开关自己点一下
                     // 就会写 checked，绑定当场被打断，之后（比如托盘点勿扰）就再也
@@ -233,7 +233,7 @@ Item {
                 FluText {
                     visible: page.category === 1
                     Layout.topMargin: 12
-                    text: qsTr("高级 —— 一般不用改")
+                    text: qsTr("ui_settings_advanced")
                     font: FluTextStyle.Caption
                     textColor: FluTheme.fontSecondaryColor
                 }
@@ -241,8 +241,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 1
                     icon: FluentIcons.Sync
-                    title: qsTr("定期广播")
-                    subtitle: qsTr("定期喊一声「我在」。关掉只是不主动喊，手机主动搜还是能找到这台电脑")
+                    title: qsTr("ui_settings_broadcast")
+                    subtitle: qsTr("ui_settings_broadcast_desc")
 
                     FluToggleSwitch {
                         id: switchBroadcast
@@ -262,8 +262,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 1
                     icon: FluentIcons.Ringer
-                    title: qsTr("广播间隔")
-                    subtitle: qsTr("越短越容易被搜到，网络上也越吵。手机上搜不到这台电脑时，先往短里调")
+                    title: qsTr("ui_settings_interval")
+                    subtitle: qsTr("ui_settings_interval_desc")
                     enabled: Settings.castBroadcast
 
                     FluComboBox {
@@ -291,8 +291,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 2
                     icon: FluentIcons.TVMonitor
-                    title: qsTr("设备名")
-                    subtitle: qsTr("手机投屏时，设备列表里显示的就是这个名字（跟着计算机名走）")
+                    title: qsTr("ui_about_device_name")
+                    subtitle: qsTr("ui_about_device_name_desc")
 
                     FluText {
                         text: Device.deviceName
@@ -304,8 +304,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 2
                     icon: FluentIcons.Link
-                    title: qsTr("设备地址")
-                    subtitle: qsTr("控制点来这儿找我们。同一局域网里，用手机浏览器打开它也能看到这台设备的自述")
+                    title: qsTr("ui_about_device_address")
+                    subtitle: qsTr("ui_about_device_address_desc")
 
                     FluText {
                         text: Device.locationUrl
@@ -317,8 +317,8 @@ Item {
                 SettingsCard {
                     visible: page.category === 2
                     icon: FluentIcons.Info
-                    title: qsTr("设备标识")
-                    subtitle: qsTr("控制点用它认「是不是同一台设备」。这个号一辈子不变")
+                    title: qsTr("ui_about_device_id")
+                    subtitle: qsTr("ui_about_device_id_desc")
 
                     FluText {
                         text: Device.udn
@@ -330,7 +330,7 @@ Item {
                 SettingsCard {
                     visible: page.category === 2
                     icon: FluentIcons.Settings
-                    title: qsTr("版本")
+                    title: qsTr("ui_about_version")
 
                     FluText {
                         text: "Media Cast " + Device.appVersion
