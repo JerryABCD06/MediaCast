@@ -82,6 +82,15 @@ public:
 signals:
     void logMessage(const QString &text);
 
+    /**
+     * 订阅数变了（有人订阅 / 全都取消了 / 超时被清掉）。
+     *
+     * 界面靠它判断"有没有投送方连着" —— 这是**唯一可靠**的那个信号：
+     * 控制点一旦开始投送就会订阅我们的状态，走了会取消订阅。只是搜到我们、
+     * 看两眼设备描述那种不算连上。
+     */
+    void subscriptionCountChanged(int count);
+
 private:
     struct Subscription {
         QString   service;        // AVTransport / RenderingControl / ConnectionManager
@@ -132,9 +141,14 @@ private:
     void noteSendFailed(const QString &sid);
     /** 在途的那条结束了（成功、失败、超时都算），该发的下一条在这儿发。 */
     void finishSend(const QString &sid);
+    /** 订阅数变了就报一声。所有增删订阅的地方都要在末尾叫一次。 */
+    void notifyCountIfChanged();
     QByteArray eventBodyFor(const QString &service) const;
 
     QHash<QString, Subscription> m_subscriptions;
+
+    /** 上一次报出去的订阅数，用来"变了才报"。 */
+    int m_lastReportedCount = 0;
 
     // 缓存最近一次的状态，这样新订阅者一来就能立刻收到一份"现在是什么样"。
     // 和 SoapHandler 那边保持一致：一上来是"什么都没有"，不是"停着"。

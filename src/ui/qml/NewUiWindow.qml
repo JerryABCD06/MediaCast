@@ -98,10 +98,6 @@ FluWindow {
         mode: window.page === 0 ? 0 : 1
         pageTitle: qsTr("设置")
 
-        // 状态胶囊。眼下只有"有没有内容在放"这一个依据，所以"连着但没在放"
-        // 会显示成未连接 —— 缺的那一半见 AppTopBar 里 linkState 的说明。
-        linkState: Playback.hasMedia ? 2 : 0
-
         onBackClicked: window.page = 0
         onSettingsClicked: window.page = 1
         onInfoClicked: {
@@ -132,11 +128,12 @@ FluWindow {
     // 代价：在设置页里的时候，画面还在底下照常渲染（白烧一点显卡）。换来的是
     // "边看边改设置、切回来接着播" —— 值。
     //
-    // 边距给在**这儿**：原来是 FluPivot 的 anchors.margins 给的，平级页签退了
-    // 之后这一层得我们自己补（页面里不能再加一层，不然改一处对不上另一处）。
+    // **不留边距**：顶栏底下整块都归页面用 —— 投屏页要的是"画面铺满"，
+    // 设置页要的是"盖满、别从缝里漏出主页面的东西"。谁需要内边距谁自己加
+    // （设置页在内容外面加了一圈，见那个文件）。
     Item {
         anchors.fill: parent
-        anchors.margins: 20
+        anchors.margins: 0
 
         CastPage {
             anchors.fill: parent

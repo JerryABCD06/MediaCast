@@ -57,6 +57,9 @@ Item {
 
     RowLayout {
         anchors.fill: parent
+        // 页面从窗口边缘开始铺（投屏页要画面铺满，这一层不许留边），
+        // 所以内边距在这儿自己加。
+        anchors.margins: 24
         spacing: 24
 
         // ── 左：类目 ─────────────────────────────────────────────────────
@@ -68,7 +71,8 @@ Item {
             Repeater {
                 model: [
                     { title: qsTr("界面"), icon: FluentIcons.Personalize },
-                    { title: qsTr("投送"), icon: FluentIcons.Project }
+                    { title: qsTr("投送"), icon: FluentIcons.Project },
+                    { title: qsTr("关于"), icon: FluentIcons.Info }
                 ]
 
                 delegate: Rectangle {
@@ -263,6 +267,65 @@ Item {
                             Settings.castBroadcastInterval =
                                 page.broadcastIntervals[index]
                         }
+                    }
+                }
+
+                // ══ 类目：关于 ═══════════════════════════════════════════
+                //
+                // 这一栏**全是只读的** —— 它是"看"的地方：排错、报问题、或者想确认
+                // "手机上一堆设备里哪个是我"的时候用。所以右边不放控件，只放值。
+                //
+                // 数据来自 Device（就是 DlnaRenderer 那个门面，只暴露了这几项只读
+                // 属性）。界面拿不到 DlnaRenderer 的任何操作能力。
+
+                SettingsCard {
+                    visible: page.category === 2
+                    icon: FluentIcons.TVMonitor
+                    title: qsTr("设备名")
+                    subtitle: qsTr("手机投屏时，设备列表里显示的就是这个名字（跟着计算机名走）")
+
+                    FluText {
+                        text: Device.deviceName
+                        font: FluTextStyle.Body
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+                }
+
+                SettingsCard {
+                    visible: page.category === 2
+                    icon: FluentIcons.Link
+                    title: qsTr("设备地址")
+                    subtitle: qsTr("控制点来这儿找我们。同一局域网里，用手机浏览器打开它也能看到这台设备的自述")
+
+                    FluText {
+                        text: Device.locationUrl
+                        font: FluTextStyle.Caption
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+                }
+
+                SettingsCard {
+                    visible: page.category === 2
+                    icon: FluentIcons.Info
+                    title: qsTr("设备标识")
+                    subtitle: qsTr("控制点用它认「是不是同一台设备」。这个号一辈子不变")
+
+                    FluText {
+                        text: Device.udn
+                        font: FluTextStyle.Caption
+                        textColor: FluTheme.fontSecondaryColor
+                    }
+                }
+
+                SettingsCard {
+                    visible: page.category === 2
+                    icon: FluentIcons.Settings
+                    title: qsTr("版本")
+
+                    FluText {
+                        text: "Media Cast " + Device.appVersion
+                        font: FluTextStyle.Body
+                        textColor: FluTheme.fontSecondaryColor
                     }
                 }
             }

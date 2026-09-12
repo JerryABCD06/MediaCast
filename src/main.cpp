@@ -72,6 +72,8 @@ int main(int argc, char *argv[])
     //   applicationDisplayName —— 给人看的。窗口标题、对话框标题用它。
     QApplication::setApplicationName(QStringLiteral("MCast"));
     QApplication::setApplicationDisplayName(QStringLiteral("Media Cast"));
+    // 版本号：和设备描述里的 modelNumber 是同一个数，改的时候两处一起改。
+    QApplication::setApplicationVersion(QStringLiteral("0.1"));
 
     // 这是个常驻后台的媒体接收器：关掉窗口不等于退出程序。
     // 少了这一句，关窗口时 Qt 会直接退出，托盘图标跟着一起没。
@@ -183,6 +185,10 @@ int main(int argc, char *argv[])
 
     DlnaRenderer renderer(&playback);
     MainWindow   window(&renderer);
+
+    // 这台设备在网络里的身份（名字、地址、唯一标识、版本）给 QML 一份 ——
+    // 设置页的「关于」读它。**只读**，界面改不了这些东西。
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Device", &renderer);
 
     // Windows 自己的媒体面板（按音量键弹出来的那个）。
     // 它在结构上很特别：**既是显示端，又是控制端**。所以显示的部分照界面那样接，

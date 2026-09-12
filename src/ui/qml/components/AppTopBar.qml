@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Layouts
 import FluentUI
+// 状态胶囊读 Playback.castState —— 那是"谁连着 × 在放什么"算好的结果。
+import MediaCast 1.0
 
 // AppTopBar —— 窗口顶栏。照 Windows 11「照片」那条做的。
 //
@@ -42,18 +44,6 @@ FluAppBar {
     /** mode = 1 时显示在返回箭头右边的标题。 */
     property string pageTitle: ""
 
-    /**
-     * 状态胶囊。0 = 未连接，1 = 已连接，2 = 正在投屏。
-     *
-     * **这个值现在还不完整**：真正能区分"已连接"和"未连接"的依据是
-     * "有没有控制点订阅了我们的状态"（DlnaRenderer::subscriptionCount），
-     * 那是协议层的东西，还没暴露给 QML。眼下先用"有没有内容在放"顶着 ——
-     * 所以"连着但没在放"会显示成未连接。等要做的时候，正确做法是给
-     * PlaybackController 加一个中性属性（比如 peerConnected），由协议层去喂，
-     * 这样将来接别的协议这条 UI 也不用改。
-     */
-    property int linkState: 0
-
     signal backClicked()
     signal infoClicked()
     signal settingsClicked()
@@ -89,6 +79,29 @@ FluAppBar {
 
     Component.onCompleted: bar.ready()
 
+    // ── 状态胶囊那两个值：从 castState 翻出来 ────────────────────────────
+    //
+    // 五种局面，三种颜色：没连着是灰的，连着但没在放是绿的，在放东西是主题蓝。
+    // 图标/颜色之外的字也在这儿 —— 换文案只改这一处。
+    readonly property color pillColor: {
+        switch (Playback.castState) {
+        case Playback.NoViewer:    return FluTheme.dark ? "#9A9A9A" : "#8A8A8A"
+        case Playback.ViewerIdle:  return "#107C10"
+        default:                   return FluTheme.primaryColor
+        }
+    }
+
+    readonly property string pillText: {
+        switch (Playback.castState) {
+        case Playback.NoViewer:     return qsTr("未连接")
+        case Playback.ViewerIdle:   return qsTr("已连接")
+        case Playback.ViewerVideo:  return qsTr("正在投屏")
+        case Playback.ViewerAudio:  return qsTr("正在播放音乐")
+        case Playback.ViewerImage:  return qsTr("正在显示图片")
+        }
+        return qsTr("未连接")
+    }
+
     // ── 左：主界面模式 ──────────────────────────────────────────────────
     RowLayout {
         id: leftGroup
@@ -115,19 +128,17 @@ FluAppBar {
         }
 
         // 状态胶囊
+        //
+        // 显示什么完全由 Playback.castState 决定 —— **那个值已经是"谁连着 ×
+        // 在放什么"算好的结果**，这里不做任何组合判断（组合逻辑只有一份，
+        // 在 PlaybackController::castState 里）。
         Rectangle {
             id: pill
             Layout.alignment: Qt.AlignVCenter
             implicitWidth: pillRow.implicitWidth + 18
             implicitHeight: 22
             radius: height / 2
-            color: {
-                if (bar.linkState === 2)
-                    return FluTools.withOpacity(FluTheme.primaryColor, 0.16)
-                if (bar.linkState === 1)
-                    return Qt.rgba(16 / 255, 124 / 255, 16 / 255, 0.16)
-                return FluTheme.dark ? Qt.rgba(1, 1, 1, 0.10) : Qt.rgba(0, 0, 0, 0.06)
-            }
+            color: FluTools.withOpacity(bar.pillColor, 0.16)
 
             Row {
                 id: pillRow
@@ -139,20 +150,12 @@ FluAppBar {
                     height: 8
                     radius: 4
                     anchors.verticalCenter: parent.verticalCenter
-                    color: {
-                        if (bar.linkState === 2)
-                            return FluTheme.primaryColor
-                        if (bar.linkState === 1)
-                            return "#107C10"
-                        return FluTheme.dark ? "#9A9A9A" : "#8A8A8A"
-                    }
+                    color: bar.pillColor
                 }
 
                 FluText {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: bar.linkState === 2 ? qsTr("正在投屏")
-                        : bar.linkState === 1 ? qsTr("已连接")
-                                              : qsTr("未连接")
+                    text: bar.pillText
                     font: FluTextStyle.Caption
                 }
             }

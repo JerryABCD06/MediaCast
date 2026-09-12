@@ -70,6 +70,26 @@ class PlaybackController : public QObject
     Q_PROPERTY(double duration READ durationSeconds NOTIFY durationChanged)
     Q_PROPERTY(bool paused READ isPaused NOTIFY pausedChanged)
 
+    /**
+     * 有没有投送方连着。
+     *
+     * **这个是协议层喂进来的** —— "谁连着我们"只有那一层知道。现在只有 DLNA
+     * 一个来源（判据：有控制点订阅了我们的状态）；将来接 AirPlay 之类，那边也
+     * 往里报一声就行，界面一行都不用改。
+     *
+     * 已知的粗糙处：从头到尾不订阅、也不轮询的那种控制点（实测 B 站 App 就是）
+     * 会被算成"没连着"。真遇到再补一条"最近说过话也算"的判据。
+     */
+    Q_PROPERTY(bool peerConnected READ peerConnected NOTIFY peerConnectedChanged)
+
+    /**
+     * 界面要的"现在是什么局面" —— 由上面两个轴（谁连着 × 在放什么）算出来。
+     *
+     * 为什么不把两个轴直接丢给 QML 自己组合：**组合的逻辑只该有一份**。
+     * 以后加协议、加媒体类型，改的是这里，不是散在各个页面里的一堆 if。
+     */
+    Q_PROPERTY(CastState castState READ castState NOTIFY castStateChanged)
+
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
@@ -85,6 +105,21 @@ public:
         Paused,
     };
     Q_ENUM(State)
+
+    /** 界面的"局面"。见 castState。 */
+    enum class CastState {
+        /** 没有投送方连着 —— 屏幕上该显示"把手机的内容投到这里"。 */
+        NoViewer,
+        /** 连着，但手上没东西（刚连上、或者放完了）。 */
+        ViewerIdle,
+        /** 连着，在放视频。 */
+        ViewerVideo,
+        /** 连着，在放音乐。 */
+        ViewerAudio,
+        /** 连着，在放图片。 */
+        ViewerImage,
+    };
+    Q_ENUM(CastState)
 
     /** 播放模式。 */
     enum class PlayMode {
@@ -205,6 +240,17 @@ public:
     bool hasMedia() const { return m_state != State::NoMedia; }
     /** 界面读的"是不是暂停着"。就是状态机里那一个状态。 */
     bool isPaused() const { return m_state == State::Paused; }
+
+    bool peerConnected() const { return m_peerConnected; }
+    /** 协议层调它：有投送方连着 / 全都走了。 */
+    void setPeerConnected(bool connected);
+
+    /**
+     * 现在的局面。由"谁连着"和"在放什么"两轴算出来 —— 具体规则就在
+     * 实现里那十来行，不在别处。**取缓存、立刻返回**，界面绑它就行。
+     */
+    CastState castState() const;
+
     LoadStatus loadStatus() const { return m_loadStatus; }
 
     NowPlaying nowPlaying() const { return m_nowPlaying; }
@@ -239,6 +285,12 @@ signals:
 
     /** 上面那个 hasMedia 变了（会话开始 / 结束）。 */
     void hasMediaChanged();
+
+    /** 有没有投送方连着变了。 */
+    void peerConnectedChanged();
+
+    /** 上面那个 castState 变了 —— 界面照它切换显示什么。 */
+    void castStateChanged();
 
     /** "正在播放什么"变了（换片子，或者会话结束）。 */
     void nowPlayingChanged(const NowPlaying &info);
@@ -311,6 +363,10 @@ private:
     QTimer *m_loadWatchdog = nullptr;
 
     State m_state = State::NoMedia;
+
+    /** 有没有投送方连着。协议层喂的，见 setPeerConnected()。 */
+    bool m_peerConnected = false;
+
     LoadStatus m_loadStatus = LoadStatus::Ok;
 
     /// 当前这条。三格队列都存完整请求，理由见 setNextUri 上面那段。

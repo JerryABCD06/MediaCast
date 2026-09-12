@@ -118,6 +118,7 @@ QByteArray GenaManager::handleSubscribe(const QString &service,
     m_subscriptions.insert(sid, sub);
 
     emit logMessage(QStringLiteral("事件订阅 %1  ->  %2").arg(service, callback));
+    notifyCountIfChanged();
 
     // ── 首条事件不能跟订阅应答抢跑 ────────────────────────────────────────
     //
@@ -153,6 +154,7 @@ QByteArray GenaManager::handleUnsubscribe(const QMultiMap<QString, QString> &hea
 
     m_subscriptions.remove(sid);
     emit logMessage(QStringLiteral("事件订阅取消：%1").arg(sid));
+    notifyCountIfChanged();
     return httpResponse(200, QStringLiteral("OK"), QString());
 }
 
@@ -236,6 +238,7 @@ void GenaManager::pushMediaState(const QString &uri, const QString &metadata)
 void GenaManager::pushToService(const QString &service)
 {
     prune();
+    notifyCountIfChanged();   // prune 可能清掉了过期的订阅
     if (m_subscriptions.isEmpty())
         return;
 
@@ -511,6 +514,17 @@ void GenaManager::noteSendFailed(const QString &sid)
                         .arg(it->failures)
                         .arg(it->callbackUrl));
     m_subscriptions.erase(it);
+    notifyCountIfChanged();
+}
+
+void GenaManager::notifyCountIfChanged()
+{
+    const int now = m_subscriptions.size();
+    if (now == m_lastReportedCount)
+        return;
+
+    m_lastReportedCount = now;
+    emit subscriptionCountChanged(now);
 }
 
 void GenaManager::finishSend(const QString &sid)

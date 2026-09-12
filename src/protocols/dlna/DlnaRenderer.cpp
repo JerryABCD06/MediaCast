@@ -6,6 +6,7 @@
 #include "SoapHandler.h"
 #include "SsdpService.h"
 
+#include <QCoreApplication>
 DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     : QObject(parent)
     , m_ctl(controller)
@@ -81,6 +82,16 @@ DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     // ── 日志汇集 ────────────────────────────────────────────────────────
     connect(m_ssdp, &SsdpService::logMessage, this, &DlnaRenderer::logMessage);
     connect(m_http, &HttpServer::logMessage, this, &DlnaRenderer::logMessage);
+
+    // 订阅数变了 -> 告诉控制器"有没有投送方连着"。
+    //
+    // 为什么由协议层喂、而不是界面自己去问 DNLA：**"谁连着"只有这一层知道**，
+    // 界面不该认识 GENA 是什么。控制器那边给的是一个中性属性（peerConnected），
+    // 将来接 AirPlay 之类，那边也往里报一声就行。
+    connect(m_gena, &GenaManager::subscriptionCountChanged, this, [this](int count) {
+        if (m_ctl)
+            m_ctl->setPeerConnected(count > 0);
+    });
     connect(m_soap, &SoapHandler::logMessage, this, &DlnaRenderer::logMessage);
     connect(m_gena, &GenaManager::logMessage, this, &DlnaRenderer::logMessage);
 
@@ -116,6 +127,10 @@ bool DlnaRenderer::start()
 
     m_running = ssdpOk && httpOk;
     emit runningChanged(m_running);
+
+    // 地址、UDN 这些要等 SSDP 挑完网卡才有，所以"关于"那份信息在这儿才齐。
+    emit deviceInfoChanged();
+
     return m_running;
 }
 
@@ -278,6 +293,8 @@ void DlnaRenderer::setBroadcasting(bool on)
 QString DlnaRenderer::deviceName() const { return m_ssdp->friendlyName(); }
 QString DlnaRenderer::address()    const { return m_ssdp->localAddress(); }
 QString DlnaRenderer::locationUrl() const { return m_ssdp->locationUrl(); }
+QString DlnaRenderer::udn() const { return m_ssdp ? m_ssdp->udn() : QString(); }
+QString DlnaRenderer::appVersion() const { return QCoreApplication::applicationVersion(); }
 QString DlnaRenderer::transportState() const { return m_soap->transportState(); }
 
 double DlnaRenderer::positionSeconds() const { return m_ctl ? m_ctl->positionSeconds() : 0.0; }

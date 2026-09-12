@@ -64,11 +64,13 @@ Item {
                 }
             }
 
-            // ── 投屏指引 ────────────────────────────────────────────────
+            // ── 中间那块提示 ────────────────────────────────────────────
             //
-            // 一行内容都没有的时候盖在画面上。不透明，所以下面的黑画面看不见。
-            // 用页面同色而不是纯白，是为了让它看起来是"这一块空着"，而不是
-            // 贴了一张白纸上去。
+            // 没有东西可看的时候盖在画面上。**显示哪一句由 Playback.castState
+            // 决定** —— 那个值把"谁连着"和"在放什么"算好了，这里不做组合判断。
+            //
+            // 不透明，所以下面的黑画面看不见；用页面同色而不是纯白，是为了让它
+            // 看起来是"这一块空着"，而不是贴了一张白纸上去。
             Rectangle {
                 anchors.fill: parent
                 color: FluTheme.backgroundColor
@@ -79,10 +81,15 @@ Item {
                     width: Math.min(parent.width - 80, 520)
                     spacing: 12
 
+                    // 标题：连着没连着，说法不一样。
                     FluText {
                         Layout.alignment: Qt.AlignHCenter
-                        text: qsTr("把手机上的内容投到这里")
+                        text: Playback.castState === Playback.ViewerIdle
+                              ? qsTr("已经连上了 —— 在手机上挑一个视频、音乐或图片")
+                              : qsTr("把手机上的内容投到这里")
                         font: FluTextStyle.Title
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
                     }
 
                     FluDivider { Layout.fillWidth: true }

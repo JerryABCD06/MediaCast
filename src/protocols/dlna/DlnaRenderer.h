@@ -38,6 +38,23 @@ class DlnaRenderer : public QObject
 {
     Q_OBJECT
 
+    // ── 这台设备在网络里的身份 ───────────────────────────────────────────
+    //
+    // 给设置页的「关于」看的：设备名（控制点上显示的就是它）、唯一标识、
+    // 控制点该来哪儿找我们。**只读** —— 现在设备名固定取计算机名。
+    //
+    // 地址和 UDN 要等 start() 之后才知道，所以不是 CONSTANT：start() 末尾会
+    // 发一次 deviceInfoChanged，界面那时候重新读一遍。
+    Q_PROPERTY(QString deviceName READ deviceName NOTIFY deviceInfoChanged)
+    Q_PROPERTY(QString address READ address NOTIFY deviceInfoChanged)
+    Q_PROPERTY(QString locationUrl READ locationUrl NOTIFY deviceInfoChanged)
+    Q_PROPERTY(QString udn READ udn NOTIFY deviceInfoChanged)
+    /**
+     * 程序版本号。放这儿是因为「关于」那一页就在设置里、读的就是这个对象 ——
+     * 以后关于页要的信息多了（编译时间、Qt 版本…），再拆一个 AppInfo 出来也不难。
+     */
+    Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
+
 public:
     explicit DlnaRenderer(PlaybackController *controller, QObject *parent = nullptr);
     ~DlnaRenderer() override;
@@ -118,6 +135,9 @@ public:
     QString deviceName() const;
     QString address() const;
     QString locationUrl() const;
+    /** 设备唯一标识，形如 uuid:xxxx-…。控制点用它认"是不是同一台"。 */
+    QString udn() const;
+    QString appVersion() const;
     QString transportState() const;
 
     double positionSeconds() const;
@@ -134,6 +154,9 @@ signals:
 
     /** 过程日志，界面和日志文件都看着它。 */
     void logMessage(const QString &text);
+
+    /** 设备信息（名字/地址/标识）有变 —— 现在只在 start() 之后发一次。 */
+    void deviceInfoChanged();
 
     /** 播放引擎自身的状态文字（"正在启动 mpv"、"已就绪"之类）。 */
     void playerStatusChanged(const QString &text);
