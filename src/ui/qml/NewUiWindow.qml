@@ -17,6 +17,18 @@ FluWindow {
     width: 1000
     height: 740
 
+    // **关掉窗口只是把它藏起来，不要销毁。**
+    //
+    // FluWindow 默认 autoDestroy: true，那意味着点了关闭按钮它就把自己从
+    // FluRouter 里摘掉、整个窗口对象销毁。而这个窗口是我们常年持有的一个
+    // 裸指针（NewUiWindow::m_window）：窗口一销毁，指针就野了，下一次投屏
+    // 进来调 m_window->show() 直接崩 —— 崩在 Qt6Gui 内部读一个非法地址，
+    // 栈上什么都看不出来，查了很久。
+    //
+    // 而且这个程序本来就不该"关掉界面就退出"：它是常驻托盘收投送的。
+    // 所以关窗 = 藏起来，之后需要时再 show() 出来，是它该有的行为。
+    autoDestroy: false
+
     // 标题栏用 FluentUI 自绘的这条（默认行为），三个按钮也是它画的。
     //
     // 底座仍然是 DWM 的：FluFrameless 保留了 WS_CAPTION / WS_THICKFRAME，
