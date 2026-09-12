@@ -53,6 +53,13 @@ class PlaybackController : public QObject
      */
     Q_PROPERTY(bool idle READ isIdle NOTIFY idleChanged)
 
+    // 下面这几个是给界面用的：QML 读不了 C++ 的方法，只能读属性。
+    // 通知信号直接用播放器转发上来的那几个（位置/时长/暂停），不另造。
+
+    Q_PROPERTY(double position READ positionSeconds NOTIFY positionChanged)
+    Q_PROPERTY(double duration READ durationSeconds NOTIFY durationChanged)
+    Q_PROPERTY(bool paused READ isPaused NOTIFY pausedChanged)
+
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
@@ -119,22 +126,22 @@ public:
     void openUri(const MediaRequest &request, const MediaSource &source);
 
     /** 只在装了内容时有效。没内容时什么也不做。 */
-    void play();
-    void pause();
+    Q_INVOKABLE void play();
+    Q_INVOKABLE void pause();
 
     /**
      * 停下播放，但**会话还在** —— 内容仍然装着，随时能再按播放。
      * 控制点自己点「停止」走的就是这儿。
      */
-    void stop();
+    Q_INVOKABLE void stop();
 
     /**
      * 结束会话：内容、队列、播放模式全部归零。
      * 相当于从控制点那边"挂断"。
      */
-    void endSession();
+    Q_INVOKABLE void endSession();
 
-    void seekTo(double seconds);
+    Q_INVOKABLE void seekTo(double seconds);
 
     /** 0..100，和 DLNA RenderingControl 同一把尺子（这个换算是通用的，不是 DLNA 独有）。 */
     void setVolumePercent(int percent);
@@ -184,6 +191,8 @@ public:
 
     State state() const { return m_state; }
     bool isIdle() const { return m_state == State::NoMedia || m_state == State::Stopped; }
+    /** 界面读的"是不是暂停着"。就是状态机里那一个状态。 */
+    bool isPaused() const { return m_state == State::Paused; }
     LoadStatus loadStatus() const { return m_loadStatus; }
 
     NowPlaying nowPlaying() const { return m_nowPlaying; }
