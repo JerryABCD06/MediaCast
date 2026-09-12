@@ -1,6 +1,7 @@
 import QtQuick
 import FluentUI
 import MediaCast 1.0
+import "components"
 
 // 新界面的窗口外壳。它只做三件事：
 //   一、把 FluentUI 的窗口撑起来；
@@ -77,31 +78,66 @@ FluWindow {
                                                    : FluThemeType.System
     }
 
-    // 顶栏 + 内容区都由 FluPivot 一个控件包办：
-    // 上面那排是它的 header，下面那块是当前 item 的 contentItem。
+    // ── 导航：设置是**二级页**，不是平级页签 ─────────────────────────────
     //
-    // 用库自带的控件而不是自己写一个，是为了跟这个框架保持一套观感 ——
-    // 下划线、悬停色、动画时长、字体层级全是它的。
+    // 照 Windows 11「照片」的做法：齿轮点进去，顶栏左边变成 [←][设置]，
+    // 点返回回到主界面。
     //
-    // 已知取舍：FluPivot 的 delegate 只读 modelData.title，**不支持图标**。
-    // 所以"设置"现在没有齿轮。想加的话得在自己的组件里把它的 header 换成
-    // 自己的 ListView，那是另一件事。
-    FluPivot {
+    // 为什么不做成平级页签（原来的 FluPivot）：平级页签和二级页是两种导航模型，
+    // 混在一起用户会分不清自己在哪一层 —— 尤其"设置"里以后会长出子页面。
+    property int page: 0        // 0 = 投屏，1 = 设置
+
+    // ── 顶栏 ─────────────────────────────────────────────────────────────
+    //
+    // 整条换掉 FluWindow 自带的那条（自带那条只有一个图标和一个标题）。
+    // 高度、透明背景、三按钮怎么摆，都在 AppTopBar 里 —— 见那个文件的头注释，
+    // 里面有"为什么按钮不能混在一个容器里"的原因。
+    appBar: AppTopBar {
+        id: topBar
+
+        mode: window.page === 0 ? 0 : 1
+        pageTitle: qsTr("设置")
+
+        // 状态胶囊。眼下只有"有没有内容在放"这一个依据，所以"连着但没在放"
+        // 会显示成未连接 —— 缺的那一半见 AppTopBar 里 linkState 的说明。
+        linkState: Playback.hasMedia ? 2 : 0
+
+        onBackClicked: window.page = 0
+        onSettingsClicked: window.page = 1
+        onInfoClicked: {
+            // TODO：「关于」那一类信息。先留空壳。
+        }
+
+        // 顶栏上**我们自己的**按钮要登记成"不算标题栏"，否则按下去是拖窗口。
+        // 窗口那三个按钮 FluWindow 已经替我们登记过了，不用管。
+        //
+        // 用 ready 信号而不是窗口的 Component.onCompleted：FluWindow 自己
+        // 用了那个处理函数（居中、登记、显示），实例上再写一个有可能把它顶掉。
+        onReady: {
+            window.setHitTestVisible(topBar.backButton)
+            window.setHitTestVisible(topBar.infoButton)
+            window.setHitTestVisible(topBar.settingsButton)
+        }
+    }
+
+    // ── 页面 ─────────────────────────────────────────────────────────────
+    //
+    // 边距给在**这儿**：原来是 FluPivot 的 anchors.margins 给的，平级页签
+    // 退了之后这一层得我们自己补（页面里不能再加一层，不然改一处对不上另一处）。
+    Loader {
         anchors.fill: parent
-        // FluPivot 自己没有内边距属性，页签文字会贴着窗口左边。
-        // 整块往里收一点 —— 收在这里而不是收在页面里，是因为页面的内边距
-        // 管不到顶栏那条。
         anchors.margins: 20
+        sourceComponent: window.page === 0 ? com_castPage : com_settingsPage
+    }
 
-        FluPivotItem {
-            title: qsTr("投屏")
-            contentItem: CastPage {}
-        }
+    Component {
+        id: com_castPage
+        CastPage {}
+    }
 
-        FluPivotItem {
-            title: qsTr("设置")
-            contentItem: SettingsPage {}
-        }
+    Component {
+        id: com_settingsPage
+        SettingsPage {}
     }
 
     // 正在投送时点关闭 -> 先问一句。

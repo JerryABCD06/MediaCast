@@ -23,5 +23,6 @@
             引用方式：import "components"
         -->
         <file alias="components/MediaBar.qml">../src/ui/qml/components/MediaBar.qml</file>
+        <file alias="components/AppTopBar.qml">../src/ui/qml/components/AppTopBar.qml</file>
     </qresource>
 </RCC>
