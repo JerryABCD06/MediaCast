@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Layouts
 import FluentUI
 import MediaCast 1.0
+// 可复用的界面组件（MediaBar 等）。它们在 qrc 的 ui/components 下。
+import "components"
 
 // 投屏页。目前是骨架：视频区是空的，播放按钮还没接线。
 //
@@ -45,6 +47,21 @@ Item {
                 // 输出模式决定，这里只负责"把它画出来"。
                 core: Player
                 visible: !Playback.idle
+            }
+
+            // ── 点画面 = 播放/暂停 ──────────────────────────────────────
+            //
+            // 位置有讲究：写在画面**之后** → 它在画面上层，点得到；
+            // 写在控制栏**之前** → 控制栏在更上层，点按钮不会被它吃掉。
+            MouseArea {
+                anchors.fill: parent
+                enabled: Playback.hasMedia
+                onClicked: {
+                    if (Playback.paused)
+                        Playback.play()
+                    else
+                        Playback.pause()
+                }
             }
 
             // ── 投屏指引 ────────────────────────────────────────────────
@@ -98,20 +115,26 @@ Item {
                     }
                 }
             }
+
+            // ── 播放控制栏 ──────────────────────────────────────────────
+            //
+            // 压在画面下沿的**内侧**。它挂在容器上（不是挂在 mpv 上），只是画在
+            // 画面之上 —— 能做到这件事正是因为 render API 把视频变成了场景图里的
+            // 一个普通图层。旧方案（wid）那边视频是独立的原生子窗口，永远盖在
+            // 所有 QML 之上，这种栏根本做不出来。
+            //
+            // 容器上的 clip: true 保证它不会溢出圆角。
+            MediaBar {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                visible: Playback.hasMedia
+            }
         }
 
-        // ── 播放控制（还没接上）──────────────────────────────────────────
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            FluButton { text: qsTr("打开文件") }
-            FluFilledButton { text: qsTr("播放") }
-            FluButton { text: qsTr("暂停") }
-            FluButton { text: qsTr("停止") }
-
-            Item { Layout.fillWidth: true }
-        }
+        // （原来这一排占位按钮没了：播放/暂停搬进画面下沿那条控制栏。
+        //   「打开文件」暂时没有落脚点 —— 以后按 Windows 11 播放器的做法放进
+        //   控制栏右侧的「…」菜单里。）
 
         // ── 界面状态 ─────────────────────────────────────────────────────
         //

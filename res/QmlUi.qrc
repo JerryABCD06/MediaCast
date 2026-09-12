@@ -17,5 +17,11 @@
         <file alias="NewUiWindow.qml">../src/ui/qml/NewUiWindow.qml</file>
         <file alias="CastPage.qml">../src/ui/qml/CastPage.qml</file>
         <file alias="SettingsPage.qml">../src/ui/qml/SettingsPage.qml</file>
+        <!--
+            可以复用的界面组件。放在子目录里是为了让它们跟"页面"分开 ——
+            页面是给这个窗口用的，组件是谁都能拿的。
+            引用方式：import "components"
+        -->
+        <file alias="components/MediaBar.qml">../src/ui/qml/components/MediaBar.qml</file>
     </qresource>
 </RCC>
