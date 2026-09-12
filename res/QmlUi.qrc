@@ -25,5 +25,15 @@
         <file alias="components/MediaBar.qml">../src/ui/qml/components/MediaBar.qml</file>
         <file alias="components/AppTopBar.qml">../src/ui/qml/components/AppTopBar.qml</file>
         <file alias="components/SettingsCard.qml">../src/ui/qml/components/SettingsCard.qml</file>
+        <!--
+            只有图标、没有文字的按钮。它自带悬停提示 —— 顶栏那两个（信息/设置）
+            和画面下沿控制栏那一排都用它。
+        -->
+        <file alias="components/TipIconButton.qml">../src/ui/qml/components/TipIconButton.qml</file>
+        <!--
+            悬停提示本身。TipIconButton 用的是它，窗口那三个按钮也用它 ——
+            库自带的那份只会往目标上方弹，贴着窗口上沿就看不见了。
+        -->
+        <file alias="components/TipTooltip.qml">../src/ui/qml/components/TipTooltip.qml</file>
     </qresource>
 </RCC>

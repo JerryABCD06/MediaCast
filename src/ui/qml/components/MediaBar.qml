@@ -25,6 +25,12 @@ import MediaCast 1.0
 //   真的：进度条（可拖）、播放/暂停、时间文字
 //   壳子：上一首、下一首、字幕、音量、画面调节、全屏
 //
+// ── 那一排图标键的悬停提示从哪来 ─────────────────────────────────────────
+//
+// 用的是 components/TipIconButton.qml，不是 FluIconButton —— 提示的文字**直接
+// 取按钮的 contentDescription**。所以加按钮时别忘了写 contentDescription：
+// 写了，读屏和悬停提示就都有了，不用把同一句话抄两遍。
+//
 // 壳子分成两类原因，接的时候各自的着落点不一样：
 //
 //   · 上一首 / 下一首 —— PlaybackController 还没把 next()/previous() 暴露给 QML
@@ -150,7 +156,7 @@ Item {
                 spacing: 6
 
                 // 壳子：等 PlaybackController 把 previous() 暴露给 QML
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.Previous
                     iconSize: 18
                     iconColor: "#FFFFFFFF"
@@ -162,7 +168,7 @@ Item {
                 // 图标的两态看的是"现在按下去会发生什么"，**不是 paused 一个标志**：
                 // 停着（Stopped）的时候 paused 也是 false，但那时该显示"播放"，
                 // 显示"暂停"是骗人的 —— 点下去什么都不会发生。
-                FluIconButton {
+                TipIconButton {
                     readonly property bool showPlay: Playback.paused || Playback.idle
                     iconSource: showPlay ? FluentIcons.Play : FluentIcons.Pause
                     iconSize: 24
@@ -175,7 +181,7 @@ Item {
                 }
 
                 // 壳子：下一个
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.Next
                     iconSize: 18
                     iconColor: "#FFFFFFFF"
@@ -191,7 +197,7 @@ Item {
                 spacing: 4
 
                 // 壳子：字幕开关。功能还没做，先占个位置。
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.Subtitles
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
@@ -200,7 +206,7 @@ Item {
 
                 // 壳子：音量。以后点它**在按钮上方**弹一条纵向的 FluSlider
                 // （FluSlider 继承 T.Slider，本身支持 Qt.Vertical）。
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.Volume
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
@@ -209,7 +215,7 @@ Item {
 
                 // 壳子：显示效果调节。以后开**独立窗口**（不是这里的弹层），
                 // 把旧界面那十多项（亮度/对比度/锐度/色温/色增益/梯形校正…）搬过去。
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.Brightness
                     iconSize: 18
                     iconColor: "#E6FFFFFF"
@@ -217,7 +223,7 @@ Item {
                 }
 
                 // 壳子：全屏 / 退出全屏。图标是两态，接的时候按 window.visibility 换。
-                FluIconButton {
+                TipIconButton {
                     iconSource: FluentIcons.FullScreen
                     iconSize: 18
                     iconColor: "#E6FFFFFF"

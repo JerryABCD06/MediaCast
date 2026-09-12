@@ -31,6 +31,13 @@ import MediaCast 1.0
 //    └────── 我们的 ──────┘              └ 我们的 ┘ └ 窗口的（不归我们动）
 //
 // 二级页（设置）时左边换成 [←][设置]，右边我们的按钮收起来（照照片应用的做法）。
+//
+// ── 悬停提示 ────────────────────────────────────────────────────────────
+//
+// 没有文字的按钮都有提示，而且**方向统一朝下**：这一条栏贴着窗口上沿，
+// 提示往上弹会被窗口边界裁掉（Qt 的 Popup 默认画在窗口自己的图层里）。
+// 连窗口那三个按钮也是 —— 库自带的提示正是朝上的，所以另挂了一份。
+// 两个组件的说明在 components/TipIconButton.qml 和 TipTooltip.qml。
 FluAppBar {
     id: bar
 
@@ -79,6 +86,13 @@ FluAppBar {
     // 但那是**它自己那份 appBar** 的绑定；我们这份得自己写。
     showDark: false
     showStayTop: false
+
+    // 窗口那三个按钮的提示文字（FluAppBar 的公开属性，默认是英文）。
+    // 下面那三份 TipTooltip 直接读它们，所以改词只改这一处。
+    minimizeText: qsTr("最小化")
+    restoreText: qsTr("还原")
+    maximizeText: qsTr("最大化")
+    closeText: qsTr("关闭")
 
     Component.onCompleted: bar.ready()
 
@@ -174,13 +188,16 @@ FluAppBar {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
 
-        FluIconButton {
+        // 顶栏的图标按钮都用 TipIconButton 且 **tipBelow: true** ——
+        // 它们贴着窗口上沿，提示往上弹会被窗口边界裁掉。见那个文件里那段说明。
+        TipIconButton {
             id: btn_back
             Layout.preferredWidth: 36
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Back
             iconSize: 16
             contentDescription: qsTr("返回")
+            tipBelow: true
             onClicked: bar.backClicked()
         }
 
@@ -229,24 +246,64 @@ FluAppBar {
             }
         }
 
-        FluIconButton {
+        TipIconButton {
             id: btn_info
             Layout.preferredWidth: 36
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Info
             iconSize: 16
             contentDescription: qsTr("信息")
+            tipBelow: true
             onClicked: bar.infoClicked()
         }
 
-        FluIconButton {
+        TipIconButton {
             id: btn_settings
             Layout.preferredWidth: 36
             Layout.preferredHeight: 30
             iconSource: FluentIcons.Settings
             iconSize: 16
             contentDescription: qsTr("设置")
+            tipBelow: true
             onClicked: bar.settingsClicked()
         }
+    }
+
+    // ── 窗口那三个按钮的悬停提示 ─────────────────────────────────────────
+    //
+    // 它们归 FluAppBar 管（见文件头那段：这三键必须留在它手里），提示它也已经
+    // 各挂了一句。但 FluIconButton 里那个 tooltip **只会往按钮上方弹** ——
+    // 这几个按钮就贴着窗口上沿，提示跑到窗口外面被裁掉，看不见。
+    //
+    // 所以这里自己挂三份往**下**弹的。文字直接读按钮自己那句（上面那四个
+    // *Text 属性），"最大化/还原"来回切的事由库里管，不用在这儿再算一遍。
+    //
+    // 库那份提示留着不管：FluIconButton 把 Accessible.name 绑在 text 上，
+    // 清掉 text 读屏就念不出名字了。它照样会弹，只是永远在窗口外面，碍不着事。
+    //
+    // 顺带记一笔：悬停「最大化」时，Windows 11 会在同一个位置弹出**它自己的
+    // 贴靠布局面板**（一块画着几种分屏样式的浮层）。因为窗口保留着原生框架
+    // 标志（见 platform/windows/WindowFrame::ensureSnapFlags），系统认这块
+    // 区域就是标题栏上的最大化键。那块浮层是独立顶层窗口，永远盖在我们上面 ——
+    // 所以在 Win11 上「最大化」这条提示实际看不见，Win10 上（没有那个面板）能看见。
+    TipTooltip {
+        target: bar.buttonMinimize
+        text: bar.buttonMinimize.text
+        below: true
+        visible: bar.buttonMinimize.visible && bar.buttonMinimize.hovered
+    }
+
+    TipTooltip {
+        target: bar.buttonMaximize
+        text: bar.buttonMaximize.text
+        below: true
+        visible: bar.buttonMaximize.visible && bar.buttonMaximize.hovered
+    }
+
+    TipTooltip {
+        target: bar.buttonClose
+        text: bar.buttonClose.text
+        below: true
+        visible: bar.buttonClose.visible && bar.buttonClose.hovered
     }
 }
