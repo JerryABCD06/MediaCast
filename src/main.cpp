@@ -13,6 +13,7 @@
 #include "core/LibMpvPlayer.h"
 #include "core/MpvCore.h"
 #include "core/MpvQmlItem.h"
+#include "core/PlaybackController.h"
 #include "platform/windows/WindowsMediaControls.h"
 #include "protocols/dlna/DlnaRenderer.h"
 #include "ui/MainWindow.h"
@@ -154,7 +155,13 @@ int main(int argc, char *argv[])
     qmlRegisterType<MpvQmlItem>("MediaCast", 1, 0, "MpvQmlItem");
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Player", player);
 
-    DlnaRenderer renderer(player);
+    // ── 播放控制 ─────────────────────────────────────────────────────────
+    //
+    // 协议无关的那一层：传输状态机、队列三格、当前媒体。DLNA 只跟它说话，
+    // 不直接碰播放器 —— 将来加别的协议时，那个协议也接在这儿。
+    PlaybackController playback(player);
+
+    DlnaRenderer renderer(&playback);
     MainWindow   window(&renderer);
 
     // Windows 自己的媒体面板（按音量键弹出来的那个）。

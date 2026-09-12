@@ -155,6 +155,7 @@ public:
     bool hasPrevious() const { return !m_previous.uri.isEmpty(); }
 
     QString nextUri() const { return m_next.uri; }
+    QString nextMetadata() const { return m_next.metadata; }
 
     void setPlayMode(PlayMode mode);
     PlayMode playMode() const { return m_playMode; }
@@ -184,6 +185,17 @@ public:
     int    volumePercent() const;
     bool   isMuted() const;
 
+    /** 当前媒体的总字节数。拿不到返回 0 —— 按字节跳转靠它换算成时间。 */
+    qint64 mediaSizeBytes() const;
+
+    /**
+     * 把画面画到某个窗口里。
+     *
+     * 严格说这是"画面输出"而不是"播放控制"，放在这个类里只是因为界面手上
+     * 只有这一个门面。将来多协议的时候要是觉得别扭，可以往上挪一层。
+     */
+    void setVideoWindow(quintptr windowId);
+
 signals:
     void logMessage(const QString &text);
 
@@ -208,6 +220,23 @@ signals:
 
     /** 某个画面调节项的原始值变了（播放器的 -100~100，不是 DLNA 的 0~100）。 */
     void pictureControlChanged(const QString &name, int value);
+
+    // ── 转发播放器的信号 ─────────────────────────────────────────────────
+    //
+    // 这几个是"播放器内部发生了什么"。转发出来，是为了让上层（DLNA、界面）
+    // **只认这一个门面** —— 它们不该为了接个进度变化就去抓播放器。
+
+    void positionChanged(double seconds);
+    void durationChanged(double seconds);
+    void volumeChanged(int percent);
+    void muteChanged(bool muted);
+    void pausedChanged(bool paused);
+
+    /** 播放引擎自身的状态文字（"正在启动"、"已就绪"之类），给界面显示用。 */
+    void playerStatusChanged(const QString &text);
+
+    /** 播放能力整个没了（进程退出、崩溃）。收到之后会话应当结束。 */
+    void playerLost();
 
 private:
     /** 真正开播的地方 —— openUri / next / previous / 自动接下一首都走它。 */

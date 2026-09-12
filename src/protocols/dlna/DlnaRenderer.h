@@ -5,7 +5,7 @@
 #include <QVector>
 #include <QtGlobal>
 
-#include "core/MediaPlayer.h"
+#include "core/PlaybackController.h"
 #include "core/NowPlaying.h"
 
 class GenaManager;
@@ -39,7 +39,7 @@ class DlnaRenderer : public QObject
     Q_OBJECT
 
 public:
-    explicit DlnaRenderer(MediaPlayer *player, QObject *parent = nullptr);
+    explicit DlnaRenderer(PlaybackController *controller, QObject *parent = nullptr);
     ~DlnaRenderer() override;
 
     /** 起来干活：SSDP 广播 + HTTP 服务。返回 false 表示没能启动。 */
@@ -159,7 +159,7 @@ private:
     /** 把两个子模块的状态拼成一行，界面只需要认一个信号。 */
     void updateStatus();
 
-    MediaPlayer *m_player = nullptr;
+    PlaybackController *m_ctl = nullptr;
     SsdpService *m_ssdp = nullptr;
     HttpServer  *m_http = nullptr;
     SoapHandler *m_soap = nullptr;

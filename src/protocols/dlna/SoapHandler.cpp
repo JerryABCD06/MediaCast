@@ -114,6 +114,8 @@ QString actionFromBody(const QString &body)
 {
     const QRegularExpression re(QStringLiteral("<(?:[A-Za-z0-9_]+:)?([A-Za-z][A-Za-z0-9_]*)[^>]*>"));
     QRegularExpressionMatchIterator it = re.globalMatch(body);
+    // 注意：这里的 hasNext 是 QRegularExpressionMatchIterator 的，
+    // 跟队列那件事没关系 —— 别被同名骗了。
     while (it.hasNext()) {
         const QString name = it.next().captured(1);
         if (name == QLatin1String("Envelope") || name == QLatin1String("Body"))
@@ -169,76 +171,49 @@ bool looksLikePlaceholder(const QString &text)
 
 } // namespace
 
-SoapHandler::SoapHandler(MediaPlayer *player, QObject *parent)
+// ── 构造：把控制器的中性信号翻成 DLNA 的词 ───────────────────────────────
+//
+// 这一层自己没有任何状态 —— 所有状态都在控制器里。这里只是"接线 + 翻译"。
+
+SoapHandler::SoapHandler(PlaybackController *controller, QObject *parent)
     : QObject(parent)
-    , m_player(player)
+    , m_ctl(controller)
 {
-    if (!m_player)
+    if (!m_ctl)
         return;
 
-    // 加载看门狗：见头文件里那段说明，为什么非有它不可。
-    m_loadWatchdog = new QTimer(this);
-    m_loadWatchdog->setSingleShot(true);
-    connect(m_loadWatchdog, &QTimer::timeout, this, [this] {
-        if (m_transportState != QLatin1String("TRANSITIONING"))
-            return;
+    // 注意：**不要**把控制器的 logMessage 转发成本类的 logMessage。
+    //
+    // DlnaRenderer 那边已经直接连了控制器的 logMessage；这里再转发一道，同一句
+    // 话就会从两条路到达它，日志里每行都出现两遍。这个 bug 是实测时看出来的 ——
+    // 每行时间戳一模一样地重复。
+    //
+    // 所以分工是：控制器自己的日志由 DlnaRenderer 直接接；这个类只发"它自己"
+    // 的日志（比如"控制点给的标题不像标题"）。
 
-        emit logMessage(QStringLiteral("等了 %1 秒也没放起来，放弃这一条 —— 十有八九是"
-                                       "那个地址已经取不到了（控制点的临时媒体服务器"
-                                       "往往只服务它当前认的那一条）")
-                            .arg(kLoadTimeoutSeconds));
-
-        // 播不出来要如实说。只把状态归成 STOPPED 的话，控制点会以为是我们自己停的。
-        m_transportStatus = QStringLiteral("ERROR_OCCURRED");
-        if (m_player)
-            m_player->stop();   // 把那个挂着的请求丢掉
-        setTransportState(QStringLiteral("STOPPED"));
+    // 状态：中性枚举翻成 DLNA 的词再往外报。
+    connect(m_ctl, &PlaybackController::stateChanged, this,
+            [this](PlaybackController::State) {
+        emit transportStateChanged(transportState());
     });
 
-    // 播放器说"文件好了"，才把状态从"正在准备"翻成"正在播放"。
-    // 这是 SetAVTransportURI 之后一直悬着的那一步。
-    connect(m_player, &MediaPlayer::ready, this, [this] {
-        m_loadWatchdog->stop();
-        m_transportStatus = QStringLiteral("OK");
-        setTransportState(QStringLiteral("PLAYING"));
+    connect(m_ctl, &PlaybackController::nowPlayingChanged,
+            this, &SoapHandler::nowPlayingChanged);
+    connect(m_ctl, &PlaybackController::mediaChanged,
+            this, &SoapHandler::mediaChanged);
+
+    // 队列：控制器报的是中性枚举，这里翻成 DLNA 的词。
+    connect(m_ctl, &PlaybackController::queueChanged, this,
+            [this](bool hasNext, bool hasPrevious, const QString &nextUri,
+                   PlaybackController::PlayMode mode) {
+        emit queueChanged(hasNext, hasPrevious, nextUri, dlnaPlayModeName(mode));
     });
 
-    // 一条内容播完之后干什么 —— 队列三件套里的"自动接上"就在这儿。
-    connect(m_player, &MediaPlayer::ended, this, [this] {
-        // 只在"正在播放"时才动手。加载新片子时，旧片子的结束事件也会来一次，
-        // 那时候状态是 TRANSITIONING：既不能被打回去，也不该触发"接下一首"。
-        if (m_transportState != QLatin1String("PLAYING"))
-            return;
-
-        // 单曲循环：重放这一条，队列原样留着。
-        if (m_playMode == QLatin1String("REPEAT_ONE") && !m_currentUri.isEmpty()) {
-            emit logMessage(QStringLiteral("单曲循环，重放这一条"));
-            startPlaying(m_currentUri, m_currentMetadata, senderNameForCurrent());
-            return;
-        }
-
-        // 排了下一首就自动接上 —— 这才是 SetNextAVTransportURI 的意义所在。
-        if (hasNext()) {
-            emit logMessage(QStringLiteral("这一条放完了，自动接上队列里的下一条"));
-            next();
-            return;
-        }
-
-        // 全部循环，可手上就这一条：那就从头再来。
-        if (m_playMode == QLatin1String("REPEAT_ALL") && !m_currentUri.isEmpty()) {
-            emit logMessage(QStringLiteral("全部循环：队列里只有这一条，重放"));
-            startPlaying(m_currentUri, m_currentMetadata, senderNameForCurrent());
-            return;
-        }
-
-        // 没有下一条，也没有循环 —— 停在这儿。
-        setTransportState(QStringLiteral("STOPPED"));
-    });
-
-    // 画面值一变就报给订阅者。这里连的是**播放器**的信号，所以不管是界面拖的、
-    // 控制点设的、还是「恢复出厂设置」一口气全改的，都会走到 —— 只连 SOAP 那条路
-    // 的话，电脑上拖一下亮度，手机那边就不会知道。
-    connect(m_player, &MediaPlayer::pictureControlChanged, this,
+    // 画面值：控制器报的是后端原始值，这里翻成 DLNA 的 0~100。
+    //
+    // 三个值一起报，是因为 DLNA RenderingControl 的事件本来就是一份 LastChange
+    // 全量推 —— 只报变了的那一个，控制点那边的另外两个就永远补不齐。
+    connect(m_ctl, &PlaybackController::pictureControlChanged, this,
             [this](const QString &, int) {
         emit pictureControlsChanged(dlnaPictureValue("brightness"),
                                     dlnaPictureValue("contrast"),
@@ -246,297 +221,127 @@ SoapHandler::SoapHandler(MediaPlayer *player, QObject *parent)
     });
 }
 
-void SoapHandler::setTransportState(const QString &state)
+QString SoapHandler::transportState() const
 {
-    if (m_transportState == state)
-        return;
-    m_transportState = state;
-    emit logMessage(QStringLiteral("传输状态 -> %1").arg(state));
-    emit transportStateChanged(state);
+    return m_ctl ? dlnaStateName(m_ctl->state()) : QStringLiteral("NO_MEDIA_PRESENT");
 }
 
-void SoapHandler::stopTransport()
+NowPlaying SoapHandler::nowPlaying() const
 {
-    if (m_player)
-        m_player->stop();
-
-    // 地址**不清**：媒体还装着，只是停了。控制点随时可以再按播放。
-    setTransportState(QStringLiteral("STOPPED"));
+    return m_ctl ? m_ctl->nowPlaying() : NowPlaying();
 }
 
-void SoapHandler::play()
+// ── 词汇表翻译 ───────────────────────────────────────────────────────────
+//
+// 中性 → DLNA。这几个字符串是 DLNA 规范定义好的，控制点按它们判断状态，
+// 所以一个字都不能改。别处（控制器里）一律用中性的话。
+
+QString SoapHandler::dlnaStateName(PlaybackController::State state)
 {
-    if (m_player)
-        m_player->play();
-    setTransportState(QStringLiteral("PLAYING"));
+    switch (state) {
+    case PlaybackController::State::NoMedia:   return QStringLiteral("NO_MEDIA_PRESENT");
+    case PlaybackController::State::Stopped:   return QStringLiteral("STOPPED");
+    case PlaybackController::State::Preparing: return QStringLiteral("TRANSITIONING");
+    case PlaybackController::State::Playing:   return QStringLiteral("PLAYING");
+    case PlaybackController::State::Paused:    return QStringLiteral("PAUSED_PLAYBACK");
+    }
+    return QStringLiteral("NO_MEDIA_PRESENT");
 }
 
-void SoapHandler::pause()
+QString SoapHandler::dlnaPlayModeName(PlaybackController::PlayMode mode)
 {
-    if (m_player)
-        m_player->pause();
-    setTransportState(QStringLiteral("PAUSED_PLAYBACK"));
+    switch (mode) {
+    case PlaybackController::PlayMode::Normal:    return QStringLiteral("NORMAL");
+    case PlaybackController::PlayMode::RepeatOne: return QStringLiteral("REPEAT_ONE");
+    case PlaybackController::PlayMode::RepeatAll: return QStringLiteral("REPEAT_ALL");
+    case PlaybackController::PlayMode::Direct:    return QStringLiteral("DIRECT_1");
+    }
+    return QStringLiteral("NORMAL");
 }
 
-void SoapHandler::openUri(const QString &uri, const QString &metadata)
+QString SoapHandler::dlnaLoadStatusName(PlaybackController::LoadStatus status)
 {
-    // 换内容之前先记一笔历史，这样「上一首」退得回去。
+    // 只有两个值。Failed 是加载看门狗放弃时置上的 —— 播不出来要如实说，
+    // 光把状态归成"停了"会让控制点以为是我们自己停的。
+    return status == PlaybackController::LoadStatus::Failed
+               ? QStringLiteral("ERROR_OCCURRED")
+               : QStringLiteral("OK");
+}
+
+bool SoapHandler::parsePlayMode(const QString &text, PlaybackController::PlayMode &out)
+{
+    // 认不出来就返回 false，调用方回一个 SOAP 错误。
     //
-    // 队列（Next）**不动**：控制点排歌单就是"SetAVTransportURI 设当前、
-    // SetNextAVTransportURI 设下一条"，在这里清掉等于把它的意图抹了。
-    pushCurrentIntoHistory();
-    startPlaying(uri, metadata, QStringLiteral("DLNA 投送"));
-}
-
-void SoapHandler::openLocalUri(const QString &uri)
-{
-    // 本地播放没有 DIDL 元数据，标题只能从文件名推。
-    pushCurrentIntoHistory();
-    startPlaying(uri, QString(), QStringLiteral("本地播放"));
-}
-
-void SoapHandler::pushCurrentIntoHistory()
-{
-    if (m_currentUri.isEmpty())
-        return;   // 还没放过东西，"刚才那条"不存在
-
-    m_previousUri = m_currentUri;
-    m_previousMetadata = m_currentMetadata;
-    emitQueueChanged();
-}
-
-QString SoapHandler::senderNameForCurrent() const
-{
-    return m_nowPlaying.senderName.isEmpty() ? QStringLiteral("DLNA 投送")
-                                             : m_nowPlaying.senderName;
-}
-
-void SoapHandler::emitQueueChanged()
-{
-    emit queueChanged(hasNext(), hasPrevious(), m_nextUri, m_playMode);
+    // SHUFFLE 会落到这儿。我们手上只有"上一条/当前/下一条"三个位置，没有一份
+    // 列表可以打乱；收下它却照顺序放，等于骗控制点，不如直接说不支持。
+    if (text == QLatin1String("NORMAL"))          { out = PlaybackController::PlayMode::Normal;    return true; }
+    if (text == QLatin1String("REPEAT_ONE"))      { out = PlaybackController::PlayMode::RepeatOne; return true; }
+    if (text == QLatin1String("REPEAT_ALL"))      { out = PlaybackController::PlayMode::RepeatAll; return true; }
+    if (text == QLatin1String("DIRECT_1"))        { out = PlaybackController::PlayMode::Direct;    return true; }
+    return false;
 }
 
 int SoapHandler::dlnaPictureValue(const char *control) const
 {
-    if (!m_player)
+    if (!m_ctl)
         return kDlnaNeutral;
 
-    return m_player->pictureControlValue(QString::fromLatin1(control)) / 2 + kDlnaNeutral;
+    // 后端是 -100~100，DLNA 是 0~100 且 50 才是"原样"。
+    return m_ctl->pictureControlValue(QString::fromLatin1(control)) / 2 + kDlnaNeutral;
 }
 
-void SoapHandler::setNextUri(const QString &uri, const QString &metadata)
+// ── DIDL-Lite → MediaRequest ─────────────────────────────────────────────
+
+PlaybackController::MediaRequest SoapHandler::mediaRequestFromSoap(const QString &uri,
+                                                                  const QString &metadata)
 {
-    m_nextUri = uri;
-    m_nextMetadata = metadata;
-
-    emit logMessage(uri.isEmpty() ? QStringLiteral("队列：清空")
-                                  : QStringLiteral("队列：下一条是 %1").arg(uri));
-    emitQueueChanged();
-}
-
-void SoapHandler::next()
-{
-    if (m_nextUri.isEmpty()) {
-        emit logMessage(QStringLiteral("收到「下一首」，但队列里没有下一条 —— 不动"));
-        return;
-    }
-
-    // 现在这条退到"上一条"的位置，这样按「上一首」还回得来。
-    m_previousUri = m_currentUri;
-    m_previousMetadata = m_currentMetadata;
-
-    const QString uri = m_nextUri;
-    const QString metadata = m_nextMetadata;
-    m_nextUri.clear();
-    m_nextMetadata.clear();
-
-    emitQueueChanged();
-    startPlaying(uri, metadata, senderNameForCurrent());
-}
-
-void SoapHandler::previous()
-{
-    if (m_previousUri.isEmpty()) {
-        emit logMessage(QStringLiteral("收到「上一首」，但没有上一条 —— 不动"));
-        return;
-    }
-
-    // 当前这条退回队列，这样按「下一首」还回得来。
-    m_nextUri = m_currentUri;
-    m_nextMetadata = m_currentMetadata;
-
-    const QString uri = m_previousUri;
-    const QString metadata = m_previousMetadata;
-    m_previousUri.clear();
-    m_previousMetadata.clear();
-
-    emitQueueChanged();
-    startPlaying(uri, metadata, senderNameForCurrent());
-}
-
-bool SoapHandler::setPlayMode(const QString &mode)
-{
-    static const QStringList supported = {
-        QStringLiteral("NORMAL"),
-        QStringLiteral("REPEAT_ONE"),
-        QStringLiteral("REPEAT_ALL"),
-        QStringLiteral("DIRECT_1"),
-    };
-
-    if (!supported.contains(mode)) {
-        // SHUFFLE 会落到这儿。我们手上只有"上一条/当前/下一条"三个位置，没有一份
-        // 列表可以打乱；收下它却照顺序放，等于骗控制点，不如直接说不支持。
-        emit logMessage(QStringLiteral("控制点要的播放模式「%1」我们做不到").arg(mode));
-        return false;
-    }
-
-    if (m_playMode != mode) {
-        m_playMode = mode;
-        emit logMessage(QStringLiteral("播放模式 -> %1").arg(mode));
-    }
-    return true;
-}
-
-void SoapHandler::startPlaying(const QString &uri, const QString &metadata, const QString &senderName)
-{
-    if (!m_player || uri.isEmpty())
-        return;
-
-    m_currentUri = uri;
-    m_currentMetadata = metadata;
-
-    // 换了内容就报一声。控制点靠这个知道渲染器现在装的是哪一条 ——
-    // 少了它，我们这边的「上一首/下一首」在手机看来就像没发生过。
-    emit mediaChanged(m_currentUri, m_currentMetadata);
-
-    NowPlaying info;
-    info.senderName = senderName;
+    PlaybackController::MediaRequest request;
+    request.uri = uri;
+    request.metadata = metadata;
 
     // ── 类型 ────────────────────────────────────────────────────────────
-    // 优先信控制点声明的 upnp:class，它没有才看扩展名。
-    //
-    // 这不只是显示问题：Windows 媒体面板按类型决定卡片是音乐样式还是视频样式，
-    // 一律报成音乐的话，投过来的图片在面板里显示得驴唇不对马嘴。
+    // 优先信控制点声明的 upnp:class，它没有控制器会看扩展名。
     const QString upnpClass = tagValue(metadata, QStringLiteral("upnp:class"));
     if (upnpClass.contains(QLatin1String("imageItem")))
-        info.kind = MediaKind::Image;
+        request.kind = MediaKind::Image;
     else if (upnpClass.contains(QLatin1String("audioItem")))
-        info.kind = MediaKind::Audio;
+        request.kind = MediaKind::Audio;
     else if (upnpClass.contains(QLatin1String("videoItem")))
-        info.kind = MediaKind::Video;
-    else
-        info.kind = mediaKindFromUri(uri);
+        request.kind = MediaKind::Video;
 
-    // ── 标题三层取值 ────────────────────────────────────────────────────
-    //   一、控制点给的 DIDL 元数据（最准）—— 但它给的可能压根不是标题
-    //   二、从媒体地址的文件名推 —— 同样要过"像不像标题"那道筛子
-    //   三、还是空就用类型名顶上
-    info.title = tagValue(metadata, QStringLiteral("dc:title"));
-
-    // 第一层也要筛，这一条是被实际数据逼出来的：
+    // ── 标题 ────────────────────────────────────────────────────────────
+    // 控制点给的 dc:title 要先过"像不像标题"的筛子。
     //
-    // vivo 相册投图片时，dc:title 里塞的就是文件名本身 ——
-    // "Screenshot_20260905_232916.jpg"，连扩展名都带着。那不是标题，是文件名搬运。
-    // 而本地放同一个文件时我们推出的是"图片"。同一张图两个名字，说不通。
-    //
-    // 于是：带已知媒体扩展名的标题先去掉扩展名，再过一遍同一道筛子。过不了就当它
-    // 没给标题，往下走第二层、第三层。
-    if (!info.title.isEmpty()) {
-        const QString cleaned = stripMediaExtension(info.title);
+    // 这一条是被实际数据逼出来的：vivo 相册投图片时，dc:title 里塞的就是文件名
+    // 本身 —— "Screenshot_20260905_232916.jpg"，连扩展名都带着。那不是标题，
+    // 是文件名搬运。而本地放同一个文件时控制器推出的是"图片"，同一张图两个名字
+    // 说不通。所以：带已知媒体扩展名的先去掉扩展名，再过一遍筛子；过不了就当它
+    // 没给标题，交给控制器往后退。
+    QString title = tagValue(metadata, QStringLiteral("dc:title"));
+    if (!title.isEmpty()) {
+        const QString cleaned = stripMediaExtension(title);
         if (looksLikeATitle(cleaned)) {
-            info.title = cleaned;
+            request.title = cleaned;
         } else {
-            emit logMessage(QStringLiteral("控制点给的标题「%1」不像标题，跳过").arg(info.title));
-            info.title.clear();
+            emit logMessage(QStringLiteral("控制点给的标题「%1」不像标题，跳过").arg(title));
         }
     }
 
-    info.artist = tagValue(metadata, QStringLiteral("upnp:artist"));
-    if (info.artist.isEmpty())
-        info.artist = tagValue(metadata, QStringLiteral("dc:creator"));
-    if (looksLikePlaceholder(info.artist)) {
-        emit logMessage(QStringLiteral("控制点给的作者是占位符「%1」，忽略").arg(info.artist));
-        info.artist.clear();
+    // ── 作者 / 专辑 ─────────────────────────────────────────────────────
+    request.artist = tagValue(metadata, QStringLiteral("upnp:artist"));
+    if (request.artist.isEmpty())
+        request.artist = tagValue(metadata, QStringLiteral("dc:creator"));
+    if (looksLikePlaceholder(request.artist)) {
+        emit logMessage(QStringLiteral("控制点给的作者是占位符「%1」，忽略").arg(request.artist));
+        request.artist.clear();
     }
 
-    info.album = tagValue(metadata, QStringLiteral("upnp:album"));
-    if (looksLikePlaceholder(info.album))
-        info.album.clear();
+    request.album = tagValue(metadata, QStringLiteral("upnp:album"));
+    if (looksLikePlaceholder(request.album))
+        request.album.clear();
 
-    if (info.title.isEmpty()) {
-        const QString guess = titleFromUri(uri);
-        if (looksLikeATitle(guess)) {
-            info.title = guess;
-            emit logMessage(QStringLiteral("控制点没给标题，从文件名推出「%1」").arg(guess));
-        } else if (!guess.isEmpty()) {
-            // 很多 App 拿内部编号当文件名，那种推出来还不如不显示。
-            emit logMessage(QStringLiteral("文件名「%1」不像标题，跳过").arg(guess));
-        }
-    }
-
-    if (info.title.isEmpty()) {
-        // 第三层。标题空着在 Windows 媒体面板里会显示成"未知"，比一个中性的类型名
-        // 还难懂 —— 至少"图片"这两个字说清了现在在放什么。
-        info.title = mediaKindLabel(info.kind);
-        if (!info.title.isEmpty())
-            emit logMessage(QStringLiteral("没有可用标题，用类型名「%1」顶上").arg(info.title));
-    }
-
-    emit logMessage(QStringLiteral("开始播放 %1").arg(uri));
-    emit logMessage(QStringLiteral("   来源：%1    类型：%2")
-                        .arg(senderName,
-                             mediaKindLabel(info.kind).isEmpty() ? QStringLiteral("未知")
-                                                                 : mediaKindLabel(info.kind)));
-    if (info.hasTitle())
-        emit logMessage(QStringLiteral("   标题：%1").arg(info.title));
-
-    m_nowPlaying = info;
-    emit nowPlayingChanged(info);
-
-    // 先报 TRANSITIONING，等 mpv 说文件好了再翻成 PLAYING —— 和 SOAP 那条路完全一样。
-    setTransportState(QStringLiteral("TRANSITIONING"));
-
-    // 这条如果一直放不起来，看门狗会把它收掉。
-    m_transportStatus = QStringLiteral("OK");
-    m_loadWatchdog->start(kLoadTimeoutSeconds * 1000);
-    m_player->load(uri);
+    return request;
 }
-
-void SoapHandler::endSession()
-{
-    // 电脑端的"断开投屏"。
-    //
-    // 这里报的是 NO_MEDIA_PRESENT 而不是 STOPPED，区别很要紧：STOPPED 的含义是
-    // "媒体还装着，只是停着"，控制点收到它会认为会话还在、只是没在播 —— 手机上的
-    // 投屏界面就会一直挂着。NO_MEDIA_PRESENT 才是"我这儿什么都没有了"。
-    if (m_player)
-        m_player->stop();              // 播放器回到空闲，下次投送不用重启
-
-    m_loadWatchdog->stop();            // 手都断了，别再等那条片子了
-    m_transportStatus = QStringLiteral("OK");
-
-    m_currentUri.clear();
-    m_currentMetadata.clear();
-    emit mediaChanged(QString(), QString());   // 没内容了，也报一声
-
-    // 队列和播放模式一并归零。会话都断了还留着"下一条"没有任何意义，
-    // 更要紧的是：下次投送时它会莫名其妙地自动接上。
-    m_nextUri.clear();
-    m_nextMetadata.clear();
-    m_previousUri.clear();
-    m_previousMetadata.clear();
-    m_playMode = QStringLiteral("NORMAL");
-    emitQueueChanged();
-
-    setTransportState(QStringLiteral("NO_MEDIA_PRESENT"));
-
-    // 投送结束了，界面上那块"正在播放"也该清掉。
-    m_nowPlaying = NowPlaying();
-    emit nowPlayingChanged(m_nowPlaying);
-
-    emit logMessage(QStringLiteral("已在电脑端结束投送"));
-}
-
 QString SoapHandler::handle(const QString &service, const QString &action, const QString &body)
 {
     const QString act = action.isEmpty() ? actionFromBody(body) : action;
@@ -575,7 +380,7 @@ QString SoapHandler::handle(const QString &service, const QString &action, const
 
 QString SoapHandler::handleAvTransport(const QString &action, const QString &body)
 {
-    if (!m_player)
+    if (!m_ctl)
         return soapFault(kActionFailed, QStringLiteral("Action Failed"));
 
     if (action == QLatin1String("SetAVTransportURI")) {
@@ -591,9 +396,9 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
             return soapFault(kInvalidArgs, QStringLiteral("Invalid Args"));
         }
 
-        // 标题和元数据的处理都收在 openUri 里 —— 电脑端的播放按钮也走那条路，
-        // 两边就不会各写一份、各漏一处。
-        openUri(uri, meta);
+        // DIDL 的解码在这一层（那是 UPnP 的东西），解完交给控制器 ——
+        // 电脑端的播放按钮走同一个控制器入口，两边就不会各写一份、各漏一处。
+        m_ctl->openUri(mediaRequestFromSoap(uri, meta), QStringLiteral("DLNA 投送"));
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
@@ -604,7 +409,8 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
         const QString uri = UpnpXml::unescapeText(tagValue(body, QStringLiteral("NextURI")));
 
         // 空地址是合法的，含义是"把队列清掉"——规范里就是这么规定的。
-        setNextUri(uri, meta);
+        // （清空时 mediaRequestFromSoap 收的是空地址，控制器那边 uri 空就是清空。）
+        m_ctl->setNextUri(mediaRequestFromSoap(uri, meta));
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
@@ -614,7 +420,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
     // 不拦的话会出一件很别扭的事：一个走错路的 Play（或者投送结束之后控制点补发的
     // Stop）会把状态从"我这儿什么都没有"改成"正在放/停着"，而播放器其实空着。
     // 控制点那边于是以为设备上有片子，界面上挂着一堆能按的按钮，按下去都没反应。
-    if (m_transportState == QLatin1String("NO_MEDIA_PRESENT")
+    if (m_ctl->state() == PlaybackController::State::NoMedia
         && (action == QLatin1String("Play") || action == QLatin1String("Pause")
             || action == QLatin1String("Stop") || action == QLatin1String("Seek")
             || action == QLatin1String("Next") || action == QLatin1String("Previous"))) {
@@ -632,34 +438,39 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
             emit logMessage(QStringLiteral("控制点要 %1 倍速，我们只放 1 倍速").arg(speed));
             return soapFault(kPlaySpeedNotSupported, QStringLiteral("Play speed not supported"));
         }
-        play();
+        m_ctl->play();
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
     if (action == QLatin1String("Next")) {
-        next();
+        m_ctl->next();
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
     if (action == QLatin1String("Previous")) {
-        previous();
+        m_ctl->previous();
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
     if (action == QLatin1String("SetPlayMode")) {
-        const QString mode = tagValue(body, QStringLiteral("NewPlayMode")).trimmed().toUpper();
-        if (!setPlayMode(mode)) {
+        const QString modeText = tagValue(body, QStringLiteral("NewPlayMode")).trimmed().toUpper();
+        PlaybackController::PlayMode mode = PlaybackController::PlayMode::Normal;
+        // "哪些播放模式存在"是 DLNA 自己的事 —— 比如 SHUFFLE 规范里有、
+        // 但我们手上只有三格队列打乱不了，所以在这一层就回绝，压根不调控制器。
+        if (!parsePlayMode(modeText, mode)) {
             // 701 = Transition not available。告诉控制点"这个模式我做不到"，
             // 比收下来然后按普通模式放要诚实。
+            emit logMessage(QStringLiteral("控制点要的播放模式「%1」我们做不到").arg(modeText));
             return soapFault(kTransitionNotAvailable,
                              QStringLiteral("Transition not available"));
         }
+        m_ctl->setPlayMode(mode);
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
     if (action == QLatin1String("GetTransportSettings")) {
         const QString inner =
-            QStringLiteral("<PlayMode>%1</PlayMode>").arg(m_playMode) +
+            QStringLiteral("<PlayMode>%1</PlayMode>").arg(dlnaPlayModeName(m_ctl->playMode())) +
             // 我们不录音，时长报 0 —— 规范里 NOT_IMPLEMENTED 用在这儿是常见写法。
             QStringLiteral("<RecMediaDuration>00:00:00</RecMediaDuration>");
         return soapOk(QStringLiteral("AVTransport"), action, inner);
@@ -675,13 +486,13 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
     }
 
     if (action == QLatin1String("Pause")) {
-        pause();
+        m_ctl->pause();
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
     if (action == QLatin1String("Stop")) {
         // 控制点自己点的"停止"，和电脑上的「停止」按钮是同一件事。
-        stopTransport();
+        m_ctl->stop();
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 
@@ -693,7 +504,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
         if (unit.isEmpty() || unit == QLatin1String("REL_TIME")) {
             const double seconds = parseUpnpTime(target);
             emit logMessage(QStringLiteral("Seek 到 %1 秒").arg(seconds));
-            m_player->seekTo(seconds);
+            m_ctl->seekTo(seconds);
             return soapOk(QStringLiteral("AVTransport"), action);
         }
 
@@ -704,7 +515,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
             const int track = target.toInt(&ok);
             if (ok && track == 1) {
                 emit logMessage(QStringLiteral("Seek 到第 1 条（只有一条，回到开头）"));
-                m_player->seekTo(0.0);
+                m_ctl->seekTo(0.0);
                 return soapOk(QStringLiteral("AVTransport"), action);
             }
             emit logMessage(QStringLiteral("要跳到第「%1」条，可我们只有一条").arg(target));
@@ -717,8 +528,8 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
             // 但我们确实没法知道"第 N 个字节"对应哪一帧 —— 这是能做到的最好程度。
             bool ok = false;
             const qint64 targetByte = target.toLongLong(&ok);
-            const qint64 totalBytes = m_player->mediaSizeBytes();
-            const double totalSeconds = m_player->durationSeconds();
+            const qint64 totalBytes = m_ctl->mediaSizeBytes();
+            const double totalSeconds = m_ctl->durationSeconds();
 
             if (!ok || targetByte < 0 || totalBytes <= 0 || totalSeconds <= 0.0) {
                 // 算不出来就如实说跳不了。装作跳了的话，控制点那边的进度条会停在一个
@@ -731,7 +542,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
             const double seconds = totalSeconds * (static_cast<double>(targetByte) / totalBytes);
             emit logMessage(QStringLiteral("按字节跳转 %1/%2 -> %3 秒")
                                 .arg(targetByte).arg(totalBytes).arg(seconds, 0, 'f', 1));
-            m_player->seekTo(seconds);
+            m_ctl->seekTo(seconds);
             return soapOk(QStringLiteral("AVTransport"), action);
         }
 
@@ -741,19 +552,19 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
 
     if (action == QLatin1String("GetTransportInfo")) {
         const QString inner =
-            QStringLiteral("<CurrentTransportState>%1</CurrentTransportState>").arg(m_transportState) +
-            QStringLiteral("<CurrentTransportStatus>%1</CurrentTransportStatus>").arg(m_transportStatus) +
+            QStringLiteral("<CurrentTransportState>%1</CurrentTransportState>").arg(transportState()) +
+            QStringLiteral("<CurrentTransportStatus>%1</CurrentTransportStatus>").arg(dlnaLoadStatusName(m_ctl->loadStatus())) +
             QStringLiteral("<CurrentSpeed>1</CurrentSpeed>");
         return soapOk(QStringLiteral("AVTransport"), action, inner);
     }
 
     if (action == QLatin1String("GetPositionInfo")) {
-        const QString pos = upnpTime(m_player->positionSeconds());
+        const QString pos = upnpTime(m_ctl->positionSeconds());
         const QString inner =
             QStringLiteral("<Track>1</Track>") +
-            QStringLiteral("<TrackDuration>%1</TrackDuration>").arg(upnpTime(m_player->durationSeconds())) +
-            QStringLiteral("<TrackMetaData>%1</TrackMetaData>").arg(UpnpXml::escapeText(m_currentMetadata)) +
-            QStringLiteral("<TrackURI>%1</TrackURI>").arg(UpnpXml::escapeText(m_currentUri)) +
+            QStringLiteral("<TrackDuration>%1</TrackDuration>").arg(upnpTime(m_ctl->durationSeconds())) +
+            QStringLiteral("<TrackMetaData>%1</TrackMetaData>").arg(UpnpXml::escapeText(m_ctl->currentMetadata())) +
+            QStringLiteral("<TrackURI>%1</TrackURI>").arg(UpnpXml::escapeText(m_ctl->currentUri())) +
             QStringLiteral("<RelTime>%1</RelTime>").arg(pos) +
             QStringLiteral("<AbsTime>%1</AbsTime>").arg(pos) +
             // 2147483647 是 UPnP 里"这个值不适用"的约定写法。
@@ -764,16 +575,16 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
 
     if (action == QLatin1String("GetMediaInfo")) {
         // 没有媒体时轨道数要报 0。报 1 会让控制点以为片子还装着。
-        const bool hasMedia = (m_transportState != QLatin1String("NO_MEDIA_PRESENT"));
+        const bool hasMedia = (m_ctl->state() != PlaybackController::State::NoMedia);
         const QString inner =
             QStringLiteral("<NrTracks>%1</NrTracks>").arg(hasMedia ? 1 : 0) +
-            QStringLiteral("<MediaDuration>%1</MediaDuration>").arg(upnpTime(m_player->durationSeconds())) +
-            QStringLiteral("<CurrentURI>%1</CurrentURI>").arg(UpnpXml::escapeText(m_currentUri)) +
-            QStringLiteral("<CurrentURIMetaData>%1</CurrentURIMetaData>").arg(UpnpXml::escapeText(m_currentMetadata)) +
+            QStringLiteral("<MediaDuration>%1</MediaDuration>").arg(upnpTime(m_ctl->durationSeconds())) +
+            QStringLiteral("<CurrentURI>%1</CurrentURI>").arg(UpnpXml::escapeText(m_ctl->currentUri())) +
+            QStringLiteral("<CurrentURIMetaData>%1</CurrentURIMetaData>").arg(UpnpXml::escapeText(m_ctl->currentMetadata())) +
             // 队列里排的那条要如实报出去。以前这里是写死的空串 ——
             // 控制点排了歌单，回头问"下一条是什么"，我们答"没有"，它就以为排队失败了。
-            QStringLiteral("<NextURI>%1</NextURI>").arg(UpnpXml::escapeText(m_nextUri)) +
-            QStringLiteral("<NextURIMetaData>%1</NextURIMetaData>").arg(UpnpXml::escapeText(m_nextMetadata)) +
+            QStringLiteral("<NextURI>%1</NextURI>").arg(UpnpXml::escapeText(m_ctl->nextUri())) +
+            QStringLiteral("<NextURIMetaData>%1</NextURIMetaData>").arg(UpnpXml::escapeText(m_ctl->nextMetadata())) +
             QStringLiteral("<PlayMedium>NETWORK</PlayMedium>") +
             QStringLiteral("<RecordMedium>NOT_IMPLEMENTED</RecordMedium>") +
             QStringLiteral("<WriteStatus>NOT_IMPLEMENTED</WriteStatus>");
@@ -783,8 +594,8 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
     if (action == QLatin1String("GetCurrentTransportActions")) {
         // 随状态变化：没有媒体时报空，控制点就知道这台设备现在没东西可操作。
         const QString inner = QStringLiteral("<Actions>%1</Actions>")
-                                  .arg(UpnpXml::transportActionsFor(m_transportState,
-                                                                    hasNext(), hasPrevious()));
+                                  .arg(UpnpXml::transportActionsFor(transportState(),
+                                                                    m_ctl->hasNext(), m_ctl->hasPrevious()));
         return soapOk(QStringLiteral("AVTransport"), action, inner);
     }
 
@@ -794,7 +605,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
 
 QString SoapHandler::handleRenderingControl(const QString &action, const QString &body)
 {
-    if (!m_player)
+    if (!m_ctl)
         return soapFault(kActionFailed, QStringLiteral("Action Failed"));
 
     if (action == QLatin1String("SetVolume")) {
@@ -805,13 +616,13 @@ QString SoapHandler::handleRenderingControl(const QString &action, const QString
             return soapFault(kInvalidArgs, QStringLiteral("Invalid Args"));
         }
         emit logMessage(QStringLiteral("SetVolume %1").arg(level));
-        m_player->setVolumePercent(level);
+        m_ctl->setVolumePercent(level);
         return soapOk(QStringLiteral("RenderingControl"), action);
     }
 
     if (action == QLatin1String("GetVolume")) {
         const QString inner =
-            QStringLiteral("<CurrentVolume>%1</CurrentVolume>").arg(m_player->volumePercent());
+            QStringLiteral("<CurrentVolume>%1</CurrentVolume>").arg(m_ctl->volumePercent());
         return soapOk(QStringLiteral("RenderingControl"), action, inner);
     }
 
@@ -821,13 +632,13 @@ QString SoapHandler::handleRenderingControl(const QString &action, const QString
         const bool mute = (raw == QLatin1String("1") || raw == QLatin1String("true") ||
                            raw == QLatin1String("yes"));
         emit logMessage(QStringLiteral("SetMute %1").arg(mute ? 1 : 0));
-        m_player->setMuted(mute);
+        m_ctl->setMuted(mute);
         return soapOk(QStringLiteral("RenderingControl"), action);
     }
 
     if (action == QLatin1String("GetMute")) {
         const QString inner =
-            QStringLiteral("<CurrentMute>%1</CurrentMute>").arg(m_player->isMuted() ? 1 : 0);
+            QStringLiteral("<CurrentMute>%1</CurrentMute>").arg(m_ctl->isMuted() ? 1 : 0);
         return soapOk(QStringLiteral("RenderingControl"), action, inner);
     }
 
@@ -871,7 +682,7 @@ QString SoapHandler::handleRenderingControl(const QString &action, const QString
                 return soapFault(kInvalidArgs, QStringLiteral("Invalid Args"));
             }
             emit logMessage(QStringLiteral("%1 %2").arg(action).arg(value));
-            m_player->setPictureControl(control, (value - kDlnaNeutral) * 2);
+            m_ctl->setPictureControl(control, (value - kDlnaNeutral) * 2);
             return soapOk(QStringLiteral("RenderingControl"), action, QString());
         }
     }
@@ -894,7 +705,7 @@ QString SoapHandler::handleRenderingControl(const QString &action, const QString
 
         // 只复位画面调节，不动音量 —— 音量是用户当下要的效果，顺手改掉会让人莫名其妙。
         emit logMessage(QStringLiteral("SelectPreset(FactoryDefaults)：画面调节复位"));
-        m_player->resetPictureControls();
+        m_ctl->resetPictureControls();
         return soapOk(QStringLiteral("RenderingControl"), action, QString());
     }
 
@@ -915,7 +726,7 @@ QString SoapHandler::handleConnectionManager(const QString &action, const QStrin
 
     // 我们只有一条连接，而且它不是"建"出来的 —— 控制点直接 SetAVTransportURI 就开播了，
     // 那条连接就是 0 号。有内容装着的时候它在，投送结束之后它就不在了。
-    const bool hasConnection = (m_transportState != QLatin1String("NO_MEDIA_PRESENT"));
+    const bool hasConnection = (m_ctl->state() != PlaybackController::State::NoMedia);
 
     if (action == QLatin1String("GetCurrentConnectionIDs")) {
         const QString inner = QStringLiteral("<ConnectionIDs>%1</ConnectionIDs>")

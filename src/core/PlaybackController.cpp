@@ -87,6 +87,33 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     // 电脑上拖一下亮度，手机那边就不会知道。
     connect(m_player, &MediaPlayer::pictureControlChanged,
             this, &PlaybackController::pictureControlChanged);
+
+    // ── 转发播放器的信号 ────────────────────────────────────────────────
+    // 上层只认这个门面，不该为了接个进度变化就去抓播放器。
+    connect(m_player, &MediaPlayer::positionChanged,
+            this, &PlaybackController::positionChanged);
+    connect(m_player, &MediaPlayer::durationChanged,
+            this, &PlaybackController::durationChanged);
+    connect(m_player, &MediaPlayer::volumeChanged,
+            this, &PlaybackController::volumeChanged);
+    connect(m_player, &MediaPlayer::muteChanged,
+            this, &PlaybackController::muteChanged);
+    connect(m_player, &MediaPlayer::pausedChanged,
+            this, &PlaybackController::pausedChanged);
+    connect(m_player, &MediaPlayer::statusChanged,
+            this, &PlaybackController::playerStatusChanged);
+
+    // 播放器自己的日志（mpv 的警告之类）也要往外走 —— 上面那些转发把它漏了，
+    // 会表现为"mpv 报了什么错，日志里查不到"。
+    connect(m_player, &MediaPlayer::logMessage,
+            this, &PlaybackController::logMessage);
+
+    // 播放器整个没了（进程退出、崩溃）—— 这是状态机的事，不该让上层去记。
+    // 结束会话，控制点那边才会把投屏界面收起来。
+    connect(m_player, &MediaPlayer::lost, this, [this] {
+        emit playerLost();
+        endSession();
+    });
 }
 
 // ── 状态出口 ─────────────────────────────────────────────────────────────
@@ -406,4 +433,15 @@ int PlaybackController::volumePercent() const
 bool PlaybackController::isMuted() const
 {
     return m_player ? m_player->isMuted() : false;
+}
+
+qint64 PlaybackController::mediaSizeBytes() const
+{
+    return m_player ? m_player->mediaSizeBytes() : 0;
+}
+
+void PlaybackController::setVideoWindow(quintptr windowId)
+{
+    if (m_player)
+        m_player->setVideoWindow(windowId);
 }

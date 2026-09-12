@@ -2,16 +2,16 @@
 
 #include "GenaManager.h"
 #include "HttpServer.h"
-#include "core/MediaPlayer.h"
+#include "core/PlaybackController.h"
 #include "SoapHandler.h"
 #include "SsdpService.h"
 
-DlnaRenderer::DlnaRenderer(MediaPlayer *player, QObject *parent)
+DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     : QObject(parent)
-    , m_player(player)
+    , m_ctl(controller)
 {
     m_ssdp = new SsdpService(this);
-    m_soap = new SoapHandler(player, this);
+    m_soap = new SoapHandler(controller, this);
     m_gena = new GenaManager(this);
     m_http = new HttpServer(this);
 
@@ -46,29 +46,31 @@ DlnaRenderer::DlnaRenderer(MediaPlayer *player, QObject *parent)
     connect(m_soap, &SoapHandler::pictureControlsChanged,
             m_gena, &GenaManager::pushPictureControls);
 
-    if (m_player) {
+    if (m_ctl) {
         // 音量和静音是两个独立的信号，但事件里要一起报，所以每次都取当前的两个值。
-        connect(m_player, &MediaPlayer::volumeChanged, this, [this](int volume) {
-            m_gena->pushRendering(volume, m_player->isMuted());
+        connect(m_ctl, &PlaybackController::volumeChanged, this, [this](int volume) {
+            m_gena->pushRendering(volume, m_ctl->isMuted());
             emit volumeChanged(volume);
         });
-        connect(m_player, &MediaPlayer::muteChanged, this, [this](bool muted) {
-            m_gena->pushRendering(m_player->volumePercent(), muted);
+        connect(m_ctl, &PlaybackController::muteChanged, this, [this](bool muted) {
+            m_gena->pushRendering(m_ctl->volumePercent(), muted);
             emit muteChanged(muted);
         });
 
         // 界面要显示的状态也一并转发 —— 这样界面就不必认识播放器。
-        connect(m_player, &MediaPlayer::statusChanged, this, &DlnaRenderer::playerStatusChanged);
+        connect(m_ctl, &PlaybackController::playerStatusChanged, this, &DlnaRenderer::playerStatusChanged);
         // 播放器的状态变化同时也写进日志。不然"到底启没启动"在事后无从查起。
-        connect(m_player, &MediaPlayer::statusChanged, this, &DlnaRenderer::logMessage);
-        connect(m_player, &MediaPlayer::logMessage, this, &DlnaRenderer::logMessage);
-        connect(m_player, &MediaPlayer::positionChanged, this, &DlnaRenderer::positionChanged);
-        connect(m_player, &MediaPlayer::durationChanged, this, &DlnaRenderer::durationChanged);
-        connect(m_player, &MediaPlayer::pausedChanged, this, &DlnaRenderer::pausedChanged);
+        connect(m_ctl, &PlaybackController::playerStatusChanged, this, &DlnaRenderer::logMessage);
+        connect(m_ctl, &PlaybackController::logMessage, this, &DlnaRenderer::logMessage);
+        connect(m_ctl, &PlaybackController::positionChanged, this, &DlnaRenderer::positionChanged);
+        connect(m_ctl, &PlaybackController::durationChanged, this, &DlnaRenderer::durationChanged);
+        connect(m_ctl, &PlaybackController::pausedChanged, this, &DlnaRenderer::pausedChanged);
 
-        // 播放器没了（进程退出、崩溃）。投送会话到此为止 —— 不然手机上会一直挂着
-        // 一个已经不可能播放的设备。
-        connect(m_player, &MediaPlayer::lost, this, [this] { endSession(); });
+        // "播放器没了就结束会话"这条规矩现在在控制器里 —— 那是状态机的事，
+        // 不该让协议层去记。这里只需要知道一声，日志里留个痕。
+        connect(m_ctl, &PlaybackController::playerLost, this, [this] {
+            emit logMessage(QStringLiteral("播放器没了，投送会话已结束"));
+        });
     }
 
     // ── 日志汇集 ────────────────────────────────────────────────────────
@@ -164,27 +166,31 @@ void DlnaRenderer::openUri(const QString &uri)
 {
     // 走"本地播放"那个入口，不是控制点那个。两条路的状态机完全一样，
     // 区别只在来源 —— 副标题要显示「本地播放」而不是「DLNA 投送」。
-    m_soap->openLocalUri(uri);
+    //
+    // 本地播放没有 DIDL 元数据，所以请求里只有地址 —— 标题交给控制器从文件名推。
+    PlaybackController::MediaRequest request;
+    request.uri = uri;
+    m_ctl->openUri(request, QStringLiteral("本地播放"));
 }
 
 void DlnaRenderer::play()
 {
-    m_soap->play();
+    m_ctl->play();
 }
 
 void DlnaRenderer::pause()
 {
-    m_soap->pause();
+    m_ctl->pause();
 }
 
 void DlnaRenderer::stopTransport()
 {
-    m_soap->stopTransport();
+    m_ctl->stop();
 }
 
 void DlnaRenderer::endSession()
 {
-    m_soap->endSession();
+    m_ctl->endSession();
 
     // 光把状态归零还不够：有些控制点会一直把设备记成"当前投屏目标"，界面上那条
     // 横幅不肯消。让它暂时从网络上消失一下，控制点才会真的放下这个会话。
@@ -193,33 +199,33 @@ void DlnaRenderer::endSession()
 
 void DlnaRenderer::next()
 {
-    m_soap->next();
+    m_ctl->next();
 }
 
 void DlnaRenderer::previous()
 {
-    m_soap->previous();
+    m_ctl->previous();
 }
 
-bool DlnaRenderer::hasNext() const { return m_soap->hasNext(); }
-bool DlnaRenderer::hasPrevious() const { return m_soap->hasPrevious(); }
+bool DlnaRenderer::hasNext() const { return m_ctl->hasNext(); }
+bool DlnaRenderer::hasPrevious() const { return m_ctl->hasPrevious(); }
 
 void DlnaRenderer::seekTo(double seconds)
 {
-    if (m_player)
-        m_player->seekTo(seconds);
+    if (m_ctl)
+        m_ctl->seekTo(seconds);
 }
 
 void DlnaRenderer::setVolumePercent(int percent)
 {
-    if (m_player)
-        m_player->setVolumePercent(percent);
+    if (m_ctl)
+        m_ctl->setVolumePercent(percent);
 }
 
 void DlnaRenderer::setMuted(bool muted)
 {
-    if (m_player)
-        m_player->setMuted(muted);
+    if (m_ctl)
+        m_ctl->setMuted(muted);
 }
 
 void DlnaRenderer::setVideoWindow(quintptr windowId)
@@ -228,30 +234,30 @@ void DlnaRenderer::setVideoWindow(quintptr windowId)
     // 事后排查"有声音没画面"时，这一行是第一个要看的地方。
     emit logMessage(QStringLiteral("画面区窗口号 = 0x%1").arg(windowId, 0, 16));
 
-    if (m_player)
-        m_player->setVideoWindow(windowId);
+    if (m_ctl)
+        m_ctl->setVideoWindow(windowId);
 }
 
 QVector<PictureControlInfo> DlnaRenderer::pictureControls() const
 {
-    return m_player ? m_player->pictureControls() : QVector<PictureControlInfo>();
+    return m_ctl ? m_ctl->pictureControls() : QVector<PictureControlInfo>();
 }
 
 void DlnaRenderer::setPictureControl(const QString &name, int value)
 {
-    if (m_player)
-        m_player->setPictureControl(name, value);
+    if (m_ctl)
+        m_ctl->setPictureControl(name, value);
 }
 
 int DlnaRenderer::pictureControlValue(const QString &name) const
 {
-    return m_player ? m_player->pictureControlValue(name) : 0;
+    return m_ctl ? m_ctl->pictureControlValue(name) : 0;
 }
 
 void DlnaRenderer::resetPictureControls()
 {
-    if (m_player)
-        m_player->resetPictureControls();
+    if (m_ctl)
+        m_ctl->resetPictureControls();
 }
 
 void DlnaRenderer::setAliveIntervalMs(int ms)
@@ -264,9 +270,9 @@ QString DlnaRenderer::address()    const { return m_ssdp->localAddress(); }
 QString DlnaRenderer::locationUrl() const { return m_ssdp->locationUrl(); }
 QString DlnaRenderer::transportState() const { return m_soap->transportState(); }
 
-double DlnaRenderer::positionSeconds() const { return m_player ? m_player->positionSeconds() : 0.0; }
-double DlnaRenderer::durationSeconds() const { return m_player ? m_player->durationSeconds() : 0.0; }
-int    DlnaRenderer::volumePercent()   const { return m_player ? m_player->volumePercent() : 0; }
-bool   DlnaRenderer::isMuted()         const { return m_player && m_player->isMuted(); }
+double DlnaRenderer::positionSeconds() const { return m_ctl ? m_ctl->positionSeconds() : 0.0; }
+double DlnaRenderer::durationSeconds() const { return m_ctl ? m_ctl->durationSeconds() : 0.0; }
+int    DlnaRenderer::volumePercent()   const { return m_ctl ? m_ctl->volumePercent() : 0; }
+bool   DlnaRenderer::isMuted()         const { return m_ctl && m_ctl->isMuted(); }
 
 int DlnaRenderer::subscriptionCount() const { return m_gena->subscriptionCount(); }
