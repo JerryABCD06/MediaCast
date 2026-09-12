@@ -89,6 +89,18 @@ public:
     bool isRendererAttached() const { return m_rendererAttached; }
 
     /**
+     * mpv 说"画面有新帧了"（从渲染线程转过来的）。
+     *
+     * **这个中转是必需的，不是多此一举。** mpv 的更新回调在渲染线程上跑，而真正
+     * 要重画的那个 QML item 随时可能在界面线程上被销毁（切页面、关窗口都会）。
+     * 回调里直接拿 item 的指针去 invokeMethod 就是野指针访问 —— 实测崩在 Qt6Core。
+     *
+     * 绕到这儿就安全了：MpvCore 活到程序结束，invoke 它永远有效；再由它发信号，
+     * item 已经不在了的话 Qt 自己会把连接摘掉。
+     */
+    Q_INVOKABLE void notifyRenderUpdate();
+
+    /**
      * mpv 实例本身。start() 之前是 nullptr。
      *
      * 为什么放开到 public：**用 render API 渲染就必须拿到它** —— 建渲染上下文、
@@ -116,6 +128,15 @@ public:
 signals:
     /** isRunning() 的取值变了。 */
     void runningChanged();
+
+    /**
+     * 画面有新帧，该重画了。
+     *
+     * 只有 MpvQmlItem 会连它（它自己也只做一件事：调 update()）。
+     * 用信号而不是直接持有 item，是因为发出来的这一方在**渲染线程**上 ——
+     * 见 notifyRenderUpdate() 的说明。
+     */
+    void renderUpdate();
 
     // 这行 public: 不能省。moc 的规则是"从 signals: 开始、后面全当信号"，
     // 直到遇到下一个访问说明符才停 —— 少了它，下面那些普通成员函数会被当成

@@ -21,9 +21,8 @@ namespace {
 class MpvItemRenderer : public QQuickFramebufferObject::Renderer
 {
 public:
-    MpvItemRenderer(MpvCore *core, MpvQmlItem *item)
+    MpvItemRenderer(MpvCore *core, MpvQmlItem *)
         : m_core(core)
-        , m_item(item)
     {
         if (!m_core || !m_core->handle()) {
             qWarning() << "[mpv-qml] 没有可用的 mpv 实例，画面出不来";
@@ -49,7 +48,17 @@ public:
             return;
         }
 
-        mpv_render_context_set_update_callback(m_ctx, &MpvItemRenderer::onMpvUpdate, m_item);
+        // **回调的上下文给 MpvCore，不给这个 item。**
+        //
+        // 这个回调是从**渲染线程**发出来的，而画画的 item 随时可能在界面线程上
+        // 被销毁（切页面、关窗口都会）。原来这里传的是 item 的裸指针，回调里
+        // 直接拿它去 invokeMethod —— 那是一次正经的野指针访问，实测崩在 Qt6Core：
+        //
+        //     MpvItemRenderer::onMpvUpdate -> QMetaObject::invokeMethod -> 崩
+        //
+        // MpvCore 活到程序结束，invoke 它什么时候都安全；到了界面线程再由它发
+        // 信号，真正接收的 item 已经不在了的话，Qt 自己会把那条连接摘掉。
+        mpv_render_context_set_update_callback(m_ctx, &MpvItemRenderer::onMpvUpdate, m_core);
 
         // 告诉核心：渲染面挂上来了，攒着的片子可以放了。
         //
@@ -105,13 +114,13 @@ private:
     static void onMpvUpdate(void *ctx)
     {
         // 这个回调可能从 mpv 的任意线程进来，必须跳回界面线程再碰 Qt 对象。
-        QMetaObject::invokeMethod(static_cast<MpvQmlItem *>(ctx),
-                                  "update",
+        // 这里**只碰 MpvCore**（长期存活），不碰 item，理由见上面那段注释。
+        QMetaObject::invokeMethod(static_cast<MpvCore *>(ctx),
+                                  "notifyRenderUpdate",
                                   Qt::QueuedConnection);
     }
 
     MpvCore *m_core = nullptr;
-    MpvQmlItem *m_item = nullptr;
     mpv_render_context *m_ctx = nullptr;
 };
 
@@ -145,8 +154,21 @@ void MpvQmlItem::setCore(MpvCore *core)
     if (m_core == core)
         return;
 
+    // 换核心的时候把旧的那条线摘掉。不摘的话旧核心（如果还活着）发信号，
+    // 这边照样重画 —— 画面就归错的播放器管了。
+    if (m_core)
+        disconnect(m_core, &MpvCore::renderUpdate, this, nullptr);
+
     m_core = core;
     emit coreChanged();
+
+    if (m_core) {
+        // mpv 有新帧就重画一次。信号是 MpvCore 在**界面线程**上发出来的
+        // （渲染线程的回调先被转成队列调用，见 MpvCore::notifyRenderUpdate），
+        // 所以直连即可；item 析构时 Qt 自动断开这条连接 —— 这正是把回调绕到
+        // MpvCore 上的意义：mpv 那边永远不会拿到这个 item 的指针。
+        connect(m_core, &MpvCore::renderUpdate, this, [this] { update(); });
+    }
 
     // 换了播放器就得把渲染上下文重建到新的 mpv 实例上。QQuickFramebufferObject
     // 会在下一帧重新调 createRenderer()，所以这里只要催一帧。

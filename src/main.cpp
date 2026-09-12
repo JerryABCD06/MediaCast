@@ -62,6 +62,10 @@ int main(int argc, char *argv[])
     AppSettings settings;
     UiState uiState(&settings);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
+    // 设置页直接读这一份 —— 它是"唯一的那一份"，界面不该再存副本。
+    // 名字叫 Settings 而不是 AppSettings：QML 那边写 `Settings.castNewCast`
+    // 比 `AppSettings.uiDarkMode` 顺眼，而类名的事是 C++ 的事。
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Settings", &settings);
 
     // 名字分两个，别混：
     //   applicationName        —— 给机器看的。决定配置目录（%LOCALAPPDATA%\MCast）之类。

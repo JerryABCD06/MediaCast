@@ -273,6 +273,16 @@ void MpvCore::load(const QString &uri)
     loadNow(uri);
 }
 
+void MpvCore::notifyRenderUpdate()
+{
+    // 只做转发 —— 谁要重画谁自己连这个信号（只有 MpvQmlItem 会连）。
+    //
+    // 在这儿**不能**去碰任何"当前那个 item"：这个函数是渲染线程通过队列连接
+    // 调进来的，跑在界面线程上，而 item 可能刚刚被销毁。发个信号最省事也最安全：
+    // 接收者没了，Qt 自己会把连接摘掉，不会有野指针。
+    emit renderUpdate();
+}
+
 void MpvCore::setRendererAttached(bool attached)
 {
     if (m_rendererAttached == attached)

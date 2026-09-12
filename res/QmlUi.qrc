@@ -24,5 +24,6 @@
         -->
         <file alias="components/MediaBar.qml">../src/ui/qml/components/MediaBar.qml</file>
         <file alias="components/AppTopBar.qml">../src/ui/qml/components/AppTopBar.qml</file>
+        <file alias="components/SettingsCard.qml">../src/ui/qml/components/SettingsCard.qml</file>
     </qresource>
 </RCC>

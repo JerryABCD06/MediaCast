@@ -122,22 +122,37 @@ FluWindow {
 
     // ── 页面 ─────────────────────────────────────────────────────────────
     //
-    // 边距给在**这儿**：原来是 FluPivot 的 anchors.margins 给的，平级页签
-    // 退了之后这一层得我们自己补（页面里不能再加一层，不然改一处对不上另一处）。
-    Loader {
+    // **投屏页一直存在、一直可见**，切设置页只是**盖上去**，不是换掉它。
+    //
+    // 这不是偷懒：mpv 在 render API 模式下，画面是靠我们每帧调一次渲染推着走的。
+    // 一旦把那个画面 item 藏起来（或者销毁），mpv 的视频输出就停了 —— 再开也
+    // 起不来（实测表现：状态显示在播、位置一直是 0、画面全黑）。所以"切页 =
+    // 藏起投屏页"这条路走不通，只能盖。
+    //
+    // 代价：在设置页里的时候，画面还在底下照常渲染（白烧一点显卡）。换来的是
+    // "边看边改设置、切回来接着播" —— 值。
+    //
+    // 边距给在**这儿**：原来是 FluPivot 的 anchors.margins 给的，平级页签退了
+    // 之后这一层得我们自己补（页面里不能再加一层，不然改一处对不上另一处）。
+    Item {
         anchors.fill: parent
         anchors.margins: 20
-        sourceComponent: window.page === 0 ? com_castPage : com_settingsPage
-    }
 
-    Component {
-        id: com_castPage
-        CastPage {}
-    }
+        CastPage {
+            anchors.fill: parent
+        }
 
-    Component {
-        id: com_settingsPage
-        SettingsPage {}
+        // 设置页：盖满整页，所以下面那些控件点不到；自己带一层不透明底色，
+        // 否则画面会从卡片缝里透出来。
+        Rectangle {
+            anchors.fill: parent
+            visible: window.page === 1
+            color: FluTheme.backgroundColor
+
+            SettingsPage {
+                anchors.fill: parent
+            }
+        }
     }
 
     // 正在投送时点关闭 -> 先问一句。

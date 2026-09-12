@@ -33,6 +33,25 @@ class AppSettings : public QObject
 {
     Q_OBJECT
 
+    // ── 给 QML 的属性 ────────────────────────────────────────────────────
+    //
+    // 设置页要能读、能改这五项，而 QML 读不了 C++ 的方法 —— 只能是属性。
+    // 每一项的 READ/WRITE 就是下面那几个 getter/setter，NOTIFY 是它们本来就
+    // 在发的信号，一个都没新增。
+    //
+    // 名字和文件里的键名一一对应（ui.language → uiLanguage …），这样哪天
+    // 排查"界面显示的和文件里的对不上"，两边能直接对着看。
+    Q_PROPERTY(QString uiLanguage READ language WRITE setLanguage
+                   NOTIFY languageChanged)
+    Q_PROPERTY(QString uiDarkMode READ darkMode WRITE setDarkMode
+                   NOTIFY darkModeChanged)
+    Q_PROPERTY(bool castNewCast READ acceptNewCast WRITE setAcceptNewCast
+                   NOTIFY acceptNewCastChanged)
+    Q_PROPERTY(bool castBroadcast READ broadcast WRITE setBroadcast
+                   NOTIFY broadcastChanged)
+    Q_PROPERTY(int castBroadcastInterval READ broadcastIntervalMs
+                   WRITE setBroadcastIntervalMs NOTIFY broadcastIntervalChanged)
+
 public:
     explicit AppSettings(QObject *parent = nullptr);
 

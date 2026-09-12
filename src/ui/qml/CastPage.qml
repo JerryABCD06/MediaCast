@@ -136,69 +136,7 @@ Item {
         //   「打开文件」暂时没有落脚点 —— 以后按 Windows 11 播放器的做法放进
         //   控制栏右侧的「…」菜单里。）
 
-        // ── 界面状态 ─────────────────────────────────────────────────────
-        //
-        // 临时脚手架 —— 以后有了用户设置文件，它们会挪进设置页，这里会删掉。
-        // 现在放在这儿是为了让"语言和深浅只有一份状态"这件事看得见摸得着。
-        //
-        // 用 Repeater + FluRadioButton 是照着 FluentUI 自己的设置页写的：
-        // checked 是一个纯查询表达式（谁也不用改它），用户点了走 clickListener
-        // 去改状态。这样不会出现"控件和状态各说各话"的绑定打架。
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-
-            FluText {
-                text: qsTr("外观")
-                font: FluTextStyle.Body
-                textColor: FluTheme.fontSecondaryColor
-            }
-
-            Row {
-                spacing: 14
-                Repeater {
-                    model: [
-                        { title: qsTr("跟随系统"), mode: UiState.System },
-                        { title: qsTr("浅色"), mode: UiState.Light },
-                        { title: qsTr("深色"), mode: UiState.Dark }
-                    ]
-                    delegate: FluRadioButton {
-                        text: modelData.title
-                        checked: UiState.themeMode === modelData.mode
-                        clickListener: function() {
-                            UiState.themeMode = modelData.mode
-                        }
-                    }
-                }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            FluText {
-                text: qsTr("语言")
-                font: FluTextStyle.Body
-                textColor: FluTheme.fontSecondaryColor
-            }
-
-            Row {
-                spacing: 14
-                Repeater {
-                    // "中文"和"English"故意不套 qsTr：语言名就该写成它自己的
-                    // 语言，翻了反而看不懂。要翻的只有"跟随系统"。
-                    model: [
-                        { title: qsTr("跟随系统"), code: "" },
-                        { title: "中文", code: "zh_CN" },
-                        { title: "English", code: "en_US" }
-                    ]
-                    delegate: FluRadioButton {
-                        text: modelData.title
-                        checked: UiState.language === modelData.code
-                        clickListener: function() {
-                            UiState.language = modelData.code
-                        }
-                    }
-                }
-            }
-        }
+        // （原来这里有一排"外观/语言"单选框，是当时的临时脚手架 ——
+        //   现在它们搬进设置页了：顶栏 ⚙ -> 界面。投屏页只剩投屏这件事。）
     }
 }
