@@ -50,6 +50,13 @@ TrayIcon::TrayIcon(QWidget *window, DlnaRenderer *renderer, QObject *parent)
             openWindow();
     });
 
+    // 菜单文字要跟着实际状态走，**不能只在构造时算一次**。
+    //
+    // 反例就是设置文件：`cast.newcast = false` 是在托盘建好之后（main() 收尾时）
+    // 才把服务暂停的。不连这个信号的话，菜单会一直写着"暂停接收投送"，而用户
+    // 点下去只会再暂停一次（空操作），得点两下才恢复。
+    connect(m_renderer, &DlnaRenderer::acceptingChanged, this, &TrayIcon::refreshMenu);
+
     refreshMenu();
 }
 
