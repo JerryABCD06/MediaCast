@@ -118,6 +118,19 @@ bool MpvCore::start()
     // "播完了就从头来"把它重新放起来。
     mpv_set_option_string(m_mpv, "keep-open", "yes");
 
+    // **图片放着别动。**
+    //
+    // mpv 默认把一张图片当成"时长为 1 秒的片子"：加载之后放一会儿，然后就到
+    // 文件末尾了。对我们来说那意味着状态翻成 STOPPED —— 胶囊回"已连接"、
+    // 容器上那块提示面板盖上来，**投过来的照片几秒后就被引导文字盖掉了**。
+    // （实测：投上去 5 秒左右变 STOPPED，页面只剩"已经连上了……"那句。）
+    //
+    // 投屏语义里，一张照片就是"一直显示到下一张为止"，没有"放完了"这回事。
+    // 参考实现（Macast）也是这么设的：--image-display-duration=inf。
+    //
+    // 只影响图片文件，视频一个字节都不碰。
+    mpv_set_option_string(m_mpv, "image-display-duration", "inf");
+
     // 和进程版一样的理由：关掉 mpv 自带的一切控制。用户能直接操作的地方，就是能绕过
     // 状态机的地方 —— 那正是前面三处 bug 的根因。
     mpv_set_option_string(m_mpv, "osc", "no");
@@ -246,10 +259,29 @@ void MpvCore::eventLoop()
             break;
         }
 
-        case MPV_EVENT_FILE_LOADED:
+        case MPV_EVENT_FILE_LOADED: {
             // "文件加载好了" —— DLNA 的 TRANSITIONING 就是在等这一声。
+            //
+            // 顺手把这个文件的「暂停」标记清掉。**这一步不能省。**
+            //
+            // 上一版给 mpv 开了 keep-open，它在片子播完时会把自己置成暂停 ——
+            // 它就是靠这个"停在最后一帧"，eof-reached 也一直挂着 yes。
+            // 而 **mpv 换文件不清这个标记**：于是"上一条自然播完 → 控制点投
+            // 下一条"就成了——文件加载了、时长也报得出来、上层状态还写着正在播放，
+            // 但位置永远停在 0，画面一动不动。
+            //
+            // 实测：卡住的时候再按一次播放就活了（那正是 play() 里清 pause 那一步），
+            // 说明残余的就是这个标记，不是别的东西。
+            //
+            // 放在这儿、而不是 loadNow() 里：命令是排队执行的，在发 loadfile 那一瞬间
+            // 旧文件还在手上，那时候放开 pause 会在旧文件的末尾再滚一圈、又报一次播完。
+            // 等到这一声，新文件已经就位了，放开就是干干净净地开始放。
+            int flag = 0;
+            mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
+
             emit ready();
             break;
+        }
 
         case MPV_EVENT_START_FILE:
             emit logMessage(QStringLiteral("开始加载媒体 ..."));
