@@ -11,13 +11,19 @@ class QQuickWindow;
 // 现阶段的定位是**并存**：旧的 Widgets 界面照常工作，这个是旁路加进来的，
 // 由托盘菜单手工打开。等它长齐了，旧界面才退场。
 //
-// 两条约定：
+// 三条约定：
 //
 // 一、**引擎是懒创建的。** 没人打开新界面就不建，省得程序一启动就多几百毫秒，
 //     也省得 QML 里的错误拖累主程序启动。
 //
-// 二、**它现在什么都不做。** 不碰播放器、不碰 DLNA —— main() 里会把播放控制
-//     接进来，到时候它也只持有"播放控制"这一层，不认识 mpv。
+// 二、**引擎一辈子只建一个，窗口可以建了又销毁。** 用户在界面上把窗口关掉是
+//     "真的关掉"（不是藏起来），关掉之后下次还能再开一个 —— 但**不能**为此
+//     新建第二个 QQmlApplicationEngine，那会崩在 Qt6Qml 里。所以引擎建成之后
+//     就只反复 load()。
+//
+// 三、**它不认识 DLNA，也不认识播放器。** QML 那两件事都走信号：要断投送就把
+//     意思发出去（main() 接在 DlnaRenderer::endSession 上），要读播放状态就
+//     读已经注册给 QML 的 Playback。
 class NewUiWindow : public QObject
 {
     Q_OBJECT
@@ -32,6 +38,14 @@ public:
     /** 界面是否已经真的建起来了。没建起来的话 show() 是空操作。 */
     bool isLoaded() const;
 
+    /**
+     * 「关掉窗口，顺便断开这次投送」—— 用户在关闭确认框里点了确定。
+     *
+     * 它自己不会断投送（那是协议层的事），只把意思发出去。窗口的销毁由 QML
+     * 那边走 FluRouter.removeWindow() 完成，和 FluentUI 自己关窗的方式一致。
+     */
+    Q_INVOKABLE void endCasting();
+
 public slots:
     /**
      * 语言变了。
@@ -44,6 +58,9 @@ public slots:
 
 signals:
     void logMessage(const QString &text);
+
+    /** 用户要求结束当前投送（不是退出程序，也不是挂断接收）。 */
+    void castEndRequested();
 
 private:
     bool load();

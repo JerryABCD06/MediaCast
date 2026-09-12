@@ -26,54 +26,55 @@ bool NewUiWindow::load()
     if (m_window)
         return true;
 
-    // 引擎建过、窗口却没了 —— 说明那个 QML Window 被销毁了。**这时候不能
-    // 重建**：实测在同一个进程里加载第二个引擎会崩在 Qt6Qml 里（NewUiWindow
-    // 的 m_engine->load() 那一行上，出错模块 Qt6Qmld）。
-    //
-    // 正常情况下根本走不到这儿：NewUiWindow.qml 里设了 autoDestroy: false，
-    // 关窗口只是藏起来。真走到了就认了 —— 界面这次运行期间不再打开，但投送
-    // 和播放都不受影响。总比崩掉强。
-    if (m_engine)
-        return false;
+    // **引擎一辈子只建一个。** 窗口可以建了又销毁（用户关掉它），引擎不能 ——
+    // 在这个进程里加载第二个 QQmlApplicationEngine 会崩在 Qt6Qml 里（踩过）。
+    // 所以引擎建好之后只反复 load()，永远不销毁它重来。
+    if (!m_engine) {
+        m_engine = new QQmlApplicationEngine(this);
 
-    m_engine = new QQmlApplicationEngine(this);
+        // FluentUI 那个 QML 模块被 CMake 拷到了 exe 旁边的 qml/ 下。
+        // 引擎默认不会往那儿找，得说一声。发布版也是同样的目录结构，
+        // 所以这里不用按 Debug/Release 分支。
+        m_engine->addImportPath(QCoreApplication::applicationDirPath() + QStringLiteral("/qml"));
 
-    // FluentUI 那个 QML 模块被 CMake 拷到了 exe 旁边的 qml/ 下。
-    // 引擎默认不会往那儿找，得说一声。发布版也是同样的目录结构，
-    // 所以这里不用按 Debug/Release 分支。
-    m_engine->addImportPath(QCoreApplication::applicationDirPath() + QStringLiteral("/qml"));
-
-    // QML 的报错默认只往 stderr 吐，界面和日志里都看不见 —— 出了事只能猜。
-    // 接到日志上，"哪一行、什么东西找不到"一眼就能看见。
-    connect(m_engine, &QQmlApplicationEngine::warnings, this,
-            [this](const QList<QQmlError> &errors) {
-        for (const QQmlError &error : errors)
-            emit logMessage(QStringLiteral("QML 报错：%1").arg(error.toString()));
-    });
+        // QML 的报错默认只往 stderr 吐，界面和日志里都看不见 —— 出了事只能猜。
+        // 接到日志上，"哪一行、什么东西找不到"一眼就能看见。
+        connect(m_engine, &QQmlApplicationEngine::warnings, this,
+                [this](const QList<QQmlError> &errors) {
+            for (const QQmlError &error : errors)
+                emit logMessage(QStringLiteral("QML 报错：%1").arg(error.toString()));
+        });
+    }
 
     m_engine->load(QUrl(QStringLiteral("qrc:/ui/NewUiWindow.qml")));
 
-    if (m_engine->rootObjects().isEmpty()) {
+    // 取**最后**一个根对象：重新 load 出来的窗口是追加在后面的，前面那些
+    // 是已经被销毁的旧窗口（引擎未必及时把它们从表里摘掉）。
+    const QList<QObject *> roots = m_engine->rootObjects();
+    if (roots.isEmpty()) {
         emit logMessage(QStringLiteral("新界面加载失败 —— 看上面的 QML 报错"));
         return false;
     }
 
     // 根对象得是个窗口，否则后面 show()/raise() 都是空谈。
-    m_window = qobject_cast<QQuickWindow *>(m_engine->rootObjects().constFirst());
+    m_window = qobject_cast<QQuickWindow *>(roots.constLast());
     if (!m_window) {
         emit logMessage(QStringLiteral("新界面的根对象不是窗口，加载失败"));
         return false;
     }
 
-    // ── 兜底：窗口真被销毁的话，m_window 就成了野指针 ─────────────────────
+    // ── 窗口被销毁时把指针清掉 ───────────────────────────────────────────
     //
-    // 正常情况下走不到（见 NewUiWindow.qml 里的 autoDestroy: false），但
-    // 这个指针是裸的，不会自己变空 —— 万一哪天窗口真被销毁了，下一次
-    // show() 就会去碰已经释放的内存，崩在 Qt6Gui 里什么都看不出来。
-    // （踩过一次：Qt6Guid+0x34BA22，读 0xFFFFFFFFFFFFFFFF。）
+    // **这一步不能省。** m_window 是个裸指针，窗口销毁之后它不会自己变空，
+    // 下一次 show() 就会去碰已经释放的内存 —— 崩在 Qt6Gui 内部读一个非法
+    // 地址，栈上什么线索都没有（踩过一次：Qt6Guid+0x34BA22）。
+    //
+    // 现在"关窗"是真的销毁（用户在关闭确认框里点了确定，或者当时没有投送），
+    // 所以这条路径是常规路径，不是兜底。清掉指针之后，下一次 load() 会因为
+    // m_window 为空而重新 load 出一个窗口。
     connect(m_window, &QObject::destroyed, this, [this] {
         m_window = nullptr;
-        emit logMessage(QStringLiteral("新界面窗口被销毁了 —— 这次运行期间不再打开它，投送照常"));
+        emit logMessage(QStringLiteral("新界面窗口已关闭（需要时会重新打开）"));
     });
 
     // FluentUI 建这个窗口的时候少设了两个样式位，补上。
@@ -97,7 +98,7 @@ void NewUiWindow::show()
     m_window->raise();
     m_window->requestActivate();
 
-    emit logMessage(QStringLiteral("新界面已打开（实验）"));
+    emit logMessage(QStringLiteral("新界面已打开"));
 }
 
 void NewUiWindow::retranslate()
@@ -105,4 +106,11 @@ void NewUiWindow::retranslate()
     // 界面还没建起来的话，等它建起来时本来就用的新语言，不用管。
     if (m_engine)
         m_engine->retranslate();
+}
+
+void NewUiWindow::endCasting()
+{
+    // 只把话传出去。具体怎么做（结束会话、推事件、让设备在网络里消失一下
+    // 再回来）是协议层的事，main() 把这个信号接在 DlnaRenderer::endSession 上。
+    emit castEndRequested();
 }

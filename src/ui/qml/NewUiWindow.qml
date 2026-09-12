@@ -17,17 +17,38 @@ FluWindow {
     width: 1000
     height: 740
 
-    // **关掉窗口只是把它藏起来，不要销毁。**
+    // ── 关窗策略 ─────────────────────────────────────────────────────────
     //
-    // FluWindow 默认 autoDestroy: true，那意味着点了关闭按钮它就把自己从
-    // FluRouter 里摘掉、整个窗口对象销毁。而这个窗口是我们常年持有的一个
-    // 裸指针（NewUiWindow::m_window）：窗口一销毁，指针就野了，下一次投屏
-    // 进来调 m_window->show() 直接崩 —— 崩在 Qt6Gui 内部读一个非法地址，
-    // 栈上什么都看不出来，查了很久。
+    // FluWindow 自带一个 closeListener：autoDestroy 为真就把窗口销毁，为假就
+    // 改成"藏起来"。这里把它整个换掉，因为我们要三件事：
     //
-    // 而且这个程序本来就不该"关掉界面就退出"：它是常驻托盘收投送的。
-    // 所以关窗 = 藏起来，之后需要时再 show() 出来，是它该有的行为。
-    autoDestroy: false
+    //   一、**关掉就真的关掉**（窗口对象销毁）。这个程序是常驻托盘的接收器，
+    //       但界面不该赖着不走；下次要用时（有人投屏、或者托盘点「打开主界面」）
+    //       再建一个新的。
+    //   二、**正在投送的时候先问一句**。关掉界面确实会把这边的投送断掉，
+    //       用户应该知道，而不是点完 X 才发现手机上的投屏没了。
+    //   三、真关的时候走 FluRouter.removeWindow(window) —— 那是 FluentUI 自己的
+    //       关窗方式（从它的窗口表里摘掉 + deleteLater）。直接调 destroy() 等于
+    //       在自己的信号处理里把自己拆掉；只调 FluWindow 那个 deleteLater() 又
+    //       漏了摘登记。
+    //
+    // 早先这里是 autoDestroy: false（关窗只藏起来），原因是窗口一销毁，
+    // NewUiWindow 里那个裸指针就野了，下一次投屏进来会崩。那个问题已经在
+    // C++ 那边解决 —— 引擎只建一次、窗口可以反复建。
+    closeListener: function(event) {
+        // 用 hasMedia 而不是 idle：**停着的东西也算一个没结束的会话**。
+        // 用 idle 的话，片子播完之后用户能一声不响地把窗口关掉，而手机那边
+        // 还挂着"正在投屏到这台电脑"。
+        if (Playback && Playback.hasMedia) {
+            // 把这次关闭拦下来。窗口不走，等用户在对话框里选。
+            event.accepted = false
+            dialog_end_cast.open()
+            return
+        }
+
+        event.accepted = true
+        FluRouter.removeWindow(window)
+    }
 
     // 标题栏用 FluentUI 自绘的这条（默认行为），三个按钮也是它画的。
     //
@@ -80,6 +101,32 @@ FluWindow {
         FluPivotItem {
             title: qsTr("设置")
             contentItem: SettingsPage {}
+        }
+    }
+
+    // 正在投送时点关闭 -> 先问一句。
+    //
+    // 文案要说清楚**代价是什么**，而不是含糊的"确定要关闭吗" —— 用户关心的是
+    // "手机上的投屏会不会断"，不是窗口关不关。
+    FluContentDialog {
+        id: dialog_end_cast
+
+        title: qsTr("正在投送")
+        message: qsTr("关掉窗口会结束这次投送，手机上也会断开。确定要关吗？")
+        negativeText: qsTr("取消")
+        positiveText: qsTr("关闭并断开")
+        buttonFlags: FluContentDialogType.NegativeButton | FluContentDialogType.PositiveButton
+
+        // 取消：什么都不做。窗口还在原地，投送照常。
+        onNegativeClicked: {
+        }
+
+        onPositiveClicked: {
+            // 顺序要紧：先让协议层把这次投送收干净（结束会话、推事件、让设备在
+            // 网络里消失一下再回来），再把窗口关掉。反过来的话，窗口一没，
+            // 界面上就没有东西去触发这一句了。
+            Shell.endCasting()
+            FluRouter.removeWindow(window)
         }
     }
 }

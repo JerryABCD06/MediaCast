@@ -53,6 +53,16 @@ class PlaybackController : public QObject
      */
     Q_PROPERTY(bool idle READ isIdle NOTIFY idleChanged)
 
+    /**
+     * 手上**装着内容**没有 —— 停着的也算。
+     *
+     * 和 idle 的区别值得说清楚：idle 问的是"屏幕上空不空"（停了也算空），
+     * 这个问的是"那个会话还在不在"。关窗口之前要不要先警告，要看后者 ——
+     * 停着的内容也是投送会话的一部分，关掉界面照样会把手机那边弄断，
+     * 而用户完全看不出"我刚才那个操作把投送搞没了"。
+     */
+    Q_PROPERTY(bool hasMedia READ hasMedia NOTIFY hasMediaChanged)
+
     // 下面这几个是给界面用的：QML 读不了 C++ 的方法，只能读属性。
     // 通知信号直接用播放器转发上来的那几个（位置/时长/暂停），不另造。
 
@@ -191,6 +201,8 @@ public:
 
     State state() const { return m_state; }
     bool isIdle() const { return m_state == State::NoMedia || m_state == State::Stopped; }
+    /** 装着内容没有（停着的也算）。见上面 hasMedia 那段。 */
+    bool hasMedia() const { return m_state != State::NoMedia; }
     /** 界面读的"是不是暂停着"。就是状态机里那一个状态。 */
     bool isPaused() const { return m_state == State::Paused; }
     LoadStatus loadStatus() const { return m_loadStatus; }
@@ -224,6 +236,9 @@ signals:
 
     /** 上面那个 idle 变了。界面靠它切换"画面 / 投屏指引"。 */
     void idleChanged();
+
+    /** 上面那个 hasMedia 变了（会话开始 / 结束）。 */
+    void hasMediaChanged();
 
     /** "正在播放什么"变了（换片子，或者会话结束）。 */
     void nowPlayingChanged(const NowPlaying &info);

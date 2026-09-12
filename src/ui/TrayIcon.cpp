@@ -6,48 +6,45 @@
 #include <QApplication>
 #include <QMenu>
 #include <QSystemTrayIcon>
-#include <QWidget>
 
-TrayIcon::TrayIcon(QWidget *window, DlnaRenderer *renderer, QObject *parent)
+TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     : QObject(parent)
-    , m_window(window)
     , m_renderer(renderer)
 {
-    m_openAction = new QAction(tr("打开主界面"), this);
-    connect(m_openAction, &QAction::triggered, this, &TrayIcon::openWindow);
+    m_openMainAction = new QAction(tr("打开主界面"), this);
+    connect(m_openMainAction, &QAction::triggered, this, &TrayIcon::openMainUiRequested);
+
+    m_openTestAction = new QAction(tr("打开测试界面"), this);
+    connect(m_openTestAction, &QAction::triggered, this, &TrayIcon::openTestUiRequested);
 
     m_acceptAction = new QAction(tr("暂停接收投送"), this);
     connect(m_acceptAction, &QAction::triggered, this, &TrayIcon::toggleAccepting);
 
-    // 临时项：新的 QML 界面还在旁边长，先留个手工入口。
-    // 新界面长齐、旧界面退场之后，这一项就删掉。
-    m_newUiAction = new QAction(tr("打开新界面（实验）"), this);
-    connect(m_newUiAction, &QAction::triggered, this, &TrayIcon::openNewUiRequested);
-
     auto *quitAction = new QAction(tr("退出"), this);
     connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
 
-    // 菜单挂在窗口底下，由窗口负责销毁。QSystemTrayIcon 只是引用它，不接管所有权。
-    auto *menu = new QMenu(m_window);
-    menu->addAction(m_openAction);
-    menu->addSeparator();
-    menu->addAction(m_acceptAction);
-    menu->addAction(m_newUiAction);
-    menu->addSeparator();
-    menu->addAction(quitAction);
+    // 菜单没有窗口可以挂（托盘不持有任何窗口），所以由我们自己拿着、自己删。
+    // QSystemTrayIcon 只是引用它，不接管所有权。
+    m_menu = new QMenu();
+    m_menu->addAction(m_openMainAction);
+    m_menu->addAction(m_openTestAction);
+    m_menu->addSeparator();
+    m_menu->addAction(m_acceptAction);
+    m_menu->addSeparator();
+    m_menu->addAction(quitAction);
 
     m_tray = new QSystemTrayIcon(this);
 
     // 用程序自己的图标 —— main() 里已经设过一次了，这里不用再加载一遍。
     m_tray->setIcon(QApplication::windowIcon());
     m_tray->setToolTip(QStringLiteral("Media Cast"));
-    m_tray->setContextMenu(menu);
+    m_tray->setContextMenu(m_menu);
 
-    // 双击图标也把窗口叫回来 —— 大家的习惯就是这样，不做反而别扭。
+    // 双击图标也把正式界面叫回来 —— 大家的习惯就是这样，不做反而别扭。
     connect(m_tray, &QSystemTrayIcon::activated, this,
             [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger)
-            openWindow();
+            emit openMainUiRequested();
     });
 
     // 菜单文字要跟着实际状态走，**不能只在构造时算一次**。
@@ -58,6 +55,12 @@ TrayIcon::TrayIcon(QWidget *window, DlnaRenderer *renderer, QObject *parent)
     connect(m_renderer, &DlnaRenderer::acceptingChanged, this, &TrayIcon::refreshMenu);
 
     refreshMenu();
+}
+
+TrayIcon::~TrayIcon()
+{
+    // 菜单是个 QWidget，没有父窗口就不会有人替我们删它。
+    delete m_menu;
 }
 
 bool TrayIcon::isAvailable() const
@@ -79,20 +82,6 @@ void TrayIcon::show()
 
     m_tray->show();
     emit logMessage(QStringLiteral("托盘图标已就绪（关掉窗口不会退出程序）"));
-}
-
-void TrayIcon::openWindow()
-{
-    if (!m_window)
-        return;
-
-    if (m_window->isMinimized())
-        m_window->showNormal();
-    else
-        m_window->show();
-
-    m_window->raise();
-    m_window->activateWindow();
 }
 
 void TrayIcon::toggleAccepting()

@@ -4,8 +4,8 @@
 #include <QString>
 
 class QAction;
+class QMenu;
 class QSystemTrayIcon;
-class QWidget;
 
 class DlnaRenderer;
 
@@ -14,27 +14,24 @@ class DlnaRenderer;
 // 这个程序的形态是"常驻后台的媒体接收器"：关掉窗口不等于退出，它还要继续在网络上
 // 待着、继续接受投送。所以需要一个一直在那儿的东西，让用户能：
 //
-//   打开主界面      把窗口叫回来
+//   打开主界面      新的 QML 界面（正式的那套）
+//   打开测试界面    旧的 Widgets 界面。它现在是调试/回归用的观测窗口，
+//                   等新界面长齐了就连它一起删掉
 //   暂停接收投送    暂时从网络上消失（"勿扰"），再点一次恢复
 //   退出            真的退出
 //
-// 另外暂时多一项「打开新界面（实验）」—— 新的 QML 界面正在旁边长出来，
-// 旧的 Widgets 界面还没退场，两个并存。等新界面长齐了，这一项会并进
-// 「打开主界面」，这行注释也会一起删掉。
+// 一个约定：
 //
-// 两个约定：
-//
-// 一、**它只认识门面。** 和窗口一样，手上只有 DlnaRenderer —— "暂停接收"这种事
-//     该怎么做是 DLNA 那一层的事，托盘只管把用户的意思传过去。
-//
-// 二、**打开主界面暂时是直接操作窗口。** 这是本次的临时状态：以后换正式界面时，
-//     这里会改成"请求打开"的信号，由新的界面自己决定怎么响应。
+// **它只认识门面，而且不碰任何窗口。** 手上只有 DlnaRenderer —— "暂停接收"这种事
+// 该怎么做是 DLNA 那一层的事；"打开界面"也不是它去操作窗口，而是发个信号，
+// 由 main() 决定那个界面是谁、怎么开。所以它连一个 QWidget 都不持有。
 class TrayIcon : public QObject
 {
     Q_OBJECT
 
 public:
-    TrayIcon(QWidget *window, DlnaRenderer *renderer, QObject *parent = nullptr);
+    explicit TrayIcon(DlnaRenderer *renderer, QObject *parent = nullptr);
+    ~TrayIcon() override;
 
     /** 这台机器上有没有系统托盘。没有的话图标是挂不上去的。 */
     bool isAvailable() const;
@@ -45,24 +42,26 @@ public:
 signals:
     void logMessage(const QString &text);
 
-    /** 用户要打开新界面。托盘不自己建它 —— 那是 main() 的活儿。 */
-    void openNewUiRequested();
+    /** 用户要打开正式界面（新的 QML 界面）。 */
+    void openMainUiRequested();
+
+    /** 用户要打开测试界面（旧的 Widgets 界面）。 */
+    void openTestUiRequested();
 
 private:
-    /** 把窗口叫回来：显示、还原、抬到前面。 */
-    void openWindow();
-
     /** 暂停 / 恢复接收投送。 */
     void toggleAccepting();
 
     /** 按当前状态把菜单项的文字对上。 */
     void refreshMenu();
 
-    QWidget *m_window = nullptr;
     DlnaRenderer *m_renderer = nullptr;
 
     QSystemTrayIcon *m_tray = nullptr;
-    QAction *m_openAction = nullptr;
+    /** 菜单没有窗口可以挂，所以由我们自己拿着、自己删。 */
+    QMenu *m_menu = nullptr;
+
+    QAction *m_openMainAction = nullptr;
+    QAction *m_openTestAction = nullptr;
     QAction *m_acceptAction = nullptr;
-    QAction *m_newUiAction = nullptr;
 };

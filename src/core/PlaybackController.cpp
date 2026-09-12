@@ -134,6 +134,9 @@ void PlaybackController::setState(State state)
 
     // 空/不空只在这几种状态之间跳变，所以要记下改之前的答案再比。
     const bool wasIdle = isIdle();
+    // "装着东西没有"和"屏幕上空不空"不是一回事：Stopped 两个答案分别是
+    // "装着"和"空"。所以也要单独记一份改之前的。
+    const bool hadMedia = hasMedia();
 
     m_state = state;
 
@@ -154,6 +157,9 @@ void PlaybackController::setState(State state)
 
     if (isIdle() != wasIdle)
         emit idleChanged();
+
+    if (hasMedia() != hadMedia)
+        emit hasMediaChanged();
 }
 
 // ── 命令 ─────────────────────────────────────────────────────────────────

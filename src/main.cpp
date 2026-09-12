@@ -225,23 +225,45 @@ int main(int argc, char *argv[])
 
     // ── 托盘 ─────────────────────────────────────────────────────────────
     //
-    // 常驻的意义全在这儿：窗口关了它还在，菜单里能叫回窗口、能挂"勿扰"、能退出。
-    // 它和窗口一样，手上只有门面 —— 「暂停接收投送」该怎么做是 DLNA 那一层的事。
-    TrayIcon tray(&window, &renderer);
+    // 常驻的意义全在这儿：窗口关了它还在，菜单里能叫回界面、能挂"勿扰"、能退出。
+    // 它手上只有门面，而且**不持有任何窗口** —— 「打开界面」是发个信号过来，
+    // 开哪个、怎么开，由这儿决定。
+    TrayIcon tray(&renderer);
     QObject::connect(&tray, &TrayIcon::logMessage,
                      &renderer, &DlnaRenderer::logMessage);
 
-    // ── 新界面（QML，实验）────────────────────────────────────────────────
+    // ── 新界面（QML）─────────────────────────────────────────────────────
     //
-    // 现在是"并存"状态：旧的 Widgets 界面照旧干活，新界面在托盘里手工打开。
+    // 正式的界面。旧的 Widgets 那一套还留着，但降级成"测试界面" —— 只在托盘
+    // 菜单里手工打开，DLNA 回归测试要有个看得见的观测窗口。
+    //
     // 它懒加载 —— 没人点它就不建 QML 引擎，程序启动该多快还多快。
     //
-    // 它的日志和大门面走同一条路。新界面自己还不会说话，等接了播放控制再说。
+    // 它的日志和大门面走同一条路。
     NewUiWindow newUi;
     QObject::connect(&newUi, &NewUiWindow::logMessage,
                      &renderer, &DlnaRenderer::logMessage);
-    QObject::connect(&tray, &TrayIcon::openNewUiRequested,
+
+    // 新界面注册给 QML：界面上"关窗并断开投送"要调它。它自己不认识 DLNA，
+    // 只把意思发出来，由这儿接到门面上 —— 和 UiState / Playback 一个路子。
+    //
+    // **必须赶在第一个 QML 引擎建起来之前注册**，所以放在这儿而不是文件开头。
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Shell", &newUi);
+    QObject::connect(&newUi, &NewUiWindow::castEndRequested,
+                     &renderer, &DlnaRenderer::endSession);
+
+    // 托盘的两个入口：主界面是新界面，测试界面是旧的 Widgets 界面。
+    QObject::connect(&tray, &TrayIcon::openMainUiRequested,
                      &newUi, &NewUiWindow::show);
+    QObject::connect(&tray, &TrayIcon::openTestUiRequested, &window,
+                     [&window] {
+        if (window.isMinimized())
+            window.showNormal();
+        else
+            window.show();
+        window.raise();
+        window.activateWindow();
+    });
     // 有东西要投过来（或者界面上按了播放），就把新界面拉起来。
     //
     // 这**不只是一句方便**：render API 模式下 mpv 的视频输出要等画面 item
