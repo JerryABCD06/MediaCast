@@ -50,6 +50,15 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
         setState(State::Playing);
     });
 
+    // 看门狗从"真正开始加载"那一刻开始跑，不是从调用 load() 那一刻。
+    //
+    // 差别在一件事上：render API 模式下，加载可能要等渲染面就绪才能发出去
+    // （见 MpvCore 里那段），中间隔着"把界面拉起来"的时间。从 load() 开始算的话，
+    // 界面起得慢一点就会被判成"加载失败"，而其实片子还没开始加载。
+    connect(m_player, &MediaPlayer::loadStarted, this, [this] {
+        m_loadWatchdog->start(kLoadTimeoutSeconds * 1000);
+    });
+
     // 一条内容播完之后干什么 —— 队列的"自动接上"和两种循环都在这里。
     connect(m_player, &MediaPlayer::ended, this, [this] {
         // 只在"正在播放"时才动手。加载新片子时，旧片子的结束事件也会来一次，
@@ -318,7 +327,9 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
 
     // 这条如果一直放不起来，看门狗会把它收掉。
     m_loadStatus = LoadStatus::Ok;
-    m_loadWatchdog->start(kLoadTimeoutSeconds * 1000);
+
+    // 看门狗不在这儿起 —— 由 loadStarted 信号起，理由见构造函数里那段。
+    // 这里只把"现在要放这条"交代下去；加载可能被推迟（等渲染面就绪）。
     m_player->load(request.uri);
 }
 

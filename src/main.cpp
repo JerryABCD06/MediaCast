@@ -230,6 +230,13 @@ int main(int argc, char *argv[])
                      &renderer, &DlnaRenderer::logMessage);
     QObject::connect(&tray, &TrayIcon::openNewUiRequested,
                      &newUi, &NewUiWindow::show);
+    // 有东西要投过来（或者界面上按了播放），就把新界面拉起来。
+    //
+    // 这**不只是一句方便**：render API 模式下 mpv 的视频输出要等画面 item
+    // 真的开始渲染才开得起来，所以新界面必须先在这儿起来，片子才放得出来。
+    // 控制器那边会把加载攒住，等渲染面就绪再真的发出去 —— 时序不用我们操心。
+    QObject::connect(&playback, &PlaybackController::mediaChanged,
+                     &newUi, &NewUiWindow::show);
     QObject::connect(&uiState, &UiState::languageChanged,
                      &newUi, &NewUiWindow::retranslate);
 

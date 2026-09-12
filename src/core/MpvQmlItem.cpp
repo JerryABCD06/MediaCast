@@ -50,6 +50,13 @@ public:
         }
 
         mpv_render_context_set_update_callback(m_ctx, &MpvItemRenderer::onMpvUpdate, m_item);
+
+        // 告诉核心：渲染面挂上来了，攒着的片子可以放了。
+        //
+        // 这里在渲染线程上，所以用队列连接跳回界面线程 —— setRendererAttached
+        // 会去碰"攒着的那条地址"并发 loadfile，那些都得在界面线程做。
+        QMetaObject::invokeMethod(m_core, "setRendererAttached", Qt::QueuedConnection,
+                                  Q_ARG(bool, true));
     }
 
     ~MpvItemRenderer() override
@@ -117,7 +124,16 @@ MpvQmlItem::MpvQmlItem(QQuickItem *parent)
 {
 }
 
-MpvQmlItem::~MpvQmlItem() = default;
+MpvQmlItem::~MpvQmlItem()
+{
+    // 画面 item 没了 —— 告诉核心"渲染面不在了"。窗口被关掉又重开的话，
+    // 新的 item 会把渲染上下文重新建起来、再报一次 true。
+    //
+    // 这个标记不清掉的话，中间那段空档里来的投屏会以为渲染面还在，
+    // 直接把 loadfile 发出去 —— 然后 mpv 报 "No render context set" 放弃。
+    if (m_core)
+        m_core->setRendererAttached(false);
+}
 
 QQuickFramebufferObject::Renderer *MpvQmlItem::createRenderer() const
 {

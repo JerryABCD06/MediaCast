@@ -75,6 +75,20 @@ public:
     OutputMode outputMode() const { return m_outputMode; }
 
     /**
+     * 渲染面挂上来了没有（只有 RenderApiOutput 模式在意这件事）。
+     *
+     * **为什么需要它**：render API 模式下，mpv 的视频输出要等到有人给它一个
+     * 渲染上下文才能开，而那个上下文要等画面 item 真的开始渲染才建得起来。
+     * 在这之前发 loadfile 的话，mpv 会报 "No render context set" 然后放弃 ——
+     * 而且**不会再重试**：视频永远出不来，播放也起不来。
+     *
+     * 所以 load() 在这之前只把地址**攒着**，等 MpvQmlItem 那边把上下文建好、
+     * 调 setRendererAttached(true) 的时候才真的放出去。
+     */
+    Q_INVOKABLE void setRendererAttached(bool attached);
+    bool isRendererAttached() const { return m_rendererAttached; }
+
+    /**
      * mpv 实例本身。start() 之前是 nullptr。
      *
      * 为什么放开到 public：**用 render API 渲染就必须拿到它** —— 建渲染上下文、
@@ -93,6 +107,9 @@ public:
 
     /** 停掉后台线程并销毁 mpv 实例。 */
     void shutdown();
+
+    /** 真正把 loadfile 发出去的地方。load() 和 setRendererAttached() 都走它。 */
+    void loadNow(const QString &uri);
 
     bool isRunning() const { return m_mpv != nullptr; }
 
@@ -173,6 +190,21 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_stopRequested{false};
     OutputMode m_outputMode = WindowOutput;
+
+    /**
+     * render API 模式下，渲染面挂上来了没有。
+     *
+     * 界面线程和渲染线程都会碰它：渲染线程建好上下文之后回调过来置 true，
+     * 界面线程在 load() 里读。用原子变量省得加锁。
+     */
+    std::atomic<bool> m_rendererAttached{false};
+
+    /**
+     * 渲染面还没就绪时，先攒在这儿的那条地址。
+     *
+     * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。
+     */
+    QString m_pendingUri;
 
     std::atomic<double> m_positionSec{0.0};
     std::atomic<double> m_durationSec{0.0};

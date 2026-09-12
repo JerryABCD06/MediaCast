@@ -262,6 +262,43 @@ void MpvCore::load(const QString &uri)
     if (!m_mpv || uri.isEmpty())
         return;
 
+    // render API 模式下，渲染面没就绪就先攒着 —— 现在发出去，mpv 会报
+    // "No render context set" 然后放弃，而且不会再重试。详见头文件那段。
+    if (m_outputMode == RenderApiOutput && !m_rendererAttached) {
+        m_pendingUri = uri;
+        emit logMessage(QStringLiteral("渲染窗口还没准备好，这条先攒着，等窗口起来再放"));
+        return;
+    }
+
+    loadNow(uri);
+}
+
+void MpvCore::setRendererAttached(bool attached)
+{
+    if (m_rendererAttached == attached)
+        return;
+
+    m_rendererAttached = attached;
+
+    if (!attached) {
+        // 渲染面没了（窗口被关掉之类）。攒着的那条也一并丢掉 ——
+        // 没有画面可出，放它没有意义。
+        m_pendingUri.clear();
+        return;
+    }
+
+    if (m_pendingUri.isEmpty())
+        return;
+
+    // 攒着的那条现在可以放了。这就是"先拉起界面、等渲染面就绪再投屏"那一步。
+    const QString uri = m_pendingUri;
+    m_pendingUri.clear();
+    emit logMessage(QStringLiteral("渲染窗口已就绪，把攒着的那条放出去"));
+    loadNow(uri);
+}
+
+void MpvCore::loadNow(const QString &uri)
+{
     // 换片子的时候先把缓存的进度清掉。
     //
     // 不清的话，从"发出 loadfile"到"mpv 真的把新文件打开"之间有个空档，那会儿
@@ -275,6 +312,10 @@ void MpvCore::load(const QString &uri)
     const QByteArray path = uri.toUtf8();
     const char *command[] = {"loadfile", path.constData(), "replace", nullptr};
     mpv_command(m_mpv, command);
+
+    // 上层靠这个给"加载超时"计时 —— 它要的是"真的发出去了"这一刻，
+    // 不是调用 load() 那一刻（两者之间可能隔着一个等界面的过程）。
+    emit loadStarted();
 }
 
 void MpvCore::play()
