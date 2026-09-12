@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "core/LibMpvPlayer.h"
+#include "core/AppSettings.h"
 #include "core/MpvCore.h"
 #include "core/MpvQmlItem.h"
 #include "core/PlaybackController.h"
@@ -56,7 +57,10 @@ int main(int argc, char *argv[])
     // 注册成 QML 单例，QML 里 import MediaCast 就能拿到。它必须是 main() 的
     // 局部变量：QML 引擎只借不拥有这个对象，它先没了引擎那边就是野指针。
     // 声明在 newUi 之前，析构顺序自然就对（后声明的先析构）。
-    UiState uiState;
+    // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
+    // 用户想改直接拿记事本改，不用翻界面。
+    AppSettings settings;
+    UiState uiState(&settings);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
 
     // 名字分两个，别混：
@@ -112,6 +116,14 @@ int main(int argc, char *argv[])
         logFile.write("\n");
         logFile.flush();
     };
+
+    // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
+    // 用户想改直接拿记事本改，不用翻界面。
+    writeLog(QStringLiteral("设置文件：%1（%2）")
+                 .arg(settings.filePath(),
+                      settings.isPersistent() ? QStringLiteral("可读写")
+                                              : QStringLiteral("写不进去，改动不会保留")));
+    QObject::connect(&settings, &AppSettings::logMessage, writeLog);
 
     // ── 零件 ─────────────────────────────────────────────────────────────
     // 播放后端二选一，改下面这一行就能换：
@@ -240,6 +252,27 @@ int main(int argc, char *argv[])
     QObject::connect(&uiState, &UiState::languageChanged,
                      &newUi, &NewUiWindow::retranslate);
 
+    // ── 设置文件接到网络上那几项 ─────────────────────────────────────────
+    //
+    // 两个方向都要：
+    //   文件变了  -> 服务跟着变（用户拿记事本改了，或者以后加设置界面）
+    //   服务变了  -> 写回文件（托盘的「暂停接收投送」也要记住）
+    //
+    // 不会来回弹：两边 setter 都是"值一样就不动"。
+    QObject::connect(&settings, &AppSettings::broadcastChanged,
+                     &renderer, &DlnaRenderer::setBroadcasting);
+    QObject::connect(&settings, &AppSettings::broadcastIntervalChanged,
+                     &renderer, &DlnaRenderer::setAliveIntervalMs);
+    QObject::connect(&settings, &AppSettings::acceptNewCastChanged, &renderer,
+                     [&renderer](bool accept) {
+        if (accept)
+            renderer.resumeAccepting();
+        else
+            renderer.pauseAccepting();
+    });
+    QObject::connect(&renderer, &DlnaRenderer::acceptingChanged,
+                     &settings, &AppSettings::setAcceptNewCast);
+
     // ── 开跑 ─────────────────────────────────────────────────────────────
     // 界面暂时照旧弹出来。以后换正式界面时，这里大概会变成"只留托盘"。
     window.show();
@@ -250,6 +283,13 @@ int main(int argc, char *argv[])
 
     player->start();
     renderer.start();
+
+    // 服务起来之后再把设置里那几项应用上去 —— 广播间隔和"要不要广播"直接
+    // 设就行；「是否接收投送」要走暂停/恢复那条路，那要求服务已经起来了。
+    renderer.setAliveIntervalMs(settings.broadcastIntervalMs());
+    renderer.setBroadcasting(settings.broadcast());
+    if (!settings.acceptNewCast())
+        renderer.pauseAccepting();
 
     return app.exec();
 }

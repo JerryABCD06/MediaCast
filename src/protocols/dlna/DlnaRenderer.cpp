@@ -265,6 +265,11 @@ void DlnaRenderer::setAliveIntervalMs(int ms)
     m_ssdp->setAliveIntervalMs(ms);
 }
 
+void DlnaRenderer::setBroadcasting(bool on)
+{
+    m_ssdp->setBroadcasting(on);
+}
+
 QString DlnaRenderer::deviceName() const { return m_ssdp->friendlyName(); }
 QString DlnaRenderer::address()    const { return m_ssdp->localAddress(); }
 QString DlnaRenderer::locationUrl() const { return m_ssdp->locationUrl(); }

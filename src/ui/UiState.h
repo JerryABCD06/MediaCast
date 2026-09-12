@@ -4,6 +4,7 @@
 #include <QObject>
 
 class QTranslator;
+class AppSettings;
 
 // UiState —— 界面的**唯一状态源**：现在是哪种语言、要深色还是浅色。
 //
@@ -42,7 +43,14 @@ public:
     };
     Q_ENUM(ThemeMode)
 
-    explicit UiState(QObject *parent = nullptr);
+    /**
+     * 语言和深浅的初始值从设置文件里读，之后用户一改就写回去。
+     *
+     * **这里是"唯一的那一份"。** 界面不直接改外观 —— 它只是把"用户选了什么"
+     * 告诉这里（写属性），真正的改变由这里的信号广播出去，每个界面再跟着变。
+     * 这条链路是单向的，界面在收到广播之前不会自己动。
+     */
+    explicit UiState(AppSettings *settings, QObject *parent = nullptr);
     ~UiState() override;
 
     int themeMode() const { return m_themeMode; }
@@ -73,4 +81,7 @@ private:
 
     QTranslator *m_appTranslator = nullptr;   // 我们自己的 MCast_*.qm
     QTranslator *m_qtTranslator  = nullptr;   // Qt 自带原生控件的 qtbase_*.qm
+
+    /** 设置文件。初始值从它读，改动写回它。可以为空（没有设置也能跑）。 */
+    AppSettings *m_settings = nullptr;
 };

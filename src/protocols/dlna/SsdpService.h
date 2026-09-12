@@ -54,6 +54,14 @@ public:
     void setAliveIntervalMs(int ms);
 
     /**
+     * 要不要定期对外广播（alive）。
+     *
+     * 关掉 **不等于** 停服务：socket 还开着、M-SEARCH 照常响应 —— 只是不主动
+     * 隔一会儿喊一嗓子。有些网络嫌广播吵，或者用户就是不想被满网找。
+     */
+    void setBroadcasting(bool on);
+
+    /**
      * 让设备在网络里"消失一下再回来"—— 先发 ssdp:byebye，1.5 秒后再广播 alive。
      *
      * 这是给"电脑端强制挂断"用的。有些控制点收到 TransportState 变化之后，仍然把
@@ -112,5 +120,7 @@ private:
     bool    m_udnPersisted = false;
     quint32 m_bootId = 0;       // BOOTID.UPNP.ORG：每次启动递增，控制点用它识别"设备重启了"
     int     m_aliveIntervalMs = 10000;
+    /** 要不要定期对外广播。见 setBroadcasting() 的说明。 */
+    bool    m_broadcasting = true;
     bool    m_running = false;
 };

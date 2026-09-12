@@ -266,7 +266,8 @@ bool SsdpService::start()
 
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &SsdpService::sendAlive);
-    m_timer->start(m_aliveIntervalMs);
+    if (m_broadcasting)
+        m_timer->start(m_aliveIntervalMs);
 
     return true;
 }
@@ -278,13 +279,38 @@ void SsdpService::setAliveIntervalMs(int ms)
 
     m_aliveIntervalMs = ms;
 
-    if (m_timer)
+    if (m_timer && m_broadcasting)
         m_timer->start(m_aliveIntervalMs);
 
     emit logMessage(QStringLiteral("SSDP 广播间隔改为 %1 秒").arg(ms / 1000.0, 0, 'g', 3));
 
     // 改完立刻广播一次，不用干等下一个周期 —— 用户刚勾上复选框就想看到效果。
     sendAlive();
+}
+
+void SsdpService::setBroadcasting(bool on)
+{
+    if (m_broadcasting == on)
+        return;
+
+    m_broadcasting = on;
+
+    if (m_timer) {
+        if (on)
+            m_timer->start(m_aliveIntervalMs);
+        else
+            m_timer->stop();
+    }
+
+    if (on) {
+        emit logMessage(QStringLiteral("已恢复定期广播（设备会被主动发现）"));
+        // 开回来立刻喊一嗓子，别让用户干等一个周期。
+        sendAlive();
+    } else {
+        // 关广播**不等于**停服务：socket 还开着、M-SEARCH 照常响应 ——
+        // 手机主动搜还是找得到我们，只是我们不再隔一会儿喊一次。
+        emit logMessage(QStringLiteral("已停止定期广播（仍会响应搜索）"));
+    }
 }
 
 void SsdpService::announceGoingAwayBriefly()

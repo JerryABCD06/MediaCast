@@ -110,6 +110,9 @@ public:
      */
     void setAliveIntervalMs(int ms);
 
+    /** 要不要定期对外广播（alive）。关掉仍会响应搜索，只是不主动喊。 */
+    void setBroadcasting(bool on);
+
     // ── 状态 ─────────────────────────────────────────────────────────────
 
     QString deviceName() const;
