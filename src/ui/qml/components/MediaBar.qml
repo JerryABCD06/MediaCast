@@ -78,6 +78,28 @@ Item {
      */
     readonly property bool darkStyle: overPicture || FluTheme.dark
 
+    /**
+     * 这一条栏该用的主题色（蓝色）。
+     *
+     * **它跟 darkStyle 走，不跟 FluTheme.dark 走。**
+     *
+     * 因为 `FluTheme.primaryColor` 是按**程序主题**取值的：浅色主题给
+     * `accentColor.dark`（深一点的蓝），深色主题给 `accentColor.lighter`
+     * （亮一点的蓝）。而这一条栏有它自己的明暗规矩 —— 于是会出现
+     * "**两条看起来一模一样的深色控制栏，蓝色却是两种**"：
+     *
+     *   浅色主题 + 放视频（栏走深色那套）  用的是浅色主题的蓝 ✗
+     *   深色主题 + 放视频（栏也走深色那套）用的是深色主题的蓝
+     *
+     * 所以这里照 FluTheme.cpp 里那句自己取一档：
+     *
+     *     primaryColor = 深色 ? accentColor->lighter() : accentColor->dark()
+     *
+     * （库哪天改了那个算法，这儿要跟着改。）
+     */
+    readonly property color accentColor: darkStyle ? FluTheme.accentColor.lighter
+                                                   : FluTheme.accentColor.dark
+
     // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
     Rectangle {
         anchors.fill: parent
@@ -169,7 +191,7 @@ Item {
                         anchors.centerIn: parent
                         iconSource: FluentIcons.FullCircleMask
                         iconSize: 10
-                        iconColor: FluTheme.primaryColor
+                        iconColor: bar.accentColor
                         scale: posSlider.pressed ? 0.9 : (posSlider.hovered ? 1.2 : 1)
                         Behavior on scale {
                             NumberAnimation {
@@ -203,7 +225,7 @@ Item {
                         width: posSlider.position * parent.width
                         height: 6
                         radius: 3
-                        color: FluTheme.primaryColor
+                        color: bar.accentColor
                     }
                 }
             }
@@ -306,9 +328,9 @@ Item {
                     width: 30
                     height: 30
                     radius: width / 2
-                    normalColor: FluTheme.primaryColor
-                    hoverColor: Qt.lighter(FluTheme.primaryColor, 1.15)
-                    pressedColor: Qt.darker(FluTheme.primaryColor, 1.15)
+                    normalColor: bar.accentColor
+                    hoverColor: Qt.lighter(bar.accentColor, 1.15)
+                    pressedColor: Qt.darker(bar.accentColor, 1.15)
                     // 按下去该干什么由状态机说了算（规则只有一份，在
                     // PlaybackController::togglePlayPause）。上面那个 showPlay
                     // 只管画哪个图标。
