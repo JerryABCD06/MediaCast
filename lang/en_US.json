@@ -53,6 +53,7 @@
     "ui_mediabar_volume": "Volume",
     "ui_mediabar_picture": "Picture settings",
     "ui_mediabar_fullscreen": "Full screen",
+    "ui_mediabar_fullscreen_exit": "Exit full screen",
     "ui_settings_category_ui": "Interface",
     "ui_settings_category_cast": "Casting",
     "ui_settings_category_about": "About",

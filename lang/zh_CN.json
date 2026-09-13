@@ -53,6 +53,7 @@
     "ui_mediabar_volume": "音量",
     "ui_mediabar_picture": "显示效果",
     "ui_mediabar_fullscreen": "全屏",
+    "ui_mediabar_fullscreen_exit": "退出全屏",
     "ui_settings_category_ui": "界面",
     "ui_settings_category_cast": "投送",
     "ui_settings_category_about": "关于",

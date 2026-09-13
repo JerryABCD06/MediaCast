@@ -666,16 +666,23 @@ Item {
                     pressedColor: bar.itemPressColor
                 }
 
-                // 壳子：全屏 / 退出全屏。图标是两态，接的时候按 window.visibility 换。
+                // 全屏 / 退出全屏。**两态图标按窗口自己的可见状态换**（见 NewUiWindow
+                // 里那段"一个事实 + 一张表 + 一处执行"），这里不另记一个开关。
                 TipIconButton {
-                    iconSource: FluentIcons.FullScreen
+                    readonly property bool isFull: bar.win ? bar.win.fullscreen : false
+                    iconSource: isFull ? FluentIcons.BackToWindow : FluentIcons.FullScreen
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
-                    contentDescription: qsTr("ui_mediabar_fullscreen")
+                    contentDescription: isFull ? qsTr("ui_mediabar_fullscreen_exit")
+                                               : qsTr("ui_mediabar_fullscreen")
                     width: 34
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
+                    onClicked: {
+                        if (bar.win)
+                            bar.win.toggleFullscreen()
+                    }
                 }
             }
         }

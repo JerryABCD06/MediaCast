@@ -91,7 +91,32 @@ Item {
                 // （togglePlayPause）。界面上有两处要用它，各写一份的话迟早只有
                 // 一处被改到 —— 这次就是这么来的：片子播完之后这里还在判 paused，
                 // 于是点一下变成"暂停"，什么都没发生。
-                onClicked: Playback.togglePlayPause()
+
+                // ── 单击 = 播放/暂停，双击 = 全屏 ──────────────────────────
+                //
+                // **单击要"等一下"再执行**（250 毫秒，Windows 判断双击的间隔）。
+                // 原因是实测出来的：一次双击在 Qt 那边会先发一个 `clicked`、
+                // 再发 `doubleClicked` —— 单击那一下会把播放/暂停**真的切一次**
+                // （不是"切两次净效果不变"，我一开始这么以为，日志打了脸：
+                // 双击进全屏的同时，片子从停着变成了在放）。
+                //
+                // 所以：单击先记着，250 毫秒内没有双击才真的播/暂停；来了双击就
+                // 取消它、只切全屏。代价是"点画面"这一下会晚四分之一秒 ——
+                // 想按得干脆就用控制栏中间那个键（那个是立即的，不走这条路）。
+                onClicked: clickTimer.restart()
+                Timer {
+                    id: clickTimer
+                    interval: 250
+                    onTriggered: Playback.togglePlayPause()
+                }
+
+                // 双击画面 = 全屏 / 退出全屏（传统播放器那套）。
+                onDoubleClicked: {
+                    clickTimer.stop()
+                    var w = Window.window
+                    if (w)
+                        w.toggleFullscreen()
+                }
             }
 
             // ── 中间那块提示 ────────────────────────────────────────────

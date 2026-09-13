@@ -116,6 +116,90 @@ FluWindow {
      */
     property Item backdropItem: null
 
+    // ── 全屏 ─────────────────────────────────────────────────────────────
+    //
+    // **一个事实 + 一张表 + 一处执行。**
+    //
+    // "是不是全屏"这件事只有一处来源：**窗口自己的 `visibility`**（Qt 那边给的）。
+    // 下面这个只读属性就是它 —— 不在别处另立一个开关。理由：窗口的可见状态还可能
+    // 被系统改（比如 Win+↑、或者从全屏里被拽出来），自己另存一份迟早对不上。
+    readonly property bool fullscreen: visibility === Window.FullScreen
+
+    // 全屏这件事只改这几样，别的一个都不许碰：
+    //
+    //   一、窗口的可见状态（交给 Qt：`showFullScreen()` → 无边框、铺满所在那块屏）
+    //   二、顶栏在不在
+    //   三、内容区铺不铺满（`fitsAppBarWindows`：顶栏那 48 像素归不归画面）
+    //
+    // 退出时**逐项还原**，而且是"原样返回"：进去前是最大化就回最大化、是普通就
+    // 回普通，**位置和尺寸也照旧**。
+    //
+    //    窗口的"普通几何"Qt 自己也记着一份，但不赌它 —— 进全屏前自己存一份，
+    //    退出时按存的摆回去。（顺带记一笔：全屏状态下改几何是**不生效**的，
+    //    所以顺序必须是"先退出全屏、再摆位置"。）
+    //
+    // 小窗（还没定）以后就是这个表里多一行：无边框 + 无顶栏 + 置顶 + 固定小尺寸。
+    // 现在**不预留空壳** —— 按这个项目的规矩，不摆按了没反应的开关。
+    property int savedVisibility: Window.Windowed
+
+    function enterFullscreen() {
+        if (fullscreen)
+            return
+
+        savedVisibility = visibility
+
+        topBar.visible = false
+        fitsAppBarWindows = true
+
+        // **先藏一下，再全屏。** 这不是讲究，是必须的：
+        //
+        // 切进全屏时 Windows 会把窗口样式换成无边框（WS_POPUP），而 Qt 那层
+        // 渲染面**不跟着重建** —— 结果是整个窗口什么都渲染不出来（全黑），
+        // 而且退出全屏也回不来（同一块坏掉的表面）。藏一次等于把表面丢掉重建，
+        // 实测一切正常。
+        //
+        // 证据（都在 work/captures 里）：不藏 -> 全屏后抓图全黑（试过 mpv 藏起来、
+        // 云母关掉、去掉启动时那次离屏渲染，都还是黑）；藏一下 -> 全屏后内容都在。
+        // 顺带排除过的：一个最朴素的 Qt 窗口（同样的 OpenGL 后端）全屏是正常的，
+        // 所以问题在"这个窗口 + 库的边框助手"这一层，不在 Qt 本身。
+        visibility = Window.Hidden
+        showFullScreen()
+    }
+
+    function exitFullscreen() {
+        if (!fullscreen)
+            return
+
+        // 同样是"先藏一下"—— 出来的这一步也要重建表面，理由同上。
+        // 位置和尺寸**不自己摆** —— 交给 Qt 自己那份"进全屏之前的普通几何"。
+        // 量过：进去前窗口在 (335,18) 1250×985，出来还是 (335,18) 1250×985。
+        //
+        // （先写过一版"自己存一份再摆回去"，后来发现是多余的：存下来的 x/y 和
+        //   写回去时用的坐标系不一定是一套，反倒容易引入换算坑。拆了。）
+        visibility = Window.Hidden
+        if (savedVisibility === Window.Maximized)
+            showMaximized()
+        else
+            showNormal()
+
+        fitsAppBarWindows = false
+        topBar.visible = true
+    }
+
+    function toggleFullscreen() {
+        if (fullscreen)
+            exitFullscreen()
+        else
+            enterFullscreen()
+    }
+
+    // 全屏时的出口。只在全屏下生效 —— 不然以后设置页想用 Esc 返回就没位置了。
+    Shortcut {
+        sequence: "Escape"
+        enabled: window.fullscreen
+        onActivated: window.exitFullscreen()
+    }
+
     // ── 关窗策略 ─────────────────────────────────────────────────────────
     //
     // FluWindow 自带一个 closeListener：autoDestroy 为真就把窗口销毁，为假就
