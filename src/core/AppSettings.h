@@ -51,6 +51,7 @@ class AppSettings : public QObject
                    NOTIFY broadcastChanged)
     Q_PROPERTY(int castBroadcastInterval READ broadcastIntervalMs
                    WRITE setBroadcastIntervalMs NOTIFY broadcastIntervalChanged)
+    Q_PROPERTY(bool uiMica READ mica WRITE setMica NOTIFY micaChanged)
 
 public:
     explicit AppSettings(QObject *parent = nullptr);
@@ -69,6 +70,18 @@ public:
     QString darkMode() const;
     void setDarkMode(const QString &value);
 
+    /**
+     * 窗口要不要用 Win11 的云母（Mica）取色。
+     *
+     * 开了之后窗口底色跟着桌面壁纸走；关掉就是普通的纯色窗口（浅色 #F3F3F3）。
+     * **页面里"没画底色"的地方会自动跟着这个开关变** —— 这是靠窗口自己的底色
+     * 逻辑做到的（有云母 → 窗口透明；没云母 → 窗口画 #F3F3F3），页面不用各判一次。
+     *
+     * Win10 上设了也不会出错：DWM 那边不认，FluentUI 自己会退回普通窗口。
+     */
+    bool mica() const;
+    void setMica(bool value);
+
     // ── 投送 ─────────────────────────────────────────────────────────────
 
     bool acceptNewCast() const;
@@ -86,6 +99,7 @@ signals:
     void acceptNewCastChanged(bool value);
     void broadcastChanged(bool value);
     void broadcastIntervalChanged(int ms);
+    void micaChanged(bool value);
 
     void logMessage(const QString &text);
 

@@ -34,6 +34,9 @@ Item {
     /** 现在看的是哪个类目：0 = 界面，1 = 投送。 */
     property int category: 0
 
+    /** 这台机器认不认云母（Win10 不认）。由窗口传进来，不认就不摆那张卡片。 */
+    property bool micaAvailable: false
+
     /**
      * 语言列表：显示名 + 传给 UiState 的代码。空字符串 = 跟随系统。
      *
@@ -197,6 +200,31 @@ Item {
                         }
                         onActivated: function (index) {
                             UiState.themeMode = page.themeModes[index].mode
+                        }
+                    }
+                }
+
+                // 窗口底色取不取桌面壁纸的色（Win11 的云母）。不认这个效果的机器
+                // （Win10）不摆这张卡片 —— 摆一个按了没反应的开关不如不摆。
+                SettingsCard {
+                    visible: page.category === 0 && page.micaAvailable
+                    icon: FluentIcons.ColorSolid
+                    title: qsTr("ui_settings_mica")
+                    subtitle: qsTr("ui_settings_mica_desc")
+
+                    // 和上面那个"接受新的投送"一个写法：不绑 checked（一绑就被
+                    // 用户点断），靠 Connections 跟外部变化，点的时候写回 C++。
+                    FluToggleSwitch {
+                        id: switchMica
+                        Component.onCompleted: checked = Settings.uiMica
+                        Connections {
+                            target: Settings
+                            function onMicaChanged() {
+                                switchMica.checked = Settings.uiMica
+                            }
+                        }
+                        clickListener: function () {
+                            Settings.uiMica = !Settings.uiMica
                         }
                     }
                 }

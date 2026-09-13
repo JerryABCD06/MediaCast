@@ -12,6 +12,18 @@ import "components"
 Item {
     id: page
 
+    /**
+     * 这一页是不是正被别的页（设置）整个盖住。
+     *
+     * 盖住的时候要把**看得见的东西**都收起来：底下那块引导面板、下沿那条控制栏。
+     * 为什么非要收不可：设置页的底色是**透明的**（好让窗口底色 / 云母透上来），
+     * 漏在下面的一切都会被看见 —— 包括这页的引导文字。收掉之后这页就只剩那个
+     * 缩成 1×1、但**仍然在渲染**的 mpv 画面，等于空的。
+     *
+     * （mpv 那个画面不能跟着一起收 —— 它一停渲染，输出就死了。）
+     */
+    property bool covered: false
+
     ColumnLayout {
         anchors.fill: parent
         // 页边距由外层（NewUiWindow 里的 FluPivot）统一给，这里不再加一层 ——
@@ -23,7 +35,10 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: 8
-            color: "#10000000"
+            // 有画面的时候垫一层几乎看不见的黑（视频周围那圈）；没画面的时候
+            // **不画底色** —— 让窗口自己的底色露出来（开了云母就是云母，
+            // 没开就是窗口那个 #F3F3F3）。
+            color: Playback.showsPicture ? "#10000000" : "transparent"
             clip: true
             border.width: 1
             border.color: FluTheme.dividerColor
@@ -42,15 +57,28 @@ Item {
             //
             // 所以空着的时候是**盖住**它（见下面那块面板），不是藏起它。
             MpvQmlItem {
-                anchors.fill: parent
                 // Player 是 main.cpp 注册进来的播放器。画面往哪出由 C++ 那边的
                 // 输出模式决定，这里只负责"把它画出来"。
                 core: Player
 
-                // **这里故意没有 visible 绑定。** 以前写的是 `visible: !Playback.idle`，
+                // ── 它的大小：有画面就铺满，没画面就缩到 1 像素 ──────────────
+                //
+                // **故意没有 visible 绑定。** 以前写的是 `visible: !Playback.idle`，
                 // 结果片子自然播完（状态变 Stopped）时它自己藏了起来 —— 恰好踩中上面
                 // 说的那个坑：一停止渲染，mpv 的视频输出就死了，再点播放只会得到一块
-                // 纯黑。空着的时候靠下面那块面板**盖住**它就行，它自己一直画着。
+                // 纯黑。
+                //
+                // 但"藏"和"缩"是两回事：**缩到 1×1 它仍然在场景里、仍然每帧被
+                // 渲染**，所以 mpv 那边不会死；而画面上只剩一个看不见的点，底下那块
+                // 区域就空出来了 —— 放音乐、空闲这两种状态下，露出来的就是窗口自己的
+                // 底色（开了云母就是云母）。这样就不用再拿一块不透明的面板去盖黑画面。
+                //
+                // 位置钉在左上角，保证那个 1 像素还在窗口里（丢到窗口外面就不渲染了，
+                // 等于又走回"藏起来"那条老路）。
+                x: 0
+                y: 0
+                width: Playback.showsPicture ? parent.width : 1
+                height: Playback.showsPicture ? parent.height : 1
             }
 
             // ── 点画面 = 播放/暂停 ──────────────────────────────────────
@@ -83,8 +111,14 @@ Item {
             // 看起来是"这一块空着"，而不是贴了一张白纸上去。
             Rectangle {
                 anchors.fill: parent
-                color: FluTheme.backgroundColor
-                visible: !Playback.showsPicture
+                // **不画底色** —— 这上面的字直接落在窗口底色（或云母）上。
+                //
+                // 以前这里是一块不透明的 FluTheme.backgroundColor，作用有两个：
+                // 盖住 mpv 那块黑、给字当背景。现在黑画面不用盖了（上面把它缩到了
+                // 1 像素），所以这层底色也可以去掉 —— 顺带就得到了"底色跟窗口走"：
+                // 没开云母是 #F3F3F3，开了是云母。
+                color: "transparent"
+                visible: !Playback.showsPicture && !page.covered
 
                 ColumnLayout {
                     anchors.centerIn: parent
@@ -147,7 +181,7 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                visible: Playback.hasMedia
+                visible: Playback.hasMedia && !page.covered
             }
         }
 

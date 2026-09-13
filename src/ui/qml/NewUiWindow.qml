@@ -27,9 +27,8 @@ FluWindow {
     // 画一层假的。可选值还有 "mica-alt"（资源管理器那种）、"acrylic"、
     // "dwm-blur"（Win10 也有）、"normal"（关，也是原来的默认值）。
     //
-    // 注意**只有没画底色的地方才透得出来**：顶栏是故意不画背景的，所以那儿最
-    // 明显；投屏页被画面（或者空闲时那块指引面板）盖着，看不出来。
-    effect: "mica"
+    // **开关在设置里**（"开启 Mica 取色效果"，存进配置文件）。关掉就是普通窗口。
+    effect: Settings.uiMica ? "mica" : "normal"
 
     // ── 关窗策略 ─────────────────────────────────────────────────────────
     //
@@ -166,6 +165,9 @@ FluWindow {
 
         CastPage {
             anchors.fill: parent
+            // 设置页盖着的时候，把这一页看得见的东西收起来（见 CastPage 里 covered
+            // 那段）。不收的话，设置页那层透明底色会把它们透出来。
+            covered: window.page === 1
         }
 
         // 设置页：盖满整页，所以下面那些控件点不到；自己带一层不透明底色，
@@ -173,7 +175,18 @@ FluWindow {
         Rectangle {
             anchors.fill: parent
             visible: window.page === 1
-            color: FluTheme.backgroundColor
+            // **这一页的底色：有云母就交给云母，没有就用窗口自己的灰（#F3F3F3）。**
+            //
+            // 做成透明是在"借"窗口的底色：窗口那边已经算好了 —— 有云母时它自己
+            // 透明（云母透出来），没云母时它画 #F3F3F3。所以这里不用自己判断两套，
+            // 交给窗口就行（这也是为什么颜色不再是 FluTheme.backgroundColor：
+            // 那个是纯白，和他要的 #F3F3F3 不是一回事）。
+            //
+            // **条件是"底下没有画面"**：设置页底下压着投屏页，如果那儿正在放片子，
+            // 透明就会把画面透上来（很花）。那时候退回不透明的灰。
+            color: (Settings.uiMica && !Playback.showsPicture)
+                   ? "transparent"
+                   : FluTheme.windowActiveBackgroundColor
 
             // **先吃掉这一页上的点击。**
             //
@@ -189,6 +202,9 @@ FluWindow {
 
             SettingsPage {
                 anchors.fill: parent
+                // 这台机器认不认云母（Win10 的 availableEffects 里没有它）。
+                // 不认就把那张卡片藏起来，别摆一个按了没反应的开关。
+                micaAvailable: window.availableEffects.indexOf("mica") >= 0
             }
         }
     }

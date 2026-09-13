@@ -64,6 +64,8 @@
     "ui_settings_theme_system": "Follow system",
     "ui_settings_theme_light": "Light",
     "ui_settings_theme_dark": "Dark",
+    "ui_settings_mica": "Enable Mica tint effect",
+    "ui_settings_mica_desc": "The window background takes its tint from the desktop wallpaper (Windows 11). Turn off for a plain solid background.",
     "ui_settings_accept": "Accept new casts",
     "ui_settings_accept_desc": "When off, this PC disappears from the device list on your phone (equivalent to Do Not Disturb).",
     "ui_settings_advanced": "Advanced (usually no need to change)",
