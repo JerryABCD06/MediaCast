@@ -12,18 +12,6 @@ import "components"
 Item {
     id: page
 
-    /**
-     * 这一页是不是正被别的页（设置）整个盖住。
-     *
-     * 盖住的时候要把**看得见的东西**都收起来：底下那块引导面板、下沿那条控制栏。
-     * 为什么非要收不可：设置页的底色是**透明的**（好让窗口底色 / 云母透上来），
-     * 漏在下面的一切都会被看见 —— 包括这页的引导文字。收掉之后这页就只剩那个
-     * 缩成 1×1、但**仍然在渲染**的 mpv 画面，等于空的。
-     *
-     * （mpv 那个画面不能跟着一起收 —— 它一停渲染，输出就死了。）
-     */
-    property bool covered: false
-
     ColumnLayout {
         anchors.fill: parent
         // 页边距由外层（NewUiWindow 里的 FluPivot）统一给，这里不再加一层 ——
@@ -118,7 +106,7 @@ Item {
                 // 1 像素），所以这层底色也可以去掉 —— 顺带就得到了"底色跟窗口走"：
                 // 没开云母是 #F3F3F3，开了是云母。
                 color: "transparent"
-                visible: !Playback.showsPicture && !page.covered
+                visible: !Playback.showsPicture
 
                 ColumnLayout {
                     anchors.centerIn: parent
@@ -181,7 +169,7 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                visible: Playback.hasMedia && !page.covered
+                visible: Playback.hasMedia
             }
         }
 

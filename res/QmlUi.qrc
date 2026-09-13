@@ -26,6 +26,11 @@
         <file alias="components/AppTopBar.qml">../src/ui/qml/components/AppTopBar.qml</file>
         <file alias="components/SettingsCard.qml">../src/ui/qml/components/SettingsCard.qml</file>
         <!--
+            "自己画的云母底"。谁需要实心底（窗口那一层、压在别的页面上的页面），
+            谁就摆一个 —— 见那个文件的头注释，里面写了为什么不用系统那套。
+        -->
+        <file alias="components/MicaBackdrop.qml">../src/ui/qml/components/MicaBackdrop.qml</file>
+        <!--
             只有图标、没有文字的按钮。它自带悬停提示 —— 顶栏那两个（信息/设置）
             和画面下沿控制栏那一排都用它。
         -->

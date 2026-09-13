@@ -30,6 +30,35 @@ FluWindow {
     // **开关在设置里**（"开启 Mica 取色效果"，存进配置文件）。关掉就是普通窗口。
     effect: Settings.uiMica ? "mica" : "normal"
 
+    // ── 窗口的底：我们自己画 ──────────────────────────────────────────────
+    //
+    // 换掉 FluWindow 自带的那层（它只会在"窗口透明"和"画一块灰"之间二选一），
+    // 改成我们自己那份云母底 —— 和各个页面用的是**同一个组件、同一套参数**。
+    //
+    // 为什么非要自己画：系统云母只能从"没画东西的地方"透出来，于是每个要挡住
+    // 下层内容的页面都得自己想一遍"我底下是什么、它会不会漏上来"。换成自己画
+    // 之后，规则简单了 —— **谁要底谁摆一块，摆上去就是实心的**。
+    //
+    // 注意这里还留着上面那行 effect：系统云母仍然开着，只是被这块底盖住了。
+    // 留着是为了 availableEffects（"这台机器认不认云母"）仍然有意义，以及万一
+    // 哪天要退回系统那套，改动只有一行。
+    background: Component {
+        MicaBackdrop {
+            id: windowBackdrop
+            Component.onCompleted: window.backdropItem = windowBackdrop
+            Component.onDestruction: window.backdropItem = null
+        }
+    }
+
+    /**
+     * 窗口那层云母（就是上面 background 里那个实例）。
+     *
+     * 页面上的底**不自己造壁纸图**，都借它这张（见 MicaBackdrop 头注释里那段
+     * 为什么）。所以全窗口只有一张壁纸图、一套参数，各页面的底算出来才和它
+     * 逐像素一致、拼起来没有接缝。
+     */
+    property Item backdropItem: null
+
     // ── 关窗策略 ─────────────────────────────────────────────────────────
     //
     // FluWindow 自带一个 closeListener：autoDestroy 为真就把窗口销毁，为假就
@@ -165,32 +194,31 @@ FluWindow {
 
         CastPage {
             anchors.fill: parent
-            // 设置页盖着的时候，把这一页看得见的东西收起来（见 CastPage 里 covered
-            // 那段）。不收的话，设置页那层透明底色会把它们透出来。
-            covered: window.page === 1
         }
 
-        // 设置页：盖满整页，所以下面那些控件点不到；自己带一层不透明底色，
+        // 设置页：盖满整页，所以下面那些控件点不到；自己带一块实心底，
         // 否则画面会从卡片缝里透出来。
-        Rectangle {
+        Item {
             anchors.fill: parent
             visible: window.page === 1
-            // **这一页的底色：有云母就交给云母，没有就用窗口自己的灰（#F3F3F3）。**
+
+            // **这一页的底：自己画一块。**
             //
-            // 做成透明是在"借"窗口的底色：窗口那边已经算好了 —— 有云母时它自己
-            // 透明（云母透出来），没云母时它画 #F3F3F3。所以这里不用自己判断两套，
-            // 交给窗口就行（这也是为什么颜色不再是 FluTheme.backgroundColor：
-            // 那个是纯白，和他要的 #F3F3F3 不是一回事）。
+            // 以前这里是不透明的灰、或者"有云母时干脆透明去借窗口的"，那条路要求
+            // 投屏页把看得见的东西全收起来（CastPage.covered）—— 加一页就要多想
+            // 一层"我底下压着什么"。换成实心的底之后，底下压着什么、它在不在放
+            // 片子，全都不用管了。
             //
-            // **条件是"底下没有画面"**：设置页底下压着投屏页，如果那儿正在放片子，
-            // 透明就会把画面透上来（很花）。那时候退回不透明的灰。
-            color: (Settings.uiMica && !Playback.showsPicture)
-                   ? "transparent"
-                   : FluTheme.windowActiveBackgroundColor
+            // 摆在最下面：它只是底，上面的字和控件都得压在它上面。
+            MicaBackdrop {
+                anchors.fill: parent
+                // 借窗口那层那张壁纸图 —— 见 MicaBackdrop 头注释里那段"为什么"。
+                wallpaperItem: window.backdropItem ? window.backdropItem.ownWallpaperItem : null
+            }
 
             // **先吃掉这一页上的点击。**
             //
-            // Rectangle **不吃鼠标事件** —— 没有这一层的话，点在设置页的空白处
+            // 光有底色的 Item **不吃鼠标事件** —— 没有这一层的话，点在设置页的空白处
             // （四周留白、左边那栏下方的空区）会**穿到下面投屏页**，落到那个
             // "点画面 = 播放/暂停"的 MouseArea 上：看着在设置页里，片子却被暂停了。
             //
