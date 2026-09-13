@@ -1,9 +1,10 @@
 # Media Cast Receiver
 
 > [!WARNING]
-> **Early Development**
+> **Early Development / 早期开发**
 >
-> MediaCast is currently in early development. Pre-built releases are not yet available, but you can build it from source.
+> Media Cast is currently in early development. Pre-built releases are not yet available, but you can build it from source.
+> Media Cast 处于早期开发阶段，暂不提供预编译的可下载版本，您可以从源码自行编译。
 
 Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 
