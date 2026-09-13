@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
+
 #include "MpvCore.h"
 
 #include <mpv/client.h>

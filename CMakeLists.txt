@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
+
 cmake_minimum_required(VERSION 3.21)
 
 # RC 是资源编译器。res/MCast.rc 里放的是程序图标和版本信息 ——

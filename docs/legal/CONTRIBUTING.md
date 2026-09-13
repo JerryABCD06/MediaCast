@@ -30,11 +30,18 @@ Generated build artifacts should not normally be committed.
 
 ## Copyright and Licensing
 
+The project is licensed under **GPL-3.0-or-later** (see `LICENSE` at the repository root).
+
+By submitting a contribution — a patch, a pull request, or anything else — you agree
+to license that contribution under GPL-3.0-or-later, and you confirm that you have the
+right to do so. Contributions come in under the same license the project goes out
+under, so **no separate contributor license agreement is required, and no copyright
+assignment takes place**: you keep the copyright in what you wrote, and the project can
+still distribute it as part of the whole.
+
 Contributors should only submit code, documentation, assets, or other material that they are permitted to contribute.
 
 Do not submit confidential third-party source code, leaked credentials, private certificates, proprietary assets, or material copied from software that you are not authorized to reuse.
-
-The project's final contribution and licensing policy will be determined together with the project's chosen open-source license.
 
 ## Pull Requests
 
