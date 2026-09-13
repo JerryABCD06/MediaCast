@@ -28,8 +28,15 @@ Item {
             // 没开就是窗口那个 #F3F3F3）。
             color: Playback.showsPicture ? "#10000000" : "transparent"
             clip: true
-            border.width: 1
-            border.color: FluTheme.dividerColor
+
+            // **这里原来有一圈 1px 的边框**（`border.color: FluTheme.dividerColor`），
+            // 那是这个框还带外边距、看起来像张卡片的时候留下的。后来他要求"顶栏
+            // 以下整块都归画面"，框就贴到窗口边上了 —— 那圈边框于是只剩顶边那一条
+            // 横线看得见（正压在标题栏下面），左、右、下三条都落在窗口边上。
+            //
+            // 看着像一条来路不明的分隔线，所以去掉了。要恢复的话就两行：
+            //     border.width: 1
+            //     border.color: FluTheme.dividerColor
 
             // ── 画面 ────────────────────────────────────────────────────
             //

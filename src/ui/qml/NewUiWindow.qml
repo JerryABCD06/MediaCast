@@ -20,18 +20,20 @@ FluWindow {
     width: 1000
     height: 740
 
-    // **窗口背景：Win11 的云母（Mica）。**
+    // ── 系统那个 backdrop：现在管的是窗口边框 ─────────────────────────────
     //
     // 这是 FluentUI 自带的（`FluFrameless` 把它暴露成 effect 属性），内部走的是
-    // `DwmSetWindowAttribute(hwnd, 38, DWMSBT_MAINWINDOW)` —— 系统那套，不是自己
-    // 画一层假的。可选值还有 "mica-alt"（资源管理器那种）、"acrylic"、
-    // "dwm-blur"（Win10 也有）、"normal"（关，也是原来的默认值）。
+    // `DwmSetWindowAttribute(hwnd, 38, DWMSBT_MAINWINDOW)`。可选值还有
+    // "mica-alt"（资源管理器那种）、"acrylic"、"dwm-blur"（Win10 也有）、
+    // "normal"（关，也是原来的默认值）。
     //
-    // **开关在设置里**（"开启 Mica 取色效果"，存进配置文件）。关掉就是普通窗口。
-    // **这一行还留着，而且它现在不是"没用的"** —— 试过把它写死成 "normal"：
-    // 窗口那圈边框会跟着变（边上多出一道 1px 的线、圆角和阴影也跟着变），
-    // 因为我们自己画的那层只盖住客户区，**窗口的边框/圆角是 DWM 按这个
-    // backdrop 类型给的**。所以它现在是"给窗口定边框"用的，云母本身被盖住了。
+    // **底色早就不是它给的了** —— 底色是我们自己画的（见下面那个 MicaBackdrop），
+    // 它被结结实实地盖住。但这一行**不能删**：试过把它写死成 "normal"，窗口那圈
+    // 边框当场就变了（边上多出一道 1px 的线，圆角和阴影也跟着变）—— 因为我们的
+    // 那层只盖得住客户区，**窗口的边框/圆角/阴影是 DWM 按这个 backdrop 类型给的**。
+    //
+    // 所以它现在的职责是"给窗口定边框"。开关还是设置里那个（读的是同一个
+    // `Settings.uiMica`）：关掉之后窗口回到普通边框，底色仍旧是我们画的那块灰。
     effect: Settings.uiMica ? "mica" : "normal"
 
     // ── 窗口的底：我们自己画 ──────────────────────────────────────────────
@@ -43,9 +45,7 @@ FluWindow {
     // 下层内容的页面都得自己想一遍"我底下是什么、它会不会漏上来"。换成自己画
     // 之后，规则简单了 —— **谁要底谁摆一块，摆上去就是实心的**。
     //
-    // 注意这里还留着上面那行 effect：系统云母仍然开着，只是被这块底盖住了。
-    // 留着是为了 availableEffects（"这台机器认不认云母"）仍然有意义，以及万一
-    // 哪天要退回系统那套，改动只有一行。
+    // 上面那行 effect 还留着，理由见它自己的注释（管窗口边框，不管底色）。
     background: Component {
         MicaBackdrop {
             id: windowBackdrop
@@ -236,9 +236,6 @@ FluWindow {
 
             SettingsPage {
                 anchors.fill: parent
-                // 这台机器认不认云母（Win10 的 availableEffects 里没有它）。
-                // 不认就把那张卡片藏起来，别摆一个按了没反应的开关。
-                micaAvailable: window.availableEffects.indexOf("mica") >= 0
             }
         }
     }

@@ -65,7 +65,7 @@
     "ui_settings_theme_light": "浅色",
     "ui_settings_theme_dark": "深色",
     "ui_settings_mica": "开启 Mica 取色效果",
-    "ui_settings_mica_desc": "窗口底色跟着桌面壁纸取色（Windows 11）。关掉就是普通的纯色窗口",
+    "ui_settings_mica_desc": "窗口底色跟着桌面壁纸取色。关掉就是普通的纯色窗口",
     "ui_settings_accept": "接受新的投送",
     "ui_settings_accept_desc": "关闭后，这台电脑将从手机的可投送设备列表中消失（相当于勿扰模式）",
     "ui_settings_advanced": "高级（通常无需修改）",

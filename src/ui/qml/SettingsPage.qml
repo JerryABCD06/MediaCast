@@ -34,9 +34,6 @@ Item {
     /** 现在看的是哪个类目：0 = 界面，1 = 投送。 */
     property int category: 0
 
-    /** 这台机器认不认云母（Win10 不认）。由窗口传进来，不认就不摆那张卡片。 */
-    property bool micaAvailable: false
-
     /**
      * 语言列表：显示名 + 传给 UiState 的代码。空字符串 = 跟随系统。
      *
@@ -204,10 +201,14 @@ Item {
                     }
                 }
 
-                // 窗口底色取不取桌面壁纸的色（Win11 的云母）。不认这个效果的机器
-                // （Win10）不摆这张卡片 —— 摆一个按了没反应的开关不如不摆。
+                // 窗口底色取不取桌面壁纸的色。
+                //
+                // **这张卡片不再看系统认不认云母了。** 以前它是"只有 Win11 认，
+                // 别的机器藏起来"，因为底色是系统的云母给的；现在底色是我们自己
+                // 用壁纸算的（见 MicaBackdrop），Win10 一样能开 —— 藏起来反而
+                // 把人挡在外面。
                 SettingsCard {
-                    visible: page.category === 0 && page.micaAvailable
+                    visible: page.category === 0
                     icon: FluentIcons.ColorSolid
                     title: qsTr("ui_settings_mica")
                     subtitle: qsTr("ui_settings_mica_desc")

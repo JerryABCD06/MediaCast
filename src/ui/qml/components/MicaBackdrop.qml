@@ -151,10 +151,14 @@ Item {
                                          width,
                                          height)
 
-    /** 云母开关开着，而且这台机器认云母（Win10 的 availableEffects 里没有它）。 */
-    readonly property bool micaOn: micaEnabled
-                                   && win !== null
-                                   && win.availableEffects.indexOf("mica") >= 0
+    /**
+     * 开着没有。
+     *
+     * **这里不再问 `win.availableEffects`（"这台机器认不认云母"）** —— 那是底色
+     * 还靠系统云母给的时候留下的门槛（只有 Win11 认）。现在底色是我们自己拿壁纸
+     * 算的，Win10 一样算得出来，再拿这个挡着就等于白做一个功能。
+     */
+    readonly property bool micaOn: micaEnabled && win !== null
 
     /** 拿来裁的那张图算好了没有（壁纸解码完没有）。 */
     readonly property bool canvasReady: {
