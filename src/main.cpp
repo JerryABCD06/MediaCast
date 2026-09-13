@@ -15,6 +15,7 @@
 
 #include "core/LibMpvPlayer.h"
 #include "core/AppSettings.h"
+#include "core/LegalDocs.h"
 #include "core/MpvCore.h"
 #include "core/MpvQmlItem.h"
 #include "core/PlaybackController.h"
@@ -116,6 +117,20 @@ int main(int argc, char *argv[])
     // 名字叫 Settings 而不是 AppSettings：QML 那边写 `Settings.castNewCast`
     // 比 `AppSettings.uiDarkMode` 顺眼，而类名的事是 C++ 的事。
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Settings", &settings);
+
+    // ── 法律文本 ─────────────────────────────────────────────────────────
+    //
+    // 隐私 / 法律 / 商标 / 编解码器那几份声明，以及第三方组件的许可全文。
+    // 它只做两件事：告诉界面"有哪些、叫什么"，以及按名字把文件读出来 ——
+    // 文本来自 exe 旁边的 legal/ 和 licenses/，不编进 exe（理由见 LegalDocs.h）。
+    //
+    // 构造时会自己查一遍文件在不在，缺了就在日志里点名 —— 发布包缺许可文本是
+    // 合规问题，不该等用户点开才发现。
+    LegalDocs legal;
+    // 和 Tr 一个套路：先构造、接日志、再 scan() —— 自检那几行才不会白喊。
+    QObject::connect(&legal, &LegalDocs::logMessage, writeLog);
+    legal.scan();
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Legal", &legal);
 
     // 名字分两个，别混：
     //   applicationName        —— 给机器看的。决定配置目录（%LOCALAPPDATA%\MCast）之类。

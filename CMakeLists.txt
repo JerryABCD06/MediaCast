@@ -68,6 +68,9 @@ qt_add_executable(MCast
     # 语言：有哪些、现在用哪个、哪个键对应哪句话。界面和托盘都走它。
     src/core/Tr.h
     src/core/Tr.cpp
+    # 法律文本的入口：界面要什么它给什么，不碰界面（见文件头注释）
+    src/core/LegalDocs.h
+    src/core/LegalDocs.cpp
     src/core/LibMpvPlayer.h
     src/core/LibMpvPlayer.cpp
     src/core/MpvMediaPlayer.h
@@ -195,3 +198,26 @@ add_custom_command(TARGET MCast POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/lang"
             "$<TARGET_FILE_DIR:MCast>/lang"
     COMMENT "复制语言文件到构建目录")
+
+# ── 法律文本与第三方许可 ────────────────────────────────────────────────
+#
+# 这两样**必须跟着程序走**：GPL 和 LGPL 都要求分发时附带许可文本，而且
+# 程序里的"法律"页要当场读它们（见 src/core/LegalDocs.h 里为什么读文件、
+# 不编进 qrc）。开发目录里也拷一份 —— 不然本地跑起来法律页是空的，
+# 而且启动自检会一直报"许可文件缺失"。
+#
+# legal/ 只放**面向用户**的那几份；内部维护用的（CHECKLIST、RELEASE-NOTICES、
+# SUPPORT、CODE_OF_CONDUCT）留在 docs/legal/ 不下发。
+add_custom_command(TARGET MCast POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:MCast>/legal"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/PRIVACY.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/LEGAL-NOTICES.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/TRADEMARKS.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/CODECS.md"
+            "$<TARGET_FILE_DIR:MCast>/legal"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
+            "$<TARGET_FILE_DIR:MCast>/licenses"
+    COMMENT "复制法律声明与第三方许可到构建目录")
