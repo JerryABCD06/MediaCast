@@ -44,8 +44,10 @@ struct NowPlaying
 {
     Q_GADGET
     Q_PROPERTY(QString title MEMBER title)
+    Q_PROPERTY(QString subtitle MEMBER subtitle)
     Q_PROPERTY(QString artist MEMBER artist)
     Q_PROPERTY(QString album MEMBER album)
+    Q_PROPERTY(QString lyrics MEMBER lyrics)
 
 public:
     /**
@@ -58,9 +60,29 @@ public:
 
     MediaKind kind = MediaKind::Unknown;
 
+    /**
+     * 标题和副标题是**算好的显示文本**（界面直接显示），其余几个是原始字段。
+     *
+     * 兜底出来的字跟语言走（"未知" / "Unknown"），所以切语言的时候会被重算 ——
+     * 见 PlaybackController::retranslate()。
+     */
     QString title;
+
+    /**
+     * 第二行写什么。**按类型分工，规则在 PlaybackController 里**：
+     * 音频看歌手（副标题在音频里没意义），视频和图片看副标题（那儿的"艺术家"
+     * 是演员/导演，含义完全不同）。
+     */
+    QString subtitle;
+
     QString artist;
     QString album;
+
+    /**
+     * 文件里带的歌词。**现在还没有地方显示它**，先读进来备着 ——
+     * 歌词只可能在文件里（DLNA 协议没有这一项），而文件里也只有音频可能有。
+     */
+    QString lyrics;
 
     /**
      * 有没有拿到至少一个标题。
@@ -90,6 +112,19 @@ QString mediaKindLabel(MediaKind kind);
  * 具体译文在 lang/*.json 里。
  */
 QString mediaKindKey(MediaKind kind);
+
+/**
+ * 这个值是不是一条"我没填"的占位符（unknown / none / 未知 ……）。
+ *
+ * 不是洁癖：实测 vivo 相册投图片时，DIDL 里固定带一条 `upnp:artist = "unkown"`
+ * （它自己拼错了）。照单全收地显示出去，面板上就挂着一条 "unkown"，看着像程序
+ * 坏了 —— 那是**它的**错，替它背锅没道理。文件标签那边也会遇到同样的东西，
+ * 所以这个判断放在这儿，两边共用。
+ *
+ * 认不出来就返回 false，也就是照常显示：宁可多显示一条可疑的值，也不要把真的
+ * 歌手名字误伤掉 —— 所以那张表只收最不可能撞车的几个。
+ */
+bool looksLikePlaceholder(const QString &text);
 
 /**
  * 去掉末尾的**已知媒体扩展名**："a.mp4" → "a"。

@@ -101,6 +101,38 @@ QString mediaKindKey(MediaKind kind)
     return QString();
 }
 
+bool looksLikePlaceholder(const QString &text)
+{
+    static const QStringList junk = {
+        QStringLiteral("unknown"), QStringLiteral("unkown"),
+        QStringLiteral("none"),    QStringLiteral("null"),
+        QStringLiteral("n/a"),     QStringLiteral("na"),
+        QStringLiteral("-"),       QStringLiteral("--"),
+        QStringLiteral("未知"),    QStringLiteral("未知艺术家"),
+        QStringLiteral("未知歌手"), QStringLiteral("未知专辑"),
+        QStringLiteral("无"),
+    };
+
+    // 占位值还有好几种包装，都得认：
+    //
+    //   unknown            直白型
+    //   <unknown>          用尖括号包起来（BubbleUPnP 就是这个）
+    //   &lt;unknown&gt;  连尖括号一起转义了 —— 元数据里的实体只解一层，
+    //                      到我们手上就是这副样子（日志里实测到的）
+    //
+    // 所以：把外层的括号/引号剥掉再比。转义那一层的处理在协议层（它才知道
+    // 自己那套转义规则），这儿只管"剥壳 + 查表"。
+    QString candidate = text.trimmed();
+    while (candidate.size() >= 2
+           && ((candidate.startsWith(QLatin1Char('<')) && candidate.endsWith(QLatin1Char('>')))
+               || (candidate.startsWith(QLatin1Char('"'))
+                   && candidate.endsWith(QLatin1Char('"'))))) {
+        candidate = candidate.mid(1, candidate.size() - 2).trimmed();
+    }
+
+    return junk.contains(candidate.toLower());
+}
+
 namespace {
 
 // 三张表放在这儿给两处用：一处是"猜类型"，一处是"去掉扩展名"。

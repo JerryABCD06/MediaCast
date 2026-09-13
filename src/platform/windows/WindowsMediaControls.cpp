@@ -264,19 +264,13 @@ void WindowsMediaControls::pushDisplay()
     // 只可能是"连类型都认不出来"。那时候给个"未知"，别让面板上留一块空白。
     const QString title = info.title.isEmpty() ? tr("media_unknown") : info.title;
 
-    // 副标题：有歌手显示歌手，没有显示专辑，都没有就是"未知"。
+    // 副标题：控制器那边已经按内容类型算好了（音频看歌手、视频图片看副标题，
+    // 拿不到就是「未知」），这儿只管拼来源。
     //
-    // **不带协议名。** 面板是给用户看的东西，没必要让他看见 "DLNA" 这种实现
-    // 细节（以前这儿直接写 "DLNA 投送"）。来源只用说清"投送"还是"本地播放"，
+    // **不带协议名。** 面板是给用户看的，没必要让他看见 "DLNA" 这种实现细节
+    // （以前这儿直接写 "DLNA 投送"）。来源只说清"投送"还是"本地播放"，
     // 拼成「来源 - 副标题」。
-    //
-    // 视频和图片没有"歌手"这个概念，系统在那个位置统一叫"副标题"，所以三种
-    // 类型写的是同一个值。
-    QString sub = info.artist;
-    if (sub.isEmpty())
-        sub = info.album;
-    if (sub.isEmpty())
-        sub = tr("media_unknown");
+    const QString sub = info.subtitle;
 
     const QByteArray sourceKey = info.source == MediaSource::Local
                                      ? QByteArrayLiteral("media_source_local")

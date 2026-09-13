@@ -126,47 +126,15 @@ QString actionFromBody(const QString &body)
 }
 
 /**
- * 控制点有没有填一个占位的"作者/专辑"。
+ * 占位符判断，但把"转义"那一层也认上。
  *
- * 这个不是洁癖。实测 vivo 相册投图片时，DIDL 里固定带一条
- * upnp:artist = "unkown"（它自己拼错了）。我们照单全收地显示出去，任务栏那个面板
- * 上就挂着一条"unkown"，看着像程序坏了 —— 而且那是**它的**拼写错误，替它背锅没道理。
- *
- * 认不出来就返回 false，也就是照常显示；宁可多显示一条可疑的值，也不要把真的
- * 歌手名字误伤掉，所以这张表只收最不可能撞车的几个。
+ * 判据本身（哪些算占位符）在 NowPlaying 里 —— 文件自带的标签也会遇到同样的
+ * 东西，两边共用一张表。这儿多一步是因为 DIDL 里的实体只解一层，所以"原样"
+ * 和"解过转义"两种形态都得比一遍（`<unknown>` 和 `&lt;unknown&gt;` 都见过）。
  */
-bool looksLikePlaceholder(const QString &text)
+bool looksLikePlaceholderInDidl(const QString &text)
 {
-    static const QStringList junk = {
-        QStringLiteral("unknown"), QStringLiteral("unkown"),
-        QStringLiteral("none"),    QStringLiteral("null"),
-        QStringLiteral("n/a"),     QStringLiteral("na"),
-        QStringLiteral("-"),       QStringLiteral("--"),
-        QStringLiteral("未知"),    QStringLiteral("未知艺术家"),
-        QStringLiteral("未知歌手"), QStringLiteral("未知专辑"),
-        QStringLiteral("无"),
-    };
-    // 占位值还有好几种包装，都得认：
-    //
-    //   unknown            直白型
-    //   <unknown>          用尖括号包起来（BubbleUPnP 就是这个）
-    //   &lt;unknown&gt;  连尖括号一起转义了 —— 元数据里的实体只解一层，
-    //                      到我们手上就是这副样子（日志里实测到的）
-    //
-    // 所以：先按原样比一遍，再解一层转义比一遍，比之前把外层的括号/引号剥掉。
-    const QStringList candidates = { text.trimmed(), UpnpXml::unescapeText(text.trimmed()) };
-    for (QString candidate : candidates) {
-        while (candidate.size() >= 2
-               && ((candidate.startsWith(QLatin1Char('<')) && candidate.endsWith(QLatin1Char('>')))
-                   || (candidate.startsWith(QLatin1Char('"'))
-                       && candidate.endsWith(QLatin1Char('"'))))) {
-            candidate = candidate.mid(1, candidate.size() - 2).trimmed();
-        }
-        if (junk.contains(candidate.toLower()))
-            return true;
-    }
-
-    return false;
+    return looksLikePlaceholder(text) || looksLikePlaceholder(UpnpXml::unescapeText(text));
 }
 
 } // namespace
@@ -331,14 +299,34 @@ PlaybackController::MediaRequest SoapHandler::mediaRequestFromSoap(const QString
     request.artist = tagValue(metadata, QStringLiteral("upnp:artist"));
     if (request.artist.isEmpty())
         request.artist = tagValue(metadata, QStringLiteral("dc:creator"));
-    if (looksLikePlaceholder(request.artist)) {
+    if (looksLikePlaceholderInDidl(request.artist)) {
         emit logMessage(QStringLiteral("控制点给的作者是占位符「%1」，忽略").arg(request.artist));
         request.artist.clear();
     }
 
     request.album = tagValue(metadata, QStringLiteral("upnp:album"));
-    if (looksLikePlaceholder(request.album))
+    if (looksLikePlaceholderInDidl(request.album))
         request.album.clear();
+
+    // ── 副标题（视频/图片那一路）─────────────────────────────────────────
+    //
+    // 音频的第二行显示的是**歌手**，视频和图片没有"歌手"这个概念 —— 那儿该写
+    // 一句"这是什么"。控制点放这句话的地方没有统一：规范里有 dc:description，
+    // 有些 App 用厂商私有的 upnp:subtitle，长的还有 longDescription。按这个顺序
+    // 都试一遍，谁先有就用谁。
+    request.description = tagValue(metadata, QStringLiteral("upnp:subtitle"));
+    if (request.description.isEmpty())
+        request.description = tagValue(metadata, QStringLiteral("dc:description"));
+    if (request.description.isEmpty())
+        request.description = tagValue(metadata, QStringLiteral("upnp:longDescription"));
+    if (looksLikePlaceholderInDidl(request.description)) {
+        emit logMessage(QStringLiteral("控制点给的副标题是占位符「%1」，忽略")
+                            .arg(request.description));
+        request.description.clear();
+    } else {
+        // 换行/多余空格压平 —— 这一行是要显示在界面上的，中间断成两行不好看。
+        request.description = request.description.simplified();
+    }
 
     return request;
 }

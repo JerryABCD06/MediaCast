@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 #include <QVector>
 
 class QTimer;
@@ -185,6 +186,9 @@ public:
         QString title;         // 协议层能拿到就填
         QString artist;
         QString album;
+        // 视频/图片的"这是什么"那一句（DIDL 里的 dc:description 之类）。
+        // 音频不用它 —— 那儿的第二行是歌手。
+        QString description;
         MediaKind kind = MediaKind::Unknown;
     };
 
@@ -416,6 +420,15 @@ private:
     NowPlaying buildNowPlaying(const MediaRequest &request, const MediaSource &source,
                                bool quiet = false);
 
+    /**
+     * 拿当前这条请求重算一遍"正在播放什么"，然后把信号重发一次。
+     *
+     * 两处会用到：切语言（兜底那几句要换语言）、以及**文件标签到位**
+     * （标题/歌手/歌词可能是文件里才有的，而它们是后到的 —— 投送一开始只有
+     * 协议给的那份元数据）。
+     */
+    void rebuildNowPlaying();
+
     MediaPlayer *m_player = nullptr;
 
     /**
@@ -444,4 +457,13 @@ private:
     PlayMode m_playMode = PlayMode::Normal;
 
     NowPlaying m_nowPlaying;
+
+    /**
+     * **文件自带的**标签（标题/艺术家/专辑/歌词……），后到的东西。
+     *
+     * 和协议给的那份元数据不是一回事：投送一开始只有协议的，文件得等打开了
+     * 才知道里面写了什么。所以它是"补空"用的 —— 协议没给的那几样，从这儿找。
+     * 见 buildNowPlaying。
+     */
+    QVariantMap m_fileTags;
 };

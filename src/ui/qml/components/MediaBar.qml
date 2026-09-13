@@ -170,20 +170,13 @@ Item {
 
                 FluText {
                     width: parent.width
-                    // 副标题：歌手 → 专辑 →「未知」。
+                    // 副标题：**也是 C++ 那边算好的**（按类型分工：音频看歌手、
+                    // 视频图片看副标题，拿不到就是「未知」）。这儿只管显示。
                     //
-                    // **故意不显示"投送"/"本地播放"** —— 那是"打哪儿来的"，
-                    // 不是"这是什么"；在主界面上写它等于废话（本来就在投送）。
-                    // Windows 媒体面板那边会带上来源，因为那块面板是全局的，
-                    // 得让人分得清这条是谁在放。
-                    text: {
-                        const info = Playback.nowPlaying
-                        if (info.artist !== "")
-                            return info.artist
-                        if (info.album !== "")
-                            return info.album
-                        return qsTr("media_unknown")
-                    }
+                    // 主界面上**不显示"投送"/"本地播放"** —— 那是"打哪儿来的"，
+                    // 不是"这是什么"，在这儿写等于废话。Windows 媒体面板那边会
+                    // 带上来源（那块面板是全局的，得分得清是谁在放）。
+                    text: Playback.nowPlaying.subtitle
                     font: FluTextStyle.Caption
                     textColor: bar.overPicture ? "#B3FFFFFF" : FluTheme.fontSecondaryColor
                     elide: Text.ElideRight

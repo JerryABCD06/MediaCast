@@ -70,12 +70,36 @@ enum PropertyId {
     IdVolume   = 4,
     IdMute     = 5,
     IdEof      = 6,
+    IdMetadata = 7,
 };
 
 /** 把 mpv 的返回码翻成人能看的话。 */
 QString mpvError(int code)
 {
     return QString::fromUtf8(mpv_error_string(code));
+}
+
+/**
+ * 把 mpv 的 `metadata`（一张字符串表）转成 QVariantMap。
+ *
+ * metadata 正常就是"键 -> 字符串"，别的类型（数字之类）先不管 —— 真遇到了
+ * 也只是少一个字段，不影响别的。
+ */
+QVariantMap metadataFromNode(const mpv_node *node)
+{
+    QVariantMap out;
+    if (!node || node->format != MPV_FORMAT_NODE_MAP || !node->u.list)
+        return out;
+
+    const mpv_node_list *list = node->u.list;
+    for (int i = 0; i < list->num; ++i) {
+        const mpv_node &value = list->values[i];
+        if (list->keys[i] && value.format == MPV_FORMAT_STRING && value.u.string) {
+            out.insert(QString::fromUtf8(list->keys[i]),
+                       QString::fromUtf8(value.u.string));
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -159,6 +183,8 @@ bool MpvCore::start()
     mpv_observe_property(m_mpv, IdEof,      "eof-reached", MPV_FORMAT_FLAG);
     mpv_observe_property(m_mpv, IdVolume,   "volume",   MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, IdMute,     "mute",     MPV_FORMAT_FLAG);
+    // 文件自带的标签。和协议给的元数据是两回事，见 MediaPlayer::metadataChanged。
+    mpv_observe_property(m_mpv, IdMetadata, "metadata", MPV_FORMAT_NODE);
 
     // 窗口标题。以前这行写在 main() 里，那属于界面越界去碰 mpv 的细节。
     mpv_set_property_string(m_mpv, "title",
@@ -251,6 +277,13 @@ void MpvCore::eventLoop()
                 const bool muted = prop->data && (*static_cast<int *>(prop->data) != 0);
                 m_muted.store(muted);
                 emit muteChanged(muted);
+                break;
+            }
+            case IdMetadata: {
+                // 文件自带的标签（标题/艺术家/专辑/歌词……）。**没有的话就是空的**，
+                // 别指望它有东西 —— 图片和视频实测基本都是空的。
+                emit metadataChanged(
+                    metadataFromNode(static_cast<mpv_node *>(prop->data)));
                 break;
             }
             default:

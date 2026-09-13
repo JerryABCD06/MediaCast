@@ -17,6 +17,44 @@ namespace {
  */
 constexpr int kLoadTimeoutSeconds = 10;
 
+/**
+ * 从文件自带的标签里按几个候选键名取值。**不分大小写。**
+ *
+ * 键名随容器变：同一个"标题"，FLAC 里存成 `title`、MKV 里存成 `TITLE`。
+ * 所以候选键都列出来，逐个比小写 —— 一个都对不上就是空串，不报错。
+ */
+QString tagValue(const QVariantMap &tags, const QStringList &keys)
+{
+    for (const QString &key : keys) {
+        for (auto it = tags.constBegin(); it != tags.constEnd(); ++it) {
+            if (it.key().compare(key, Qt::CaseInsensitive) == 0) {
+                const QString value = it.value().toString().simplified();
+                if (!value.isEmpty())
+                    return value;
+            }
+        }
+    }
+    return QString();
+}
+
+/**
+ * 歌词在标签里可能叫什么名字。
+ *
+ * 没有统一叫法：Vorbis 注释习惯写 `LYRICS`，ID3 那边是 USLT（不同程序又各自
+ * 映射成 lyrics / unsyncedlyrics）。都试一遍，比只认一个强。
+ */
+const QStringList &lyricsTagKeys()
+{
+    static const QStringList keys = {
+        QStringLiteral("lyrics"),
+        QStringLiteral("unsyncedlyrics"),
+        QStringLiteral("unsynchronisedlyrics"),
+        QStringLiteral("syncedlyrics"),
+        QStringLiteral("uslt"),
+    };
+    return keys;
+}
+
 } // namespace
 
 PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
@@ -127,6 +165,34 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     // 会表现为"mpv 报了什么错，日志里查不到"。
     connect(m_player, &MediaPlayer::logMessage,
             this, &PlaybackController::logMessage);
+
+    // 文件自带的标签到了（或者换了）。**它是后到的** —— 投送一开始只有协议给的
+    // 那份元数据，文件得等打开才知道里面写了什么。所以到这儿要重算一遍：
+    // 标题、歌手可能是文件里才有的，歌词也只可能在这儿。
+    connect(m_player, &MediaPlayer::metadataChanged, this,
+            [this](const QVariantMap &tags) {
+        if (m_fileTags == tags)
+            return;
+
+        m_fileTags = tags;
+
+        // 把标签原样打进日志 —— "这首歌明明有歌词却没显示"这种问题，看一眼就知道
+        // 是文件里没有、还是键名叫得不一样（键名随容器变，见下面 tagValue）。
+        if (!tags.isEmpty()) {
+            QStringList pairs;
+            for (auto it = tags.constBegin(); it != tags.constEnd(); ++it) {
+                const QString value = it.value().toString();
+                // 歌词可能很长，只报字数。
+                pairs.append(value.size() > 60
+                                 ? QStringLiteral("%1=（%2 字）").arg(it.key()).arg(value.size())
+                                 : QStringLiteral("%1=%2").arg(it.key(), value));
+            }
+            emit logMessage(QStringLiteral("文件自带标签：%1")
+                                .arg(pairs.join(QStringLiteral("；"))));
+        }
+
+        rebuildNowPlaying();
+    });
 
     // 播放器整个没了（进程退出、崩溃）—— 这是状态机的事，不该让上层去记。
     // 结束会话，控制点那边才会把投屏界面收起来。
@@ -457,6 +523,30 @@ NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
     info.title = request.title;
     info.artist = request.artist;
     info.album = request.album;
+    // 协议给的"副标题"（视频/图片那一路用，音频不用它）。存成局部变量就够 ——
+    // 算完落到 info.subtitle 里，界面上只要那一份。
+    const QString description = request.description;
+
+    // ── 协议没给的那几样，拿文件自带的标签补 ────────────────────────────
+    //
+    // **只补空着的**：协议层明确说了什么就以它为准（那是控制点眼里这条内容的
+    // 名字），文件里的只在它没给的时候顶上。
+    //
+    // 这张标签表是后到的（见构造函数里那个 metadataChanged）：投送刚起来的时候
+    // 它还是空的，等文件打开才会来，那时候会重算一遍。
+    if (info.title.isEmpty())
+        info.title = tagValue(m_fileTags, { QStringLiteral("title") });
+    if (info.artist.isEmpty())
+        info.artist = tagValue(m_fileTags, { QStringLiteral("artist") });
+    if (info.album.isEmpty())
+        info.album = tagValue(m_fileTags, { QStringLiteral("album") });
+
+    // 文件标签里的作者也可能是占位符（有些文件的标签就是随手写的）。
+    if (looksLikePlaceholder(info.artist))
+        info.artist.clear();
+
+    // 歌词**只可能在文件里** —— DLNA 协议的元数据里根本没有这一项。
+    info.lyrics = tagValue(m_fileTags, lyricsTagKeys());
 
     // ── 标题的回退 ──────────────────────────────────────────────────────
     // 协议层给的就是空的（或者它压根没有标题这个概念），那就从文件名推。
@@ -486,19 +576,46 @@ NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
             emit logMessage(QStringLiteral("没有可用标题，用类型名「%1」顶上").arg(info.title));
     }
 
+    // ── 副标题：按内容类型分工 ──────────────────────────────────────────
+    //
+    // 音频：**歌手**（没有歌手退到专辑）。音频里没有"副标题"这个概念 ——
+    // 所有主流播放器都是这么显示的，Windows 媒体面板的音乐卡片也是独立的
+    // Artist / AlbumTitle 两个字段。
+    //
+    // 视频和图片：**副标题**（"这是什么"的那一句）。那儿不能拿"艺术家"顶 ——
+    // 视频里的艺术家是演员/导演，含义完全不同，显示出来更让人困惑。
+    //
+    // 两个都拿不到就是「未知」。**故意不退到"投送/本地播放"**：那是"打哪儿来的"，
+    // 不是"这是什么"，在主界面上写它等于废话（这儿本来就在投送）。Windows
+    // 媒体面板那边会另外拼上来源 —— 那块面板是全局的，得分得清是谁在放。
+    if (info.kind == MediaKind::Audio)
+        info.subtitle = info.artist.isEmpty() ? info.album : info.artist;
+    else
+        info.subtitle = description;
+
+    if (info.subtitle.isEmpty())
+        info.subtitle = QCoreApplication::translate("NowPlaying", "media_unknown");
+
     return info;
 }
 
-void PlaybackController::retranslate()
+void PlaybackController::rebuildNowPlaying()
 {
     // 手上什么都没有（刚启动、或者投送已经结束）—— 没东西要重算。
     if (m_state == State::NoMedia || m_current.uri.isEmpty())
         return;
 
-    // 拿同一条请求再算一遍。quiet：切语言不是"又开始放了一条"，别把标题那条
-    // 日志再刷一次。
+    // 拿同一条请求再算一遍。quiet：这不是"又开始放了一条"，别把标题那条日志
+    // 再刷一次。
     m_nowPlaying = buildNowPlaying(m_current, m_nowPlaying.source, /*quiet=*/true);
     emit nowPlayingChanged(m_nowPlaying);
+}
+
+void PlaybackController::retranslate()
+{
+    // 切语言要重算的原因是：兜底那几句是要翻译的（类型名、「未知」）。
+    // 文件标签到位时走的也是同一个重算，见构造函数里那段。
+    rebuildNowPlaying();
 }
 
 void PlaybackController::endSession()

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 #include <QVector>
 #include <QtGlobal>
 
@@ -174,4 +175,23 @@ signals:
      * 手机那边的界面不会知道。
      */
     void pictureControlChanged(const QString &name, int value);
+
+    /**
+     * **文件自带的**标签变了（标题 / 艺术家 / 专辑 / 歌词……）。
+     *
+     * 这和协议层给的那份元数据**不是一回事**，两边各有各的用处：
+     *
+     *   协议给的（DLNA 是 DIDL）—— 控制点对"这是什么"的描述，投送一开始就有，
+     *                              但可能是文件名、可能是占位符。
+     *   文件自带的（这个信号）  —— 文件自己里面写的，得等文件打开了才知道。
+     *                              图片和视频基本是空的（实测：手机照片、录屏、
+     *                              网上下载的视频里一个有用的字段都没有），
+     *                              音频则普遍带，**歌词也只有这儿才有**。
+     *
+     * 所以谁都不覆盖谁：协议给的就用协议的，没给的拿这里的补。
+     * 键名随容器变（同一个字段 FLAC 里叫 title、MKV 里叫 TITLE），取值要不分大小写。
+     *
+     * 不做这一步的后端不实现也不会怎样 —— 什么都不发就是了。
+     */
+    void metadataChanged(const QVariantMap &tags);
 };
