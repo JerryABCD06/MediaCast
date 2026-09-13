@@ -100,6 +100,27 @@ Item {
     readonly property color accentColor: darkStyle ? FluTheme.accentColor.lighter
                                                    : FluTheme.accentColor.dark
 
+    /**
+     * 图标按钮悬停 / 按下时那层底色。
+     *
+     * **和 accentColor 是同一个坑。** `FluTheme.itemHoverColor` 是按**程序主题**
+     * 取的：浅色主题给"压深"（黑 3%）、深色主题给"提亮"（白 6%）。这一条栏
+     * 强制走深色那套的时候，鼠标一上去反而**变暗** —— 和周围的白字白图标对不上，
+     * 看着像凹下去一块。
+     *
+     * 深色那一档库没有单独暴露出来（只有一个"当前主题"的值），只能照
+     * FluTheme.cpp 里那两行抄：
+     *
+     *     itemHoverColor = 深色 ? rgba(255,255,255,0.06) : rgba(0,0,0,0.03)
+     *     itemPressColor = 深色 ? rgba(255,255,255,0.09) : rgba(0,0,0,0.06)
+     *
+     * 浅色那一档继续问 FluTheme —— 那本来就是它该给的。库改了要跟着改。
+     */
+    readonly property color itemHoverColor: darkStyle ? Qt.rgba(1, 1, 1, 0.06)
+                                                      : FluTheme.itemHoverColor
+    readonly property color itemPressColor: darkStyle ? Qt.rgba(1, 1, 1, 0.09)
+                                                      : FluTheme.itemPressColor
+
     // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
     Rectangle {
         anchors.fill: parent
@@ -299,6 +320,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_previous")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
 
                 // 真的：播放 / 暂停
@@ -343,6 +366,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_next")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
             }
 
@@ -359,6 +384,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_subtitles")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
 
                 // 壳子：音量。以后点它**在按钮上方**弹一条纵向的 FluSlider
@@ -368,6 +395,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_volume")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
 
                 // 壳子：显示效果调节。以后开**独立窗口**（不是这里的弹层），
@@ -377,6 +406,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_picture")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
 
                 // 壳子：全屏 / 退出全屏。图标是两态，接的时候按 window.visibility 换。
@@ -385,6 +416,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_fullscreen")
+                    hoverColor: bar.itemHoverColor
+                    pressedColor: bar.itemPressColor
                 }
             }
         }
