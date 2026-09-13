@@ -266,6 +266,8 @@ PlaybackController::MediaRequest SoapHandler::mediaRequestFromSoap(const QString
     PlaybackController::MediaRequest request;
     request.uri = uri;
     request.metadata = metadata;
+    // 日志里报的协议名 —— 由协议层自己填，中立层不认识任何协议。
+    request.protocol = QStringLiteral("DLNA");
 
     // ── 类型 ────────────────────────────────────────────────────────────
     // 优先信控制点声明的 upnp:class，它没有控制器会看扩展名。

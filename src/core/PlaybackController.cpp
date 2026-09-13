@@ -463,6 +463,14 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
 
     m_current = request;
 
+    // **上一条的文件标签不能留到这一条。**
+    //
+    // 标签是后到的（文件打开了才有），所以换内容这一刻手上拿的还是上一条的 ——
+    // 不清掉的话，新内容会先顶着上一条的标题/歌手显示一会儿，等新文件的标签
+    // 到了才更正。本机文件是几十毫秒的事，局域网地址慢的时候那一会儿看得见。
+    // （实测：放本地一首歌，界面先显示上一首的标题，20 毫秒后才更正。）
+    m_fileTags.clear();
+
     // 换了内容就报一声。控制点靠这个知道渲染器现在装的是哪一条 ——
     // 少了它，我们这边的「上一首/下一首」在手机看来就像没发生过。
     emit mediaChanged(m_current.uri, m_current.metadata);
@@ -470,11 +478,19 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
     const NowPlaying info = buildNowPlaying(request, source);
 
     emit logMessage(QStringLiteral("开始播放 %1").arg(request.uri));
-    // 来源那句是**日志**，所以照旧带上协议名（排查时有用），而且不翻译 ——
+    // 来源那句是**日志**，所以带上协议名（排查时有用），而且不翻译 ——
     // 界面上的来源是另一套，见 media_source_* 那几个键。
+    //
+    // 协议名**由协议层自己填**（MediaRequest::protocol），这儿一个字都不写死：
+    // 加第二个协议时，这行日志不用改。
+    const QString sourceText =
+        source == MediaSource::Local
+            ? QStringLiteral("本地播放")
+            : (request.protocol.isEmpty()
+                   ? QStringLiteral("投送")
+                   : request.protocol + QStringLiteral(" 投送"));
     emit logMessage(QStringLiteral("   来源：%1    类型：%2")
-                        .arg(source == MediaSource::Local ? QStringLiteral("本地播放")
-                                                          : QStringLiteral("DLNA 投送"),
+                        .arg(sourceText,
                              mediaKindLabel(info.kind).isEmpty() ? QStringLiteral("未知")
                                                                  : mediaKindLabel(info.kind)));
     if (info.hasTitle())
@@ -642,6 +658,9 @@ void PlaybackController::endSession()
 
     m_current = MediaRequest();
     emit mediaChanged(QString(), QString());   // 没内容了，也报一声
+
+    // 文件标签跟着清掉 —— 手上都没内容了，留着上一条的标题没有任何意义。
+    m_fileTags.clear();
 
     // 队列和播放模式一并归零。会话都断了还留着"下一条"没有任何意义，
     // 更要紧的是：下次投送时它会莫名其妙地自动接上。

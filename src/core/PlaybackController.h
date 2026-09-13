@@ -190,6 +190,16 @@ public:
         // 音频不用它 —— 那儿的第二行是歌手。
         QString description;
         MediaKind kind = MediaKind::Unknown;
+
+        /**
+         * 这条是谁送来的 —— **协议层自己填**（"DLNA" / "AirPlay" / …）。
+         *
+         * **只给日志用。** 中立层不许写死任何一个协议名：以前这儿在日志里是
+         * 写死的 "DLNA 投送"，将来加了第二个协议，它投过来的东西也会被记成
+         * DLNA —— 查日志的时候能把人带沟里。界面上那份来源是另一回事，走
+         * `MediaSource` 枚举 + 语言文件里的 `media_source_*`。
+         */
+        QString protocol;
     };
 
     // MediaSource（这条路是谁开的）定义在 NowPlaying.h 里 —— 它是"这段内容是什么"
