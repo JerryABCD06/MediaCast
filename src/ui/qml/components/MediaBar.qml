@@ -145,6 +145,26 @@ Item {
         return h > 0 ? (h + ":" + pad(m) + ":" + pad(s)) : (m + ":" + pad(s))
     }
 
+    /**
+     * 时间那一格要留多宽 —— **量出来的，不是写死的数字**。
+     *
+     * 长度是会变的：`0:03 / 0:27` 和 `2:59:59 / 3:00:00` 差着好几十像素。
+     * 右边那一格如果跟着变宽变窄，进度条就会跟着一伸一缩（秒数每进一位抖一下），
+     * 右边线也跟着跳。所以**固定住**，让进度条去吃掉这点变化。
+     *
+     * 取样的那串是**最长的那种排法**：两边都带上"时:分:秒"，
+     * 也就是能装下 99 小时的片子 —— 再长就不必迁就了。
+     *
+     * 为什么用 TextMetrics 而不是写个数字：字号、字体（以后换语言换字体）、
+     * 屏幕缩放进一位，写死的数字就不准了 —— 我这轮先写了个 96，结果按
+     * 12 号字量下来，超过一小时的串要 111，早就顶出去了。
+     */
+    TextMetrics {
+        id: timeMetrics
+        font: FluTextStyle.Caption
+        text: "00:00 / 00:00:00"
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.leftMargin: 16
@@ -273,7 +293,10 @@ Item {
                 // **固定宽度 + 右对齐。** 不固定的话，"0:03 / 0:27" 和
                 // "10:03 / 1:27:00" 宽度不一样，进度条会跟着一伸一缩 ——
                 // 时间每进一位，整条进度条就抖一下。右边线也不会跟着跳。
-                Layout.preferredWidth: 96
+                //
+                // 宽度按**最长的排法**量出来（最多两小时位 + 两分钟位 + 两秒位），
+                // 见上面 timeMetrics；多给 2 像素防四舍五入。
+                Layout.preferredWidth: timeMetrics.advanceWidth + 2
                 horizontalAlignment: Text.AlignRight
                 text: bar.timeText(Playback.position) + " / " + bar.timeText(Playback.duration)
                 font: FluTextStyle.Caption
