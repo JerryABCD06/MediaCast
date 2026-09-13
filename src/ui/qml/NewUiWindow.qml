@@ -45,6 +45,8 @@ FluWindow {
     background: Component {
         MicaBackdrop {
             id: windowBackdrop
+            // 全窗口唯一一处"造云母"的地方（整屏算一次），别处的底都从它裁。
+            isSource: true
             Component.onCompleted: window.backdropItem = windowBackdrop
             Component.onDestruction: window.backdropItem = null
         }
@@ -212,8 +214,8 @@ FluWindow {
             // 摆在最下面：它只是底，上面的字和控件都得压在它上面。
             MicaBackdrop {
                 anchors.fill: parent
-                // 借窗口那层那张壁纸图 —— 见 MicaBackdrop 头注释里那段"为什么"。
-                wallpaperItem: window.backdropItem ? window.backdropItem.ownWallpaperItem : null
+                // 从窗口那层算好的整屏云母上裁一块 —— 见 MicaBackdrop 头注释。
+                canvasItem: window.backdropItem ? window.backdropItem.ownCanvas : null
             }
 
             // **先吃掉这一页上的点击。**
