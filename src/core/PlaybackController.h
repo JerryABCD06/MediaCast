@@ -90,6 +90,25 @@ class PlaybackController : public QObject
      */
     Q_PROPERTY(CastState castState READ castState NOTIFY castStateChanged)
 
+    /**
+     * 屏幕上现在是不是**真的露着画面**（在放视频或者图片）。
+     *
+     * 界面拿它决定"这一条控制栏压在什么上"：
+     *
+     *   true  —— 底下是画面。画面的内容不可控（白的黑的都可能），所以用固定
+     *            那一套：半透明黑底 + 白字。
+     *   false —— 底下是页面底色或者投屏引导。**不铺黑底**，颜色跟主题走，
+     *            看起来就像控件直接画在那上头。
+     *
+     * 三个条件缺一不可：
+     *   · 在放着 —— 停住的时候容器上盖着投屏引导，画面根本看不见
+     *   · 视频或者图片 —— 音乐没有画面
+     *   · **不看谁连着** —— 本机放片子照样有画面
+     *
+     * 和 castState 一个道理：**组合只此一份**，界面不自己拼。
+     */
+    Q_PROPERTY(bool showsPicture READ showsPicture NOTIFY showsPictureChanged)
+
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
@@ -261,6 +280,9 @@ public:
      */
     CastState castState() const;
 
+    /** 屏幕上是不是真的露着画面 —— 见上面 showsPicture 那段。 */
+    bool showsPicture() const;
+
     LoadStatus loadStatus() const { return m_loadStatus; }
 
     NowPlaying nowPlaying() const { return m_nowPlaying; }
@@ -301,6 +323,9 @@ signals:
 
     /** 上面那个 castState 变了 —— 界面照它切换显示什么。 */
     void castStateChanged();
+
+    /** 上面那个 showsPicture 变了 —— 控制栏照它切换用哪套颜色。 */
+    void showsPictureChanged();
 
     /** "正在播放什么"变了（换片子，或者会话结束）。 */
     void nowPlayingChanged(const NowPlaying &info);

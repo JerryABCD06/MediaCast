@@ -69,20 +69,29 @@ Item {
 
             // ── 中间那块提示 ────────────────────────────────────────────
             //
-            // 没有东西可看的时候盖在画面上。**显示哪一句由 Playback.castState
-            // 决定** —— 那个值把"谁连着"和"在放什么"算好了，这里不做组合判断。
+            // **没有画面可看的时候盖在画面上。** 什么时候算"没画面"由
+            // `Playback.showsPicture` 说（在 C++ 那边算的），这里不做组合判断。
+            //
+            // 为什么连"在放音乐"也要盖：mpv 没有画面可输出的时候，渲染出来的是
+            // **纯黑**（实测放音频就是这样）。那一块黑露在外面，底下那条控制栏
+            // 跟主题走的深色字就没法看了。盖上页面底色，看着才是"这一块空着"。
+            //
+            // **不显示画面 ≠ 什么都没在放**：所以引导文字只看 idle ——
+            // 放音乐的时候这块只当底色，不摆"请在手机上选择…"那几句。
             //
             // 不透明，所以下面的黑画面看不见；用页面同色而不是纯白，是为了让它
             // 看起来是"这一块空着"，而不是贴了一张白纸上去。
             Rectangle {
                 anchors.fill: parent
                 color: FluTheme.backgroundColor
-                visible: Playback.idle
+                visible: !Playback.showsPicture
 
                 ColumnLayout {
                     anchors.centerIn: parent
                     width: Math.min(parent.width - 80, 520)
                     spacing: 12
+                    // 只有真的没东西可放的时候才摆这几句；放音乐时这块只是底色。
+                    visible: Playback.idle
 
                     // 标题：连着没连着，说法不一样。
                     FluText {

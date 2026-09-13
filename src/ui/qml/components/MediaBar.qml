@@ -17,6 +17,15 @@ import MediaCast 1.0
 //   [──────── 进度条 ────────]  0:12 / 0:27
 //   [标题 / 副标题]         [⏮ ⏯ ⏭]         [字 音 效 全]
 //
+// ── 两套颜色，按"底下有没有画面"切 ───────────────────────────────────────
+//
+//   底下露着画面（在放视频 / 图片）—— 半透明黑底 + 白字。画面的内容不可控，
+//     只能固定成深色，不然浅色主题下黑图标压在暗画面上就没了。
+//   底下没画面（放音乐、没在放、或者盖着投屏引导）—— **不铺黑底**，颜色跟
+//     主题走，看起来就像控件直接画在那上头。
+//
+// 判据是 `Playback.showsPicture`（在 C++ 那边算的，见下面的 overPicture）。
+//
 // 中间那三个键**锚在正中间**，不是"左中右三格等宽" —— 左右两边的内容宽度差得
 // 多，等宽会把中组挤偏。窗口变窄时先牺牲左边：标题走省略号。
 //
@@ -45,11 +54,25 @@ Item {
     /** 栏有多高。压在画面上时外面不用管，将来要是改成占位排布会用得上。 */
     implicitHeight: 74
 
-    // 半透明黑。压在视频上，所以不看主题深浅 —— 底下永远是画面，
-    // 白字 + 70% 黑是最稳的搭配。
+    /**
+     * 底下是不是真的露着画面（在放视频 / 图片）。
+     *
+     * **判据在 C++ 那边**（`PlaybackController::showsPicture()`），这里只管照着画 ——
+     * "在放着、是视频或图片、而且不看谁连着"这三条合起来只有一份。
+     *
+     * 两套颜色，各管各的场合：
+     *
+     *   true  —— 压在画面上：半透明黑底 + 白字。画面的内容不可控（白的黑的都
+     *            可能有），跟着主题走的话，浅色主题下黑图标压在暗画面上就没了。
+     *   false —— 底下是页面底色（放音乐、没在放）或者投屏引导面板：**不铺黑底**，
+     *            颜色跟主题走，看起来就像控件直接画在那上头。
+     */
+    readonly property bool overPicture: Playback.showsPicture
+
+    // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
     Rectangle {
         anchors.fill: parent
-        color: "#B3000000"
+        color: bar.overPicture ? "#B3000000" : "transparent"
     }
 
     /** 秒 -> "0:12"；超过一小时才带小时位。 */
@@ -109,7 +132,7 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
                 text: bar.timeText(Playback.position) + " / " + bar.timeText(Playback.duration)
                 font: FluTextStyle.Caption
-                textColor: "#E6FFFFFF"
+                textColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontSecondaryColor
             }
         }
 
@@ -135,7 +158,7 @@ Item {
                     // NowPlaying 之后，读不到标题时才落回这一句，别把它删了。
                     text: qsTr("ui_mediabar_title_unknown")
                     font: FluTextStyle.BodyStrong
-                    textColor: "#FFFFFFFF"
+                    textColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     elide: Text.ElideRight
                     maximumLineCount: 1
                 }
@@ -144,7 +167,7 @@ Item {
                     width: parent.width
                     text: qsTr("ui_mediabar_subtitle_unknown")
                     font: FluTextStyle.Caption
-                    textColor: "#B3FFFFFF"
+                    textColor: bar.overPicture ? "#B3FFFFFF" : FluTheme.fontSecondaryColor
                     elide: Text.ElideRight
                     maximumLineCount: 1
                 }
@@ -161,7 +184,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.Previous
                     iconSize: 18
-                    iconColor: "#FFFFFFFF"
+                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_previous")
                 }
 
@@ -174,7 +197,7 @@ Item {
                     readonly property bool showPlay: Playback.paused || Playback.idle
                     iconSource: showPlay ? FluentIcons.Play : FluentIcons.Pause
                     iconSize: 24
-                    iconColor: "#FFFFFFFF"
+                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: showPlay ? qsTr("ui_mediabar_play")
                                                  : qsTr("ui_mediabar_pause")
                     // 按下去该干什么由状态机说了算（规则只有一份，在
@@ -187,7 +210,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.Next
                     iconSize: 18
-                    iconColor: "#FFFFFFFF"
+                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_next")
                 }
             }
@@ -203,7 +226,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.Subtitles
                     iconSize: 18
-                    iconColor: "#E6FFFFFF"
+                    iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_subtitles")
                 }
 
@@ -212,7 +235,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.Volume
                     iconSize: 18
-                    iconColor: "#E6FFFFFF"
+                    iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_volume")
                 }
 
@@ -221,7 +244,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.Brightness
                     iconSize: 18
-                    iconColor: "#E6FFFFFF"
+                    iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_picture")
                 }
 
@@ -229,7 +252,7 @@ Item {
                 TipIconButton {
                     iconSource: FluentIcons.FullScreen
                     iconSize: 18
-                    iconColor: "#E6FFFFFF"
+                    iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_fullscreen")
                 }
             }

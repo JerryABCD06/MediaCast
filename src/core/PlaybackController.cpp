@@ -149,6 +149,8 @@ void PlaybackController::setState(State state)
     const bool hadMedia = hasMedia();
     // 局面（谁连着 × 在放什么）只看"装没装内容"，所以这儿也得比一次。
     const CastState castBefore = castState();
+    // 控制栏压在什么上，看的是"有没有画面露着"。
+    const bool pictureBefore = showsPicture();
 
     m_state = state;
 
@@ -175,6 +177,9 @@ void PlaybackController::setState(State state)
 
     if (castState() != castBefore)
         emit castStateChanged();
+
+    if (showsPicture() != pictureBefore)
+        emit showsPictureChanged();
 }
 
 void PlaybackController::setPeerConnected(bool connected)
@@ -219,6 +224,16 @@ PlaybackController::CastState PlaybackController::castState() const
     // 认不出类型时按视频算 —— 投屏这件事里绝大多数就是视频，而"按图片算"
     // 会让界面去等一张永远不会来的图。
     return CastState::ViewerVideo;
+}
+
+bool PlaybackController::showsPicture() const
+{
+    // 停着的时候容器上盖着投屏引导 —— 画面在底下，可用户看不见，
+    // 所以"露着画面"不成立。这条和 idle 的定义是同一个口径，别改歪。
+    if (isIdle())
+        return false;
+
+    return m_nowPlaying.kind == MediaKind::Video || m_nowPlaying.kind == MediaKind::Image;
 }
 
 // ── 命令 ─────────────────────────────────────────────────────────────────
@@ -398,12 +413,16 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
     // 局面（胶囊/容器显示什么）看的是"在放的是视频还是音乐还是图片"，
     // 所以换内容这一下也得比一次。
     const CastState castBefore = castState();
+    const bool pictureBefore = showsPicture();
 
     m_nowPlaying = info;
     emit nowPlayingChanged(info);
 
     if (castState() != castBefore)
         emit castStateChanged();
+
+    if (showsPicture() != pictureBefore)
+        emit showsPictureChanged();
 
     // 先报"正在准备"，等播放器说文件好了再翻成"正在播放"。
     setState(State::Preparing);
@@ -485,11 +504,15 @@ void PlaybackController::endSession()
 
     // 投送结束了，界面上那块"正在播放"也该清掉。
     const CastState castBefore = castState();
+    const bool pictureBefore = showsPicture();
     m_nowPlaying = NowPlaying();
     emit nowPlayingChanged(m_nowPlaying);
 
     if (castState() != castBefore)
         emit castStateChanged();
+
+    if (showsPicture() != pictureBefore)
+        emit showsPictureChanged();
 
     emit logMessage(QStringLiteral("已在电脑端结束投送"));
 }
