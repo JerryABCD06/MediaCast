@@ -2,7 +2,11 @@
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities privately through the project's designated security contact or repository security mechanism.
+Please report security vulnerabilities **privately** — not in a public issue — to:
+
+**Wang Yunzheng <wyz-mcast@outlook.com>**
+
+(or through the repository's private security-advisory mechanism, if one is enabled)
 
 Do not publicly disclose a vulnerability containing an exploitable proof of concept before the project has had a reasonable opportunity to investigate it.
 
@@ -29,14 +33,10 @@ Network-facing components should treat received data as untrusted.
 
 ## Supported Versions
 
-The project should list supported versions here once a release policy is established.
-
-Example:
-
 | Version | Supported |
 |---|---|
-| Latest stable | Yes |
-| Previous stable | Security fixes where practical |
+| Latest release | Yes |
+| Older releases | Best effort — please try the latest first |
 | Development builds | Best effort |
 
 ## Security Updates

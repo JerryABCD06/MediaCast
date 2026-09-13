@@ -38,11 +38,14 @@ The project does not authorize copyright infringement, unauthorized copying or r
 
 ## 5. Network Operation
 
-Media Cast may listen on local TCP/UDP ports and advertise itself through service-discovery mechanisms such as SSDP or mDNS.
+Media Cast listens on TCP **8200** (device description and SOAP control) and UDP **1900**
+(SSDP discovery). It announces itself by **broadcasting the computer name to the local
+network** as its device name — that is how this computer appears in a sender's cast list.
 
-Enabling a receiver may make the computer discoverable to other devices on the same network.
-
-Users should configure Windows Firewall and network profiles appropriately and should not expose receiver services to untrusted networks or the public Internet unless they understand and accept the security implications.
+Being discoverable is the function of a receiver, but it also means the computer is
+visible to other devices on the same network. Do not expose the receiver to untrusted
+networks or to the public Internet. On networks you do not trust, turn off
+"accept new casts" from the tray menu, and review the Windows Firewall settings.
 
 ## 6. Security
 

@@ -1,56 +1,54 @@
 # Media Cast — Privacy Notice
 
-**Status:** Draft
+**Applies to:** the Media Cast Receiver application itself (`MCast.exe`). It does not
+describe what sender applications, the operating system, or third-party services do.
 
-## 1. Scope
+## In one sentence
 
-This notice describes the privacy behavior of the Media Cast application itself.
+**No telemetry. Nothing is uploaded anywhere. It needs no internet access.** It works
+inside the local network and only exchanges the protocol traffic required to receive a cast.
 
-It does not describe the privacy practices of sender applications, operating systems, third-party services, or websites that may interact with Media Cast.
+## What it handles
 
-## 2. Local Network Data
+- The machine's network interfaces and their addresses — used to decide where to announce itself.
+- **The computer name** — used as the device name, and **broadcast to the local network**,
+  so other devices can see this computer in their cast lists.
+- The playback commands, media URLs, and any metadata the sender attaches (title, artist, …).
+- Playback state and position, read back from the local player.
 
-Media Cast may process information necessary to provide receiver functionality, including:
+## Does it talk to the internet?
 
-- local IP addresses and network interfaces;
-- device name;
-- receiver capabilities;
-- protocol discovery messages;
-- playback commands;
-- media URLs or identifiers supplied by a sender;
-- playback state and metadata;
-- local configuration and diagnostic information.
+No. It does not initiate outbound connections on its own. It listens on local ports and
+accepts connections from the local network.
 
-## 3. Internet Communication
+(One exception worth naming: if a media URL points at the internet, the playback backend
+will fetch that stream — because you asked it to play that URL. That is playback of
+content you selected, not the application reporting anything about you.)
 
-Media Cast is intended primarily for local-network casting.
+## What it leaves on your machine
 
-Unless a specific feature explicitly requires network access, Media Cast should not assume that remote servers are necessary for ordinary local playback.
+| What | Where | Contains |
+|---|---|---|
+| Settings | `MediaCast.json`, next to the executable | language, theme, accept/broadcast switches |
+| Log | `MCast.log`, next to the executable | **the computer name, local IP addresses, and the media URLs that were played** (which may be local file paths) |
+| Device identity | `%LOCALAPPDATA%\MCast\renderer.ini` | the device UDID. Delete it and senders will treat this as a new device |
 
-If future versions introduce telemetry, update checking, crash reporting, cloud services, or other remote communication, those features must be documented here before release.
+The log is a local file that this program never sends anywhere. Review it before sharing
+it publicly — it contains the names of media you played.
 
-## 4. Logs
+## Ports it listens on
 
-Diagnostic logs may contain technical information such as IP addresses, device names, media URLs, filenames, error messages, and protocol messages.
+- TCP **8200** — device description and SOAP control
+- UDP **1900** — SSDP discovery (announcing itself, answering searches)
 
-Users should review logs before publicly sharing them.
+## Discoverability
 
-The project should avoid collecting unnecessary personal information.
+Being discoverable *is* the function of a receiver — but it also means this computer is
+visible to other devices on the same network. On networks you do not trust, turn off
+"accept new casts" from the tray menu.
 
-## 5. Local Storage
+## Changes
 
-Media Cast may store configuration, receiver identity, logs, cache data, or other local application state.
-
-Future releases should document the exact storage locations and retention behavior.
-
-## 6. Third-Party Applications
-
-A sender application may independently collect information about casting activity.
-
-Media Cast does not control the privacy practices of third-party senders or services.
-
-Users should consult the privacy documentation of those applications.
-
-## 7. Changes
-
-This notice should be updated before any new telemetry, analytics, cloud, advertising, account, or remote-data feature is introduced.
+If a future version adds telemetry, crash reporting, update checking, accounts, or any
+cloud feature, **this notice must be updated first** — and that change must be called out
+in the release notes.

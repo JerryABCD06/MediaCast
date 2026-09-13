@@ -2,25 +2,40 @@
 
 > This document is informational and is not legal advice.
 
-Media Cast may support media formats through its playback backend.
+The playback backend (libmpv / FFmpeg) can handle far more formats than the list below.
+What matters for this notice is that those formats fall into **two very different groups**,
+and lumping them together would be misleading.
 
-Possible formats may include:
+## Generally considered royalty-free
 
-- H.264 / AVC
-- H.265 / HEVC
-- VP8
-- VP9
-- AV1
-- AAC
-- ALAC
-- Opus
-- FLAC
-- MP3
-- other formats supported by the selected playback components
+Their promoters have made public, explicit commitments:
 
-Support for a format does not mean that the underlying technology is free of third-party intellectual-property rights.
+| Format | Basis |
+|---|---|
+| VP8, VP9 | Google's royalty-free commitments |
+| AV1 | AOMedia's royalty-free policy |
+| Opus, FLAC, Vorbis | royalty-free by design |
 
-Some codecs and media technologies may be covered by patents or other rights in certain jurisdictions. In particular, H.264/AVC and H.265/HEVC may be subject to separate patent licensing requirements.
+## Covered by patent pools
+
+A separate license may be required depending on **use, jurisdiction, and distribution model**:
+
+| Format | Pools / holders |
+|---|---|
+| H.264 / AVC | Via LA (formerly MPEG LA) AVC pool |
+| H.265 / HEVC | Access Advance, Via LA, Velos Media, plus independent holders |
+| AAC | Via LA AAC pool |
+| MP3 | patents expired |
+
+## Two things this notice wants to be explicit about
+
+1. **This is a patent question, not a copyright one.** It is not affected by which
+   library, language, or implementation is used — the patents cover the method, not the
+   code. Writing your own decoder changes nothing.
+2. **The obligation typically falls on whoever distributes the capability.** Media Cast
+   ships a playback backend that includes software decoders, so whoever redistributes
+   this package is distributing codec capability. **The project's license grants no
+   patent rights, and the project holds no codec patent license.**
 
 The Media Cast project does not grant patent licenses for technologies it does not own.
 
