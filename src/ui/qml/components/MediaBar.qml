@@ -143,6 +143,49 @@ Item {
      */
     property bool freshMedia: false
 
+    /**
+     * 窗口是**这一下投送才打开**的时候，上面那两个信号在控制栏建起来之前就发完了
+     * —— 它收不到，"新视频先露 5 秒"这条就丢了（实测报过来的就是这个：窗口没开
+     * 时投视频，唤起的窗口里控制栏干脆不出来）。
+     *
+     * 所以开场自己补一次。**补在"窗口真的露出来"那一下**，不是补在对象建好的
+     * 那一下：这个窗口从建好到露面之间还隔着"离屏渲染一帧"（见 NewUiWindow::show），
+     * 差着一秒多 —— 补早了，用户看到的就不是 5 秒。
+     */
+    function startHoldIfVideo() {
+        if (Playback.showsPicture && Playback.mediaIsVideo)
+            holdTimer.restart()
+    }
+
+    /**
+     * "屏幕上放着一条视频"这个事实。
+     *
+     * **它由假变真的时候补一次那 5 秒** —— 这是最兜底的那条：窗口是投送之后才
+     * 建起来的时候，投送的信号早就发完了、而控制栏建好、窗口露出来那两个时刻
+     * 视频往往还没真正开始放（实测就是这么漏的）。不管先后怎么变，只要这条
+     * 视频最终放出来了，事实一变，5 秒就到。
+     *
+     * 暂停/继续不会让它变（那个看的是"在放什么"，不是"放没在放"），所以不会
+     * 平白无故又弹一次。
+     */
+    readonly property bool videoShowing: Playback.showsPicture && Playback.mediaIsVideo
+    onVideoShowingChanged: {
+        if (videoShowing)
+            holdTimer.restart()
+    }
+
+    readonly property var win: Window.window
+
+    Component.onCompleted: startHoldIfVideo()
+
+    Connections {
+        target: bar.win
+        function onVisibleChanged() {
+            if (bar.win && bar.win.visible)
+                bar.startHoldIfVideo()
+        }
+    }
+
     Connections {
         target: Playback
         function onMediaChanged(uri, metadata) {
