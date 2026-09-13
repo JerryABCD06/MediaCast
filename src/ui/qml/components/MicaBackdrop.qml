@@ -210,7 +210,11 @@ Item {
             id: img_wall
             visible: canvas.visible
             cache: true
-            asynchronous: true
+            // **同步解码。** 异步的话，窗口露面时这张图还没好，用户会先看到
+            // 一小会儿底色（灰）、再变成云母（实测约 0.3 秒）。同步解码把这点
+            // 开销挪到"窗口还没露面"的时候 —— 反正那时候窗口本来就在等第一帧
+            // （见 NewUiWindow::show() 里那句 grabWindow）。
+            asynchronous: false
             fillMode: Image.PreserveAspectCrop
             x: 0
             y: 0
