@@ -303,6 +303,11 @@ bool PlaybackController::showsPicture() const
     return m_nowPlaying.kind == MediaKind::Video || m_nowPlaying.kind == MediaKind::Image;
 }
 
+bool PlaybackController::mediaIsVideo() const
+{
+    return m_nowPlaying.kind == MediaKind::Video;
+}
+
 // ── 命令 ─────────────────────────────────────────────────────────────────
 
 void PlaybackController::play()

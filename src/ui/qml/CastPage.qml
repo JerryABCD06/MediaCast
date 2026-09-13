@@ -83,6 +83,10 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 enabled: Playback.hasMedia
+                // 开着悬停才收得到"鼠标在框里动了"—— 静止画面那一档（暂停的视频、
+                // 图片）就是靠它把控制栏唤出来的，见 MediaBar 里那段"什么时候露面"。
+                hoverEnabled: true
+                onPositionChanged: mediaBar.poke()
                 // 「该播还是该暂停」是个状态机问题，规则在 PlaybackController 里
                 // （togglePlayPause）。界面上有两处要用它，各写一份的话迟早只有
                 // 一处被改到 —— 这次就是这么来的：片子播完之后这里还在判 paused，
@@ -164,6 +168,26 @@ Item {
                 }
             }
 
+            // ── 下沿那条"热区" ──────────────────────────────────────────
+            //
+            // 视频在放的时候，鼠标往下面一探就把控制栏唤出来（传统播放器那套）。
+            //
+            // 它比栏本身高 20：真按栏的高度算，鼠标得贴着窗口下沿才够得着，
+            // 太窄了。**不吃点击** —— HoverHandler 只管悬停、不拦鼠标键，所以
+            // 栏收起来之后，点这一带仍然是"点画面 = 播放/暂停"。
+            //
+            // 声明在控制栏**之前**（下层）：它只是感应鼠标，不该挡着栏上的按钮。
+            Item {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: mediaBar.height + 20
+
+                HoverHandler {
+                    id: stripHover
+                }
+            }
+
             // ── 播放控制栏 ──────────────────────────────────────────────
             //
             // 压在画面下沿的**内侧**。它挂在容器上（不是挂在 mpv 上），只是画在
@@ -173,13 +197,19 @@ Item {
             //
             // 容器上的 clip: true 保证它不会溢出圆角。
             //
-            // **常显。** 以前是 `visible: Playback.hasMedia`（有东西装着才显示），
-            // 结果窗口刚打开、还没投送的时候底下什么都没有，看着像界面缺了一块。
-            // 现在一打开窗口它就在，没投送时显示「未知 / 空白进度」。
+            // **它自己决定露不露**（规则写在 MediaBar 里那段"什么时候露面"）：
+            // 空闲和放音乐时常显，视频在放时靠上面那条热区唤出来，暂停的视频和
+            // 图片按"动一下鼠标就出来、停 3 秒再收"。这里只负责摆位置、把热区
+            // 的状态递进去。
+            //
+            // （以前这里写的是 `visible: Playback.hasMedia` —— 窗口刚打开、还没
+            //   投送时底下空一块。现在那条规矩没了。）
             MediaBar {
+                id: mediaBar
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
+                stripHot: stripHover.hovered
             }
         }
 

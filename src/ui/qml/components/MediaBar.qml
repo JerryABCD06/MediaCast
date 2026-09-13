@@ -90,6 +90,109 @@ Item {
      */
     readonly property bool darkStyle: overPicture || FluTheme.dark
 
+    // ── 什么时候露面 ─────────────────────────────────────────────────────
+    //
+    // 规则（2026-09-13 和他当面定的，改动之前先回去问）：
+    //
+    //   空闲 / 放音乐        常显
+    //   视频**在放**          鼠标进"下沿那条热区"就显示，挪开立刻收
+    //   视频暂停 / 放图片     静止画面：鼠标在**整个画面框**里动一下就显示；
+    //                         停手、或者挪到窗口外，3 秒后收
+    //   刚投上来的视频         开头先露 5 秒，这 5 秒里不管鼠标在哪都不收
+    //   刚投上来的图片         没有那 5 秒，上来就是干净的画面
+    //
+    // 两条兜底：鼠标**停在栏上**时不收（正要按它、它自己没了很别扭）；
+    // 播放↔暂停切换的那一瞬规则直接跟着换，不做额外过渡。
+    //
+    // 为什么图片算"静止"那一档：图片也是不动的画面，鼠标在框里动一下就出来，
+    // 比"只有下沿那条能唤出来"好用得多（他认了这一条）。
+
+    /** 鼠标在下沿那条热区里。投屏页量好了告诉它（见 CastPage 里那块热区）。 */
+    property bool stripHot: false
+
+    /** 鼠标在画面框里动过 —— 静止画面那一档靠它。3 秒不动就自己落回去。 */
+    property bool areaMoved: false
+
+    /** 投屏页在"鼠标于画面框内移动"时叫它一下。 */
+    function poke() {
+        areaMoved = true
+        idleTimer.restart()
+    }
+
+    Timer {
+        id: idleTimer
+        interval: 3000
+        repeat: false
+        onTriggered: bar.areaMoved = false
+    }
+
+    /** 新视频开头那 5 秒。 */
+    Timer {
+        id: holdTimer
+        interval: 5000
+        repeat: false
+    }
+
+    /**
+     * 换了内容没有 —— 用来认出"新视频"。
+     *
+     * **不能直接听 nowPlayingChanged**：文件标签到了也会报一次（标题从地址推的
+     * 变成文件里写的），那样 5 秒会被拉长。所以拿 mediaChanged 先记一笔
+     * （它先来、带 URI），等 nowPlayingChanged 到的时候看这一笔还在不在 ——
+     * 在，就说明这次是**新内容**，不是同一条的标签更新。
+     */
+    property bool freshMedia: false
+
+    Connections {
+        target: Playback
+        function onMediaChanged(uri, metadata) {
+            bar.freshMedia = (uri !== "")
+        }
+        function onNowPlayingChanged() {
+            if (bar.freshMedia && Playback.mediaIsVideo)
+                holdTimer.restart()
+            bar.freshMedia = false
+        }
+    }
+
+    /** 鼠标在栏自己身上（兜底：停在栏上不收）。 */
+    HoverHandler {
+        id: barHover
+    }
+
+    /** 鼠标是不是正停在栏上 —— 静止画面那一档靠它兜底（停在栏上不收）。 */
+    readonly property bool pointerOnBar: barHover.hovered
+
+    /** 静止画面那一档：图片，或者暂停着的视频。 */
+    readonly property bool stillMode: overPicture && (!Playback.mediaIsVideo || Playback.paused)
+
+    /** 这一条栏现在该不该露着。 */
+    readonly property bool wanted: {
+        if (!overPicture)                     // 空闲 / 放音乐：常显
+            return true
+        if (holdTimer.running)                // 新视频那 5 秒
+            return true
+        if (stillMode)                        // 静止画面：动过鼠标，或者鼠标正停在栏上
+            return areaMoved || pointerOnBar
+        // 视频在放：鼠标在下沿那条里就显示。
+        //
+        // **`pointerOnBar` 这一半不能省。** 栏压在热区上面，鼠标移到栏上的时候
+        // 那条热区的 HoverHandler 收不到（上层赢了，实测读出来 stripHot=0）——
+        // 只判 stripHot 的话，用户把鼠标移到栏上、栏反而缩掉了。
+        return stripHot || pointerOnBar
+    }
+
+    // 淡入淡出 167 毫秒 —— Fluent 这套库自己用的就是它（库里 39 处动画都是），
+    // 这一条栏里进度旋钮的悬停动画也已经是它。
+    opacity: wanted ? 1 : 0
+    visible: opacity > 0
+    Behavior on opacity {
+        NumberAnimation {
+            duration: 167
+            easing.type: Easing.OutCubic
+        }
+    }
+
     /**
      * 这一条栏该用的主题色（蓝色）。
      *

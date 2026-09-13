@@ -111,6 +111,22 @@ class PlaybackController : public QObject
     Q_PROPERTY(bool showsPicture READ showsPicture NOTIFY showsPictureChanged)
 
     /**
+     * 现在这条内容是不是视频。**中性事实**，界面拿它决定控制栏怎么显隐。
+     *
+     * 控制栏那套规矩分三种情形，光靠 `showsPicture` 分不开：
+     *
+     *     showsPicture && mediaIsVideo && !paused   —— 视频在放：鼠标进下沿热区就显示
+     *     showsPicture && (!mediaIsVideo || paused) —— 静止画面（图片 / 暂停的视频）：
+     *                                                  鼠标在框里动一下显示，停几秒再收
+     *     !showsPicture                             —— 空闲 / 音乐：常显
+     *
+     * 为什么不用 castState：那个先看"有没有投送方连着"，本机放的片子会是
+     * NoViewer；而且它只分得出视频/音乐/图片，分不出"视频在放还是在暂停"
+     * （那是 paused 的事）。
+     */
+    Q_PROPERTY(bool mediaIsVideo READ mediaIsVideo NOTIFY nowPlayingChanged)
+
+    /**
      * 现在放的是哪一条（标题 / 歌手 / 专辑）。
      *
      * 新界面底下那条控制栏的标题和副标题就是读它。**标题里可能已经是兜底过的
@@ -308,6 +324,9 @@ public:
 
     /** 屏幕上是不是真的露着画面 —— 见上面 showsPicture 那段。 */
     bool showsPicture() const;
+
+    /** 现在这条内容是不是视频 —— 见上面 mediaIsVideo 那段。 */
+    bool mediaIsVideo() const;
 
     LoadStatus loadStatus() const { return m_loadStatus; }
 
