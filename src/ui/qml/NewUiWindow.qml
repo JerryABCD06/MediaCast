@@ -20,6 +20,17 @@ FluWindow {
     width: 1000
     height: 740
 
+    // **窗口背景：Win11 的云母（Mica）。**
+    //
+    // 这是 FluentUI 自带的（`FluFrameless` 把它暴露成 effect 属性），内部走的是
+    // `DwmSetWindowAttribute(hwnd, 38, DWMSBT_MAINWINDOW)` —— 系统那套，不是自己
+    // 画一层假的。可选值还有 "mica-alt"（资源管理器那种）、"acrylic"、
+    // "dwm-blur"（Win10 也有）、"normal"（关，也是原来的默认值）。
+    //
+    // 注意**只有没画底色的地方才透得出来**：顶栏是故意不画背景的，所以那儿最
+    // 明显；投屏页被画面（或者空闲时那块指引面板）盖着，看不出来。
+    effect: "mica"
+
     // ── 关窗策略 ─────────────────────────────────────────────────────────
     //
     // FluWindow 自带一个 closeListener：autoDestroy 为真就把窗口销毁，为假就
