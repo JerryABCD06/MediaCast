@@ -51,8 +51,14 @@ import MediaCast 1.0
 Item {
     id: bar
 
-    /** 栏有多高。压在画面上时外面不用管，将来要是改成占位排布会用得上。 */
-    implicitHeight: 74
+    /**
+     * 栏有多高。压在画面上时外面不用管，将来要是改成占位排布会用得上。
+     *
+     * = 上边距 4 + 进度条那行 28 + 按键那行 48 + 下边距 6。
+     * （原来是 2 + 26 + 40 + 6 = 74：按键那行只有 40，而按钮本身 30 高，
+     *   上下各剩 5 像素，看着挤。）
+     */
+    implicitHeight: 86
 
     /**
      * 底下是不是真的露着画面（在放视频 / 图片）。
@@ -143,14 +149,14 @@ Item {
         anchors.fill: parent
         anchors.leftMargin: 16
         anchors.rightMargin: 16
-        anchors.topMargin: 2
+        anchors.topMargin: 4
         anchors.bottomMargin: 6
         spacing: 0
 
         // ── 上：进度条 + 时间 ────────────────────────────────────────────
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 26
+            Layout.preferredHeight: 28
             spacing: 10
 
             FluSlider {
@@ -160,6 +166,17 @@ Item {
                 from: 0
                 to: Math.max(1, Playback.duration)
                 tooltipEnabled: false
+
+                // **把内部那 6 像素内边距去掉。**
+                //
+                // FluSlider 自己带 `padding: 6`，于是"轨道的可见起点"比这一条栏
+                // 的内容左边线往里缩了 6 —— 上面对齐的是时间文字的右端（贴着内容
+                // 右边线），下面一行标题、按钮也都在内容边线上，只有进度条左端缩
+                // 进去一截，看着就是左右不对称。
+                //
+                // 归零之后：position=0 时手柄的左边缘正好落在内容左边线上，
+                // position=max 时右边缘落在右边线上，两端都和上下两行对齐。
+                padding: 0
 
                 // ── 这条进度条的颜色得自己来 ────────────────────────────────
                 //
@@ -253,6 +270,11 @@ Item {
 
             FluText {
                 Layout.alignment: Qt.AlignVCenter
+                // **固定宽度 + 右对齐。** 不固定的话，"0:03 / 0:27" 和
+                // "10:03 / 1:27:00" 宽度不一样，进度条会跟着一伸一缩 ——
+                // 时间每进一位，整条进度条就抖一下。右边线也不会跟着跳。
+                Layout.preferredWidth: 96
+                horizontalAlignment: Text.AlignRight
                 text: bar.timeText(Playback.position) + " / " + bar.timeText(Playback.duration)
                 font: FluTextStyle.Caption
                 textColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontSecondaryColor
@@ -262,7 +284,9 @@ Item {
         // ── 下：左信息 / 中三键 / 右四键 ─────────────────────────────────
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
+            // 按键那行加高。按钮也一起从 30 长到 34 —— 整行留出上下各 7 像素的
+            // 呼吸空间（原来是各 5），不再显得贴边。
+            Layout.preferredHeight: 48
 
             // 左：投屏信息。
             //
@@ -320,6 +344,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_previous")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
@@ -348,8 +374,8 @@ Item {
                                                  : qsTr("ui_mediabar_pause")
                     // 圆底：常态就是主题色，悬停 / 按下各亮暗一档 —— 不这么做的话，
                     // 鼠标移上去只有一圈几乎看不见的底色，不像个"实心按钮"。
-                    width: 30
-                    height: 30
+                    width: 34
+                    height: 34
                     radius: width / 2
                     normalColor: bar.accentColor
                     hoverColor: Qt.lighter(bar.accentColor, 1.15)
@@ -366,6 +392,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_next")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
@@ -384,6 +412,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_subtitles")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
@@ -395,6 +425,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_volume")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
@@ -406,6 +438,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_picture")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
@@ -416,6 +450,8 @@ Item {
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_fullscreen")
+                    width: 34
+                    height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
                 }
