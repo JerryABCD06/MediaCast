@@ -172,11 +172,14 @@ Item {
             // 所有 QML 之上，这种栏根本做不出来。
             //
             // 容器上的 clip: true 保证它不会溢出圆角。
+            //
+            // **常显。** 以前是 `visible: Playback.hasMedia`（有东西装着才显示），
+            // 结果窗口刚打开、还没投送的时候底下什么都没有，看着像界面缺了一块。
+            // 现在一打开窗口它就在，没投送时显示「未知 / 空白进度」。
             MediaBar {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                visible: Playback.hasMedia
             }
         }
 

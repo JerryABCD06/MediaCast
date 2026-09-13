@@ -321,6 +321,15 @@ void PlaybackController::pause()
 
 void PlaybackController::togglePlayPause()
 {
+    // **手上什么都没有的时候按它不该有任何后果。**
+    //
+    // 以前碰不到这种调用：控制栏只在"装着内容"时才显示（界面那边是
+    // `visible: Playback.hasMedia`）。现在那条栏**常显**（窗口一打开就在），
+    // 没投送时也能按到它 —— 不挡住的话状态机会翻成 Playing，胶囊跟着写
+    // "正在投送"，而 mpv 手上其实一个文件都没有。
+    if (!hasMedia())
+        return;
+
     // "停止"和"播完了"这两种情况下 paused 都是 false，但按下去该是**播放**
     // （播完了还会由播放器那边先回到 0，见 MpvCore::play）。所以判断的是
     // "现在屏幕上是不是在走"，不是 paused 取反。
