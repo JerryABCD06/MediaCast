@@ -52,11 +52,15 @@ LegalDocs::LegalDocs(QObject *parent)
     };
 
     // ── 本项目自己那一条 ──────────────────────────────────────────────────
+    //
+    // ⚠️ **仓库还是空的**（2026-09-14 他刚建好）。GPL 要求分发二进制时提供"对应
+    // 源码的获取方式" —— 所以**在把代码推上去之前，不要对外发这个程序的二进制**，
+    // 否则这一栏就是一句空话。推上去之后这里才算数。
     m_project = component(QStringLiteral("Media Cast Receiver"),
                           QStringLiteral("Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>"),
                           QStringLiteral("GPL-3.0-or-later"),
                           QStringLiteral("GPL-3.0.txt"),
-                          QStringLiteral("https://github.com/"));
+                          QStringLiteral("https://github.com/JerryABCD06/MediaCast"));
     m_project.insert(QStringLiteral("isSelf"), true);
 
     // ── 第三方组件（首字母序）────────────────────────────────────────────
