@@ -198,7 +198,7 @@ void DlnaRenderer::openUri(const QString &uri)
     // 本地播放没有 DIDL 元数据，所以请求里只有地址 —— 标题交给控制器从文件名推。
     PlaybackController::MediaRequest request;
     request.uri = uri;
-    m_ctl->openUri(request, QStringLiteral("本地播放"));
+    m_ctl->openUri(request, MediaSource::Local);
 }
 
 void DlnaRenderer::play()

@@ -109,6 +109,18 @@ class PlaybackController : public QObject
      */
     Q_PROPERTY(bool showsPicture READ showsPicture NOTIFY showsPictureChanged)
 
+    /**
+     * 现在放的是哪一条（标题 / 歌手 / 专辑）。
+     *
+     * 新界面底下那条控制栏的标题和副标题就是读它。**标题里可能已经是兜底过的
+     * 东西**（协议层没给标题时会从文件名推、再不行用类型名顶上），见实现里那段
+     * 回退链 —— 界面拿到就直接显示，不用再自己拼。
+     *
+     * 兜底出来的东西是**跟语言走的**（类型名要翻译），所以切语言的时候主程序
+     * 会调一次 retranslate() 把它重算一遍并重新发这个信号。
+     */
+    Q_PROPERTY(NowPlaying nowPlaying READ nowPlaying NOTIFY nowPlayingChanged)
+
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
@@ -176,8 +188,8 @@ public:
         MediaKind kind = MediaKind::Unknown;
     };
 
-    /** 这条路是谁开的。只影响显示的副标题（"DLNA 投送" / "本地播放"）。 */
-    using MediaSource = QString;
+    // MediaSource（这条路是谁开的）定义在 NowPlaying.h 里 —— 它是"这段内容是什么"
+    // 的一部分，界面和面板都要用。
 
     explicit PlaybackController(MediaPlayer *player, QObject *parent = nullptr);
 
@@ -287,6 +299,19 @@ public:
 
     NowPlaying nowPlaying() const { return m_nowPlaying; }
 
+    /**
+     * 语言变了，把标题里那些**兜底出来的字**重算一遍。
+     *
+     * 需要它是因为回退链会产出要翻译的东西（协议层没给标题时拿类型名顶上：
+     * 中文是「视频」，英文得是 "Video"）。那条链在开着一条片子的时候已经跑过
+     * 一次了，语言再一变它不会自己重跑 —— 界面和 Windows 媒体面板就会一直
+     * 挂着旧语言那几个字。
+     *
+     * 由 main() 接在 UiState::languageChanged 上。重算完会重发
+     * nowPlayingChanged，两边就都跟着更新（媒体面板本来就听着那个信号）。
+     */
+    void retranslate();
+
     QString currentUri() const { return m_current.uri; }
     QString currentMetadata() const { return m_current.metadata; }
 
@@ -382,7 +407,14 @@ private:
      * 标题三层取值：协议层给的 → 从地址的文件名推 → 用类型名顶上。
      * 类型：协议层声明的 → 从扩展名推。
      */
-    NowPlaying buildNowPlaying(const MediaRequest &request, const MediaSource &source);
+    /**
+     * 由一条请求算出"正在播放什么"（标题的回退链就在里面）。
+     *
+     * quiet 是给 retranslate() 用的：切语言时会拿同一条请求再算一遍，那时候
+     * 不该把"没给标题，从文件名推出…"这类日志再刷一遍。
+     */
+    NowPlaying buildNowPlaying(const MediaRequest &request, const MediaSource &source,
+                               bool quiet = false);
 
     MediaPlayer *m_player = nullptr;
 

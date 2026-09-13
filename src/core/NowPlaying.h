@@ -18,22 +18,43 @@ enum class MediaKind
 };
 
 /**
+ * 内容是从哪儿来的。
+ *
+ * **这里不带协议名。** 界面上不该让用户看见 "DLNA" 这种词 —— 那是实现细节，
+ * 而且以后还会有别的协议。具体是哪个协议，日志里说去。
+ */
+enum class MediaSource
+{
+    /** 投送过来的。默认值 —— 这条路上绝大多数都是投送。 */
+    Cast,
+    /** 在电脑上直接打开的。 */
+    Local,
+};
+
+/**
  * NowPlaying —— "正在播放什么"。
  *
  * 界面要用它显示，Windows 的媒体控制面板（那个按音量键弹出来的东西）也要用它。
  * 所以它得是纯数据，不依赖任何一方。
+ *
+ * Q_GADGET + 那几个 Q_PROPERTY 是为了让 QML 能读它（新界面底下那条控制栏的
+ * 标题/副标题就是这儿来的）。QML 读不了裸结构体的字段。
  */
 struct NowPlaying
 {
+    Q_GADGET
+    Q_PROPERTY(QString title MEMBER title)
+    Q_PROPERTY(QString artist MEMBER artist)
+    Q_PROPERTY(QString album MEMBER album)
+
+public:
     /**
-     * 谁送来的。这是**给人看的字**，会直接当副标题显示出来。
-     *
-     * 两个取值：手机投过来的是「DLNA 投送」，电脑上自己放的是「本地播放」。
+     * 谁送来的。**是个枚举，不是文字** —— 文字由界面那边按语言查。
      *
      * （以前这里不分青红皂白写死成 "DLNA"，而电脑上那个「播放」按钮走的是同一个
      * 入口，结果本地放的片子副标题也显示 "DLNA" —— 谁也不认识那是谁放的。）
      */
-    QString senderName;
+    MediaSource source = MediaSource::Cast;
 
     MediaKind kind = MediaKind::Unknown;
 
@@ -41,7 +62,12 @@ struct NowPlaying
     QString artist;
     QString album;
 
-    /** 有没有拿到至少一个标题。界面靠它决定显示"正在播放"还是"等待投送"。 */
+    /**
+     * 有没有拿到至少一个标题。
+     *
+     * 注意 title 里可能是**兜底**出来的东西（类型名之类），见 PlaybackController
+     * 里那段回退链 —— 所以这个为真只说明"有东西可以显示"。
+     */
     bool hasTitle() const { return !title.isEmpty(); }
 
     bool isEmpty() const { return title.isEmpty() && artist.isEmpty() && album.isEmpty(); }
@@ -49,8 +75,21 @@ struct NowPlaying
 
 Q_DECLARE_METATYPE(NowPlaying)
 
-/** 类型的名字：「视频」/「音频」/「图片」。认不出来返回空串。 */
+/**
+ * 类型的名字：「视频」/「音频」/「图片」。认不出来返回空串。
+ *
+ * **中文，而且只给日志用。** 日志不翻译（见 lang/README.md），界面上那份要
+ * 走 mediaKindKey() + 语言文件。
+ */
 QString mediaKindLabel(MediaKind kind);
+
+/**
+ * 类型对应的**语言键名**（"media_kind_video" …）。认不出来返回空串。
+ *
+ * 界面上要显示的类型名从这儿查 —— **映射只此一份**，界面和媒体面板都问它。
+ * 具体译文在 lang/*.json 里。
+ */
+QString mediaKindKey(MediaKind kind);
 
 /**
  * 去掉末尾的**已知媒体扩展名**："a.mp4" → "a"。

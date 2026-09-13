@@ -143,8 +143,8 @@ Item {
 
             // 左：投屏信息。
             //
-            // 标题/副标题的兜底（文件名推标题、占位符跳过、类型名顶上）在 C++ 那边
-            // 就算好了，等 NowPlaying 暴露给 QML 之后，把这两行占位文字换成真的就行。
+            // 标题和副标题都读 Playback.nowPlaying —— **回退链在 C++ 那边**
+            // （文件名推标题、占位符跳过、类型名顶上），这里不做第二套判断。
             Column {
                 anchors.left: parent.left
                 anchors.right: centerGroup.left
@@ -154,9 +154,14 @@ Item {
 
                 FluText {
                     width: parent.width
-                    // 还没接上真标题。**这是兜底，不是占位符** —— 以后接上
-                    // NowPlaying 之后，读不到标题时才落回这一句，别把它删了。
-                    text: qsTr("ui_mediabar_title_unknown")
+                    // 标题：真标题 → 从文件名推 → 类型名 →「未知」。
+                    //
+                    // **前三层在 C++ 那边已经拼好了**（回退链只此一份，见
+                    // PlaybackController::buildNowPlaying）—— 这里拿到什么显示
+                    // 什么，空着只可能是连类型都认不出来，那就写「未知」。
+                    text: Playback.nowPlaying.title !== ""
+                          ? Playback.nowPlaying.title
+                          : qsTr("media_unknown")
                     font: FluTextStyle.BodyStrong
                     textColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     elide: Text.ElideRight
@@ -165,7 +170,20 @@ Item {
 
                 FluText {
                     width: parent.width
-                    text: qsTr("ui_mediabar_subtitle_unknown")
+                    // 副标题：歌手 → 专辑 →「未知」。
+                    //
+                    // **故意不显示"投送"/"本地播放"** —— 那是"打哪儿来的"，
+                    // 不是"这是什么"；在主界面上写它等于废话（本来就在投送）。
+                    // Windows 媒体面板那边会带上来源，因为那块面板是全局的，
+                    // 得让人分得清这条是谁在放。
+                    text: {
+                        const info = Playback.nowPlaying
+                        if (info.artist !== "")
+                            return info.artist
+                        if (info.album !== "")
+                            return info.album
+                        return qsTr("media_unknown")
+                    }
                     font: FluTextStyle.Caption
                     textColor: bar.overPicture ? "#B3FFFFFF" : FluTheme.fontSecondaryColor
                     elide: Text.ElideRight

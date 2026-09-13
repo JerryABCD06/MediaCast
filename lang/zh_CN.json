@@ -11,6 +11,13 @@
     "tray_resume": "恢复接收投送",
     "tray_quit": "退出",
 
+    "media_kind_video": "视频",
+    "media_kind_audio": "音频",
+    "media_kind_image": "图片",
+    "media_unknown": "未知",
+    "media_source_cast": "投送",
+    "media_source_local": "本地播放",
+
     "ui_cast_hint_connected": "已连接 —— 请在手机上选择要投送的视频、音乐或图片",
     "ui_cast_hint_idle": "将手机上的内容投送到这台电脑",
     "ui_cast_hint_step1": "① 将手机连接到与本机相同的 Wi-Fi 网络",
@@ -46,9 +53,6 @@
     "ui_mediabar_volume": "音量",
     "ui_mediabar_picture": "显示效果",
     "ui_mediabar_fullscreen": "全屏",
-    "ui_mediabar_title_unknown": "未知",
-    "ui_mediabar_subtitle_unknown": "未知",
-
     "ui_settings_category_ui": "界面",
     "ui_settings_category_cast": "投送",
     "ui_settings_category_about": "关于",

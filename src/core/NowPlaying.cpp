@@ -89,6 +89,18 @@ QString mediaKindLabel(MediaKind kind)
     return QString();
 }
 
+QString mediaKindKey(MediaKind kind)
+{
+    switch (kind)
+    {
+    case MediaKind::Video: return QStringLiteral("media_kind_video");
+    case MediaKind::Audio: return QStringLiteral("media_kind_audio");
+    case MediaKind::Image: return QStringLiteral("media_kind_image");
+    case MediaKind::Unknown: break;
+    }
+    return QString();
+}
+
 namespace {
 
 // 三张表放在这儿给两处用：一处是"猜类型"，一处是"去掉扩展名"。

@@ -398,7 +398,7 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
 
         // DIDL 的解码在这一层（那是 UPnP 的东西），解完交给控制器 ——
         // 电脑端的播放按钮走同一个控制器入口，两边就不会各写一份、各漏一处。
-        m_ctl->openUri(mediaRequestFromSoap(uri, meta), QStringLiteral("DLNA 投送"));
+        m_ctl->openUri(mediaRequestFromSoap(uri, meta), MediaSource::Cast);
         return soapOk(QStringLiteral("AVTransport"), action);
     }
 

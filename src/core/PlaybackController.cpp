@@ -1,5 +1,6 @@
 #include "PlaybackController.h"
 
+#include <QCoreApplication>
 #include <QTimer>
 
 namespace {
@@ -311,10 +312,10 @@ void PlaybackController::pushCurrentIntoHistory()
     emitQueueChanged();
 }
 
-PlaybackController::MediaSource PlaybackController::sourceForCurrent() const
+MediaSource PlaybackController::sourceForCurrent() const
 {
-    return m_nowPlaying.senderName.isEmpty() ? QStringLiteral("DLNA 投送")
-                                             : m_nowPlaying.senderName;
+    // 当前这条是打哪儿来的，就照原样带回去（重放 / 上一首 / 下一首都用它）。
+    return m_nowPlaying.source;
 }
 
 void PlaybackController::emitQueueChanged()
@@ -403,8 +404,11 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
     const NowPlaying info = buildNowPlaying(request, source);
 
     emit logMessage(QStringLiteral("开始播放 %1").arg(request.uri));
+    // 来源那句是**日志**，所以照旧带上协议名（排查时有用），而且不翻译 ——
+    // 界面上的来源是另一套，见 media_source_* 那几个键。
     emit logMessage(QStringLiteral("   来源：%1    类型：%2")
-                        .arg(source,
+                        .arg(source == MediaSource::Local ? QStringLiteral("本地播放")
+                                                          : QStringLiteral("DLNA 投送"),
                              mediaKindLabel(info.kind).isEmpty() ? QStringLiteral("未知")
                                                                  : mediaKindLabel(info.kind)));
     if (info.hasTitle())
@@ -435,10 +439,11 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
     m_player->load(request.uri);
 }
 
-NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request, const MediaSource &source)
+NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
+                                               const MediaSource &source, bool quiet)
 {
     NowPlaying info;
-    info.senderName = source;
+    info.source = source;
 
     // ── 类型 ────────────────────────────────────────────────────────────
     // 协议层声明了就用它的；没声明就从地址的扩展名猜。
@@ -460,21 +465,40 @@ NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request, cons
         const QString guess = titleFromUri(request.uri);
         if (looksLikeATitle(guess)) {
             info.title = guess;
-            emit logMessage(QStringLiteral("没给标题，从文件名推出「%1」").arg(guess));
-        } else if (!guess.isEmpty()) {
+            if (!quiet)
+                emit logMessage(QStringLiteral("没给标题，从文件名推出「%1」").arg(guess));
+        } else if (!guess.isEmpty() && !quiet) {
             emit logMessage(QStringLiteral("文件名「%1」不像标题，跳过").arg(guess));
         }
     }
 
     // 还是没有，就用类型名顶上。标题空着在 Windows 媒体面板里会显示成"未知"，
     // 比一个中性的类型名还难懂 —— 至少"图片"这两个字说清了现在在放什么。
+    //
+    // **这里要的是译文，不是日志那种中文**：这个字会直接显示在界面上，
+    // 所以走语言文件那一套（mediaKindKey -> 译文）。这也是切语言时得重算
+    // 一遍的原因，见 retranslate()。
     if (info.title.isEmpty()) {
-        info.title = mediaKindLabel(info.kind);
-        if (!info.title.isEmpty())
+        const QString key = mediaKindKey(info.kind);
+        if (!key.isEmpty())
+            info.title = QCoreApplication::translate("NowPlaying", key.toUtf8().constData());
+        if (!info.title.isEmpty() && !quiet)
             emit logMessage(QStringLiteral("没有可用标题，用类型名「%1」顶上").arg(info.title));
     }
 
     return info;
+}
+
+void PlaybackController::retranslate()
+{
+    // 手上什么都没有（刚启动、或者投送已经结束）—— 没东西要重算。
+    if (m_state == State::NoMedia || m_current.uri.isEmpty())
+        return;
+
+    // 拿同一条请求再算一遍。quiet：切语言不是"又开始放了一条"，别把标题那条
+    // 日志再刷一次。
+    m_nowPlaying = buildNowPlaying(m_current, m_nowPlaying.source, /*quiet=*/true);
+    emit nowPlayingChanged(m_nowPlaying);
 }
 
 void PlaybackController::endSession()

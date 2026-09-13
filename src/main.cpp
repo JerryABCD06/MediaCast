@@ -204,6 +204,11 @@ int main(int argc, char *argv[])
     // 好决定显示画面还是显示投屏指引。
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Playback", &playback);
 
+    // "现在放的是哪一条"（标题/歌手/专辑）也得让 QML 读得到 —— 新界面底下那条
+    // 控制栏的标题和副标题就是读它。**匿名注册**：QML 只需要能读它的字段，
+    // 不需要拿这个名字去 new 一个出来（它是纯数据）。
+    qmlRegisterAnonymousType<NowPlaying>("MediaCast", 1);
+
     DlnaRenderer renderer(&playback);
     MainWindow   window(&renderer);
 
@@ -308,6 +313,12 @@ int main(int argc, char *argv[])
     // （新界面那边靠 QML 的绑定重算，这里靠这一句。）
     QObject::connect(&uiState, &UiState::languageChanged,
                      &tray, &TrayIcon::retranslate);
+
+    // 标题里可能装着**兜底出来的字**（协议层没给标题时拿类型名顶上：中文写
+    // 「视频」，英文得是 "Video"）。那是开着片子的时候算好的，语言再一变它不会
+    // 自己重跑 —— 叫控制器重算一遍，界面和 Windows 媒体面板才跟着更新。
+    QObject::connect(&uiState, &UiState::languageChanged,
+                     &playback, &PlaybackController::retranslate);
 
     // ── 设置文件接到网络上那几项 ─────────────────────────────────────────
     //

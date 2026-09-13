@@ -11,6 +11,13 @@
     "tray_resume": "Resume receiving",
     "tray_quit": "Quit",
 
+    "media_kind_video": "Video",
+    "media_kind_audio": "Audio",
+    "media_kind_image": "Image",
+    "media_unknown": "Unknown",
+    "media_source_cast": "Cast",
+    "media_source_local": "Local playback",
+
     "ui_cast_hint_connected": "Connected — select a video, song, or photo on your phone",
     "ui_cast_hint_idle": "Cast content from your phone to this PC",
     "ui_cast_hint_step1": "① Connect your phone to the same Wi-Fi network as this PC",
@@ -46,9 +53,6 @@
     "ui_mediabar_volume": "Volume",
     "ui_mediabar_picture": "Picture settings",
     "ui_mediabar_fullscreen": "Full screen",
-    "ui_mediabar_title_unknown": "Unknown",
-    "ui_mediabar_subtitle_unknown": "Unknown",
-
     "ui_settings_category_ui": "Interface",
     "ui_settings_category_cast": "Casting",
     "ui_settings_category_about": "About",

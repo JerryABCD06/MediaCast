@@ -258,12 +258,32 @@ void WindowsMediaControls::pushDisplay()
 
     const NowPlaying &info = m_impl->info;
 
-    // 副标题：有歌手就显示歌手，没有就显示来源。
+    // ── 标题和副标题 ─────────────────────────────────────────────────────
     //
-    // 视频和图片没有"歌手"这个概念，系统在那个位置统一叫"副标题"，所以两样都写
-    // 同一个值。来源分得清「DLNA 投送」和「本地播放」—— 这两件事以前都显示
-    // "DLNA"，本地放片子的时候看着莫名其妙。
-    const QString subtitle = info.artist.isEmpty() ? info.senderName : info.artist;
+    // 标题：控制器那边已经兜过底了（真标题 → 从文件名推 → 类型名），还会空着
+    // 只可能是"连类型都认不出来"。那时候给个"未知"，别让面板上留一块空白。
+    const QString title = info.title.isEmpty() ? tr("media_unknown") : info.title;
+
+    // 副标题：有歌手显示歌手，没有显示专辑，都没有就是"未知"。
+    //
+    // **不带协议名。** 面板是给用户看的东西，没必要让他看见 "DLNA" 这种实现
+    // 细节（以前这儿直接写 "DLNA 投送"）。来源只用说清"投送"还是"本地播放"，
+    // 拼成「来源 - 副标题」。
+    //
+    // 视频和图片没有"歌手"这个概念，系统在那个位置统一叫"副标题"，所以三种
+    // 类型写的是同一个值。
+    QString sub = info.artist;
+    if (sub.isEmpty())
+        sub = info.album;
+    if (sub.isEmpty())
+        sub = tr("media_unknown");
+
+    const QByteArray sourceKey = info.source == MediaSource::Local
+                                     ? QByteArrayLiteral("media_source_local")
+                                     : QByteArrayLiteral("media_source_cast");
+    const QString subtitle = tr(sourceKey.constData()) + QStringLiteral(" - ") + sub;
+
+    // 这一句是**日志**用的，不翻译（见 lang/README.md 那条规矩）。
     const QString kindName = mediaKindLabel(info.kind);
 
     try
@@ -281,7 +301,7 @@ void WindowsMediaControls::pushDisplay()
             updater.Type(WMedia::MediaPlaybackType::Music);
             {
                 auto music = updater.MusicProperties();
-                music.Title(toHString(info.title));
+                music.Title(toHString(title));
                 music.Artist(toHString(subtitle));
                 music.AlbumTitle(toHString(info.album));
             }
@@ -292,7 +312,7 @@ void WindowsMediaControls::pushDisplay()
             updater.Type(WMedia::MediaPlaybackType::Image);
             {
                 auto image = updater.ImageProperties();
-                image.Title(toHString(info.title));
+                image.Title(toHString(title));
                 image.Subtitle(toHString(subtitle));
             }
             break;
@@ -302,7 +322,7 @@ void WindowsMediaControls::pushDisplay()
             updater.Type(WMedia::MediaPlaybackType::Video);
             {
                 auto video = updater.VideoProperties();
-                video.Title(toHString(info.title));
+                video.Title(toHString(title));
                 video.Subtitle(toHString(subtitle));
             }
             break;
@@ -311,8 +331,7 @@ void WindowsMediaControls::pushDisplay()
         updater.Update();
 
         emit logMessage(QStringLiteral("Windows 媒体面板 -> %1 ｜ %2 ｜ %3")
-                            .arg(info.title.isEmpty() ? QStringLiteral("（无标题）") : info.title,
-                                 subtitle,
+                            .arg(title, subtitle,
                                  kindName.isEmpty() ? QStringLiteral("未知类型") : kindName));
     }
     catch (winrt::hresult_error const &e)
