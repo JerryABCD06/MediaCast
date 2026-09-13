@@ -153,6 +153,18 @@ Item {
         color: bar.overPicture ? "#B3000000" : "transparent"
     }
 
+    // **把这一条栏上的点击吃掉。**
+    //
+    // 栏下面就是投屏页那个"点画面 = 播放/暂停"的 MouseArea。而 Rectangle 本身
+    // **不吃鼠标事件**，于是点在按钮之间的空隙、栏两端的留白上，事件会穿过去 ——
+    // 用户点的是控制栏，片子却被暂停了。
+    //
+    // 空实现就够，这里要的只是"事件到此为止"。声明在所有按钮**之前**：
+    // 后声明的在上面，所以按钮、进度条照样点得到。
+    MouseArea {
+        anchors.fill: parent
+    }
+
     /** 秒 -> "0:12"；超过一小时才带小时位。 */
     function timeText(seconds) {
         if (!isFinite(seconds) || seconds < 0)

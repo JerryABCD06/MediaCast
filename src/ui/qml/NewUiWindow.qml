@@ -164,6 +164,18 @@ FluWindow {
             visible: window.page === 1
             color: FluTheme.backgroundColor
 
+            // **先吃掉这一页上的点击。**
+            //
+            // Rectangle **不吃鼠标事件** —— 没有这一层的话，点在设置页的空白处
+            // （四周留白、左边那栏下方的空区）会**穿到下面投屏页**，落到那个
+            // "点画面 = 播放/暂停"的 MouseArea 上：看着在设置页里，片子却被暂停了。
+            //
+            // 空实现就够。声明在 SettingsPage **之前**（后声明的在上面），
+            // 所以页面里的开关、下拉框照样点得到。
+            MouseArea {
+                anchors.fill: parent
+            }
+
             SettingsPage {
                 anchors.fill: parent
             }
