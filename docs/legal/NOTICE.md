@@ -8,7 +8,8 @@ When the dependency set is finalized, third-party notices should be added separa
 
 See:
 
-- `LICENSE` — project software license (to be selected)
+- `LICENSE` — project software license: **GPL-3.0-or-later** (GNU General Public
+  License version 3 or later). The full text is at the repository root.
 - `LEGAL-NOTICES.md` — general legal and usage notices
 - `CODECS.md` — codec and patent notice
 - `TRADEMARKS.md` — trademark notice
