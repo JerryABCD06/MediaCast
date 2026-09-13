@@ -534,8 +534,17 @@ NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
     //
     // 这张标签表是后到的（见构造函数里那个 metadataChanged）：投送刚起来的时候
     // 它还是空的，等文件打开才会来，那时候会重算一遍。
-    if (info.title.isEmpty())
-        info.title = tagValue(m_fileTags, { QStringLiteral("title") });
+    if (info.title.isEmpty()) {
+        const QString fromFile = tagValue(m_fileTags, { QStringLiteral("title") });
+        // 文件里的标题**也要过同一道筛子**。有些文件是被工具批量打过标签的，
+        // title 里装的就是文件名本身（"Screenshot_20260905_232916"）——
+        // 那种东西显示出来比"图片"两个字还糟，宁可往后退。
+        if (looksLikeATitle(fromFile)) {
+            info.title = fromFile;
+        } else if (!fromFile.isEmpty() && !quiet) {
+            emit logMessage(QStringLiteral("文件里的标题「%1」不像标题，跳过").arg(fromFile));
+        }
+    }
     if (info.artist.isEmpty())
         info.artist = tagValue(m_fileTags, { QStringLiteral("artist") });
     if (info.album.isEmpty())
