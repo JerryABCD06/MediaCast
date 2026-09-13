@@ -69,6 +69,15 @@ Item {
      */
     readonly property bool overPicture: Playback.showsPicture
 
+    /**
+     * 这一条栏现在是不是"深色那套"。
+     *
+     * 压着画面的时候**永远是深色**（画面内容不可控）；不然跟着主题走。
+     * 图标和文字各自用带透明度的白表达这件事，进度条按它选整组颜色 ——
+     * 以前进度条漏了这条规矩，见下面 FluSlider 里那段。
+     */
+    readonly property bool darkStyle: overPicture || FluTheme.dark
+
     // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
     Rectangle {
         anchors.fill: parent
@@ -109,6 +118,21 @@ Item {
                 to: Math.max(1, Playback.duration)
                 tooltipEnabled: false
 
+                // ── 这条进度条的颜色得自己来 ────────────────────────────────
+                //
+                // FluSlider 把轨道和手柄的颜色**写死在组件内部**（`FluTheme.dark`
+                // 两档），而且一个属性都不暴露 —— 拿它没办法，只能把 handle 和
+                // background 整个换掉。
+                //
+                // 为什么非改不可：这一条栏有它**自己的**明暗规矩（压着画面时永远
+                // 是深色那套，见上面 darkStyle），而组件内部只认 FluTheme。两者会
+                // 对不上：浅色主题下压在黑底上，轨道是浅灰、手柄是白的，看着像贴
+                // 上去的。
+                //
+                // 这一段的形状、尺寸、悬停放大都照抄库里那份，只把 `FluTheme.dark`
+                // 换成 `posSlider.darkStyle`。
+                readonly property bool darkStyle: bar.darkStyle
+
                 // **不要写成 value: Playback.position 这种绑定。**
                 // 用户一拖，控件自己会写 value，绑定当场被打断 —— 之后它再也
                 // 跟不回播放器的位置（表现是"拖一次之后进度条就瞎了"）。
@@ -125,6 +149,62 @@ Item {
                 onPressedChanged: {
                     if (!pressed)
                         Playback.seekTo(value)
+                }
+
+                handle: Rectangle {
+                    x: posSlider.leftPadding
+                       + posSlider.visualPosition * (posSlider.availableWidth - width)
+                    y: posSlider.topPadding + (posSlider.availableHeight - height) / 2
+                    implicitWidth: 20
+                    implicitHeight: 20
+                    radius: 10
+                    color: posSlider.darkStyle ? Qt.rgba(69 / 255, 69 / 255, 69 / 255, 1)
+                                               : Qt.rgba(1, 1, 1, 1)
+                    FluShadow {
+                        radius: 10
+                    }
+                    FluIcon {
+                        width: 10
+                        height: 10
+                        anchors.centerIn: parent
+                        iconSource: FluentIcons.FullCircleMask
+                        iconSize: 10
+                        iconColor: FluTheme.primaryColor
+                        scale: posSlider.pressed ? 0.9 : (posSlider.hovered ? 1.2 : 1)
+                        Behavior on scale {
+                            NumberAnimation {
+                                duration: 167
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
+                }
+
+                background: Item {
+                    x: posSlider.leftPadding
+                    y: posSlider.topPadding + (posSlider.availableHeight - height) / 2
+                    implicitWidth: 180
+                    implicitHeight: 6
+                    width: posSlider.availableWidth
+                    height: implicitHeight
+                    scale: posSlider.mirrored ? -1 : 1
+
+                    // 没走过的那一段
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        radius: 2
+                        color: posSlider.darkStyle ? Qt.rgba(162 / 255, 162 / 255, 162 / 255, 1)
+                                                   : Qt.rgba(138 / 255, 138 / 255, 138 / 255, 1)
+                    }
+
+                    // 走过的那一段
+                    Rectangle {
+                        width: posSlider.position * parent.width
+                        height: 6
+                        radius: 3
+                        color: FluTheme.primaryColor
+                    }
                 }
             }
 
@@ -204,13 +284,31 @@ Item {
                 // 图标的两态看的是"现在按下去会发生什么"，**不是 paused 一个标志**：
                 // 停着（Stopped）的时候 paused 也是 false，但那时该显示"播放"，
                 // 显示"暂停"是骗人的 —— 点下去什么都不会发生。
+                //
+                // 三个键里只有它用**实心图标 + 主题色圆底**：那是这一条栏的主操作，
+                // Windows 11 的媒体播放器也是这么把它突出出来的。
+                //
+                // （"上一首 / 下一首"这套图标里**没有实心版** —— 只有空心的
+                // `Previous` / `Next`，所以那两格保持空心。实心播放键 + 空心换曲键，
+                // 正好就是系统播放器的样子。）
                 TipIconButton {
                     readonly property bool showPlay: Playback.paused || Playback.idle
-                    iconSource: showPlay ? FluentIcons.Play : FluentIcons.Pause
-                    iconSize: 24
-                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
+                    iconSource: showPlay ? FluentIcons.PlaySolid : FluentIcons.PauseBold
+                    // **和其他键一样大。** 以前这里是 24（别的都是 18），一个键
+                    // 显大一号，看着像忘了配。
+                    iconSize: 18
+                    // 压在主题色圆底上，所以永远是白的（不再跟着主题走）。
+                    iconColor: "#FFFFFFFF"
                     contentDescription: showPlay ? qsTr("ui_mediabar_play")
                                                  : qsTr("ui_mediabar_pause")
+                    // 圆底：常态就是主题色，悬停 / 按下各亮暗一档 —— 不这么做的话，
+                    // 鼠标移上去只有一圈几乎看不见的底色，不像个"实心按钮"。
+                    width: 30
+                    height: 30
+                    radius: width / 2
+                    normalColor: FluTheme.primaryColor
+                    hoverColor: Qt.lighter(FluTheme.primaryColor, 1.15)
+                    pressedColor: Qt.darker(FluTheme.primaryColor, 1.15)
                     // 按下去该干什么由状态机说了算（规则只有一份，在
                     // PlaybackController::togglePlayPause）。上面那个 showPlay
                     // 只管画哪个图标。
