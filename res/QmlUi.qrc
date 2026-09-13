@@ -43,5 +43,15 @@
             库自带的那份只会往目标上方弹，贴着窗口上沿就看不见了。
         -->
         <file alias="components/TipTooltip.qml">../src/ui/qml/components/TipTooltip.qml</file>
+        <!--
+            「设置 → 关于」里那套标签页：关于 / 法律 / 开源许可。
+            三个页面都是**不认识窗口**的普通 Item，装进标签页只是其中一种用法 ——
+            将来首启向导要作为独立弹窗打开它们时，换个宿主即可，页面不用改。
+        -->
+        <file alias="legal/AboutTabs.qml">../src/ui/qml/legal/AboutTabs.qml</file>
+        <file alias="legal/AboutPane.qml">../src/ui/qml/legal/AboutPane.qml</file>
+        <file alias="legal/DocPane.qml">../src/ui/qml/legal/DocPane.qml</file>
+        <file alias="legal/LicensesPane.qml">../src/ui/qml/legal/LicensesPane.qml</file>
+        <file alias="legal/TextViewer.qml">../src/ui/qml/legal/TextViewer.qml</file>
     </qresource>
 </RCC>

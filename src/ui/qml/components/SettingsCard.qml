@@ -32,6 +32,10 @@ FluFrame {
     property string title: ""
     property string subtitle: ""
 
+    /** 整张卡片可点（点了发 clicked）。默认关着 —— 只有"点一下有下文"的才开。 */
+    property bool clickable: false
+    signal clicked()
+
     /** 右边那个控件（用默认属性直接塞进来）。 */
     default property alias control: controlHost.data
 
@@ -39,6 +43,19 @@ FluFrame {
     // 高度自己算：一行约 40，副标题折行时能长高，但不至于矮得挤。
     implicitHeight: Math.max(72, rowLayout.implicitHeight + 24)
     padding: 0
+
+    // **必须声明在 RowLayout 之前**：Qt Quick 的兄弟节点里后声明的在上面，
+    // 所以铺在下面的这一层只管接"没被别人接走的"点击 —— 右边那些按钮照旧
+    // 优先拿到事件，空白处的点击才落到这儿。
+    //
+    // 早先试过在卡片外面套一层 Item 挂 TapHandler：不行。卡片（FluFrame）盖在
+    // 上面把事件接走了，点击根本到不了外层。让卡片自己可点才对。
+    MouseArea {
+        anchors.fill: parent
+        enabled: card.clickable
+        cursorShape: Qt.PointingHandCursor
+        onClicked: card.clicked()
+    }
 
     RowLayout {
         id: rowLayout

@@ -82,6 +82,17 @@
     "ui_about_device_address_desc": "Control points reach this device at this address. On the same network you can open it in a phone browser to view the device description.",
     "ui_about_device_id": "Device ID",
     "ui_about_device_id_desc": "Control points use it to tell whether this is the same device. It never changes once created.",
-    "ui_about_version": "Version"
+    "ui_about_version": "Version",
+
+    "ui_legal_tab_about": "About",
+    "ui_legal_tab_legal": "Legal",
+    "ui_legal_tab_licenses": "Open source licenses",
+
+    "ui_legal_intro": "These are the notices that ship with the program. They are not legal boilerplate — each one answers a concrete question: whether the program uses the network, what it leaves on your machine, and how it relates to third-party technologies. Select any entry to read it in full.",
+
+    "ui_legal_view_license": "View license",
+    "ui_legal_back": "Back",
+    "ui_legal_open_homepage": "Open project page",
+    "ui_legal_read_failed": "Could not read this file: %1"
   }
 }

@@ -7,6 +7,7 @@ import QtQuick.Controls
 import FluentUI
 import MediaCast 1.0
 import "components"
+import "legal"
 
 // 设置页。左右两栏，照 Windows 11 设置应用：
 //
@@ -147,6 +148,8 @@ Item {
             id: scroller
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // 「关于」那类目不用这个滚动区 —— 它自带一层标签页（见下面）。
+            visible: page.category !== 2
             clip: true
             contentWidth: width
             contentHeight: cardColumn.height
@@ -312,65 +315,22 @@ Item {
                     }
                 }
 
-                // ══ 类目：关于 ═══════════════════════════════════════════
-                //
-                // 这一栏**全是只读的** —— 它是"看"的地方：排错、报问题、或者想确认
-                // "手机上一堆设备里哪个是我"的时候用。所以右边不放控件，只放值。
-                //
-                // 数据来自 Device（就是 DlnaRenderer 那个门面，只暴露了这几项只读
-                // 属性）。界面拿不到 DlnaRenderer 的任何操作能力。
-
-                SettingsCard {
-                    visible: page.category === 2
-                    icon: FluentIcons.TVMonitor
-                    title: qsTr("ui_about_device_name")
-                    subtitle: qsTr("ui_about_device_name_desc")
-
-                    FluText {
-                        text: Device.deviceName
-                        font: FluTextStyle.Body
-                        textColor: FluTheme.fontSecondaryColor
-                    }
-                }
-
-                SettingsCard {
-                    visible: page.category === 2
-                    icon: FluentIcons.Link
-                    title: qsTr("ui_about_device_address")
-                    subtitle: qsTr("ui_about_device_address_desc")
-
-                    FluText {
-                        text: Device.locationUrl
-                        font: FluTextStyle.Caption
-                        textColor: FluTheme.fontSecondaryColor
-                    }
-                }
-
-                SettingsCard {
-                    visible: page.category === 2
-                    icon: FluentIcons.Info
-                    title: qsTr("ui_about_device_id")
-                    subtitle: qsTr("ui_about_device_id_desc")
-
-                    FluText {
-                        text: Device.udn
-                        font: FluTextStyle.Caption
-                        textColor: FluTheme.fontSecondaryColor
-                    }
-                }
-
-                SettingsCard {
-                    visible: page.category === 2
-                    icon: FluentIcons.Settings
-                    title: qsTr("ui_about_version")
-
-                    FluText {
-                        text: "Media Cast " + Device.appVersion
-                        font: FluTextStyle.Body
-                        textColor: FluTheme.fontSecondaryColor
-                    }
-                }
+                // 「关于」那几张卡片**搬走了** —— 它现在住在 legal/AboutPane.qml，
+                // 作为"关于"类目里那套标签页的第一页（见下面 AboutTabs）。
             }
+        }
+
+        // ── 右：关于（里面自成一套标签页）────────────────────────────────
+        //
+        // 「关于」这一类目里还有一层：关于 / 法律 / 开源许可。三页都在 legal/ 下，
+        // 而且**不认识窗口** —— 将来要作为独立弹窗打开时换个宿主就行，页面不用改。
+        //
+        // **必须和上面那个 Flickable 平级**（都在这个 RowLayout 里）：它自己要
+        // 撑满高度，塞进 Flickable 的列里会算不出高度、直接看不见。
+        AboutTabs {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: page.category === 2
         }
     }
 }

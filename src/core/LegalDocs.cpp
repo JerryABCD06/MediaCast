@@ -20,13 +20,20 @@ QVariantMap doc(const QString &file, const QString &canonical, const QString &ke
 }
 
 QVariantMap component(const QString &name, const QString &copyright, const QString &license,
-                      const QString &licenseFile, const QString &source)
+                      const QString &licenseFile, const QString &homepage, const QString &source)
 {
     return QVariantMap{
         { QStringLiteral("name"), name },
         { QStringLiteral("copyright"), copyright },
         { QStringLiteral("license"), license },
         { QStringLiteral("licenseFile"), licenseFile },
+        // 项目页 —— 界面上每行最右边那个"向外展开"按钮点它。
+        // 惯例是链到主页或仓库；对开源库，仓库更常见（一个链接同时回答问题
+        // "谁做的"和"源码在哪"）。
+        { QStringLiteral("homepage"), homepage },
+        // 源码的**确切**位置。GPL / LGPL 要求提供"对应源码的获取方式"，
+        // 所以这一栏是合规用的，和 homepage 不一定同一个地址（比如 Qt 的
+        // 主页是 qt.io，但源码要指到那个版本的发布页）。
         { QStringLiteral("source"), source },
     };
 }
@@ -60,6 +67,7 @@ LegalDocs::LegalDocs(QObject *parent)
                           QStringLiteral("Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>"),
                           QStringLiteral("GPL-3.0-or-later"),
                           QStringLiteral("GPL-3.0.txt"),
+                          QStringLiteral("https://github.com/JerryABCD06/MediaCast"),
                           QStringLiteral("https://github.com/JerryABCD06/MediaCast"));
     m_project.insert(QStringLiteral("isSelf"), true);
 
@@ -72,16 +80,19 @@ LegalDocs::LegalDocs(QObject *parent)
                   QStringLiteral("Copyright (c) 2023 zhuzichu"),
                   QStringLiteral("MIT"),
                   QStringLiteral("MIT-FluentUI.txt"),
+                  QStringLiteral("https://github.com/zhuzichu520/FluentUI"),
                   QStringLiteral("https://github.com/zhuzichu520/FluentUI")),
         component(QStringLiteral("libmpv / FFmpeg"),
                   QStringLiteral("mpv 项目与 FFmpeg 项目及各位贡献者"),
                   QStringLiteral("GPL-2.0-or-later"),
                   QStringLiteral("GPL-2.0.txt"),
+                  QStringLiteral("https://mpv.io"),
                   QStringLiteral("https://github.com/mpv-player/mpv")),
         component(QStringLiteral("Qt 6"),
                   QStringLiteral("The Qt Company Ltd. and contributors"),
                   QStringLiteral("LGPL-3.0"),
                   QStringLiteral("LGPL-3.0.txt"),
+                  QStringLiteral("https://www.qt.io"),
                   QStringLiteral("https://download.qt.io/official_releases/qt/6.11/6.11.2/")),
     };
 

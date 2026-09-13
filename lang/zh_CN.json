@@ -82,6 +82,22 @@
     "ui_about_device_address_desc": "控制点通过该地址访问本设备。在同一局域网内，用手机浏览器打开它也可以查看设备描述",
     "ui_about_device_id": "设备标识",
     "ui_about_device_id_desc": "控制点据此判断是否为同一台设备。该标识一经生成不再改变",
-    "ui_about_version": "版本"
+    "ui_about_version": "版本",
+
+    "ui_legal_tab_about": "关于",
+    "ui_legal_tab_legal": "法律",
+    "ui_legal_tab_licenses": "开源许可",
+
+    "ui_legal_intro": "这里放的是随程序一起分发的说明文件。它们不是法律条文，而是把几件具体的事说清楚：这程序联不联网、在你电脑上留下什么、和那些第三方协议是什么关系。点任意一条看全文。",
+
+    "ui_legal_doc_privacy": "隐私说明",
+    "ui_legal_doc_notices": "法律声明",
+    "ui_legal_doc_trademarks": "商标声明",
+    "ui_legal_doc_codecs": "编解码器与专利",
+
+    "ui_legal_view_license": "查看许可证书",
+    "ui_legal_back": "返回",
+    "ui_legal_open_homepage": "打开项目页",
+    "ui_legal_read_failed": "读不到这个文件：%1"
   }
 }
