@@ -1,5 +1,10 @@
 # Media Cast Receiver
 
+> [!WARNING]
+> **Early Development**
+>
+> MediaCast is currently in early development. Pre-built releases are not yet available, but you can build it from source.
+
 Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 
 - 接收 **DLNA / UPnP AV** 投送（用 vivo 相册、BubbleUPnP 实测过）
