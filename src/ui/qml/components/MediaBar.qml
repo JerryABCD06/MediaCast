@@ -114,17 +114,30 @@ Item {
      * 强制走深色那套的时候，鼠标一上去反而**变暗** —— 和周围的白字白图标对不上，
      * 看着像凹下去一块。
      *
-     * 深色那一档库没有单独暴露出来（只有一个"当前主题"的值），只能照
-     * FluTheme.cpp 里那两行抄：
+     * ── 深色那一档用多少 ────────────────────────────────────────────────
      *
-     *     itemHoverColor = 深色 ? rgba(255,255,255,0.06) : rgba(0,0,0,0.03)
-     *     itemPressColor = 深色 ? rgba(255,255,255,0.09) : rgba(0,0,0,0.06)
+     * 参照物是 Windows 11 那个媒体播放器，用户在纯黑底上量出来的：
      *
-     * 浅色那一档继续问 FluTheme —— 那本来就是它该给的。库改了要跟着改。
+     *     悬停 #222222（34）   按下 #1D1D1D（29）
+     *
+     * 这两个数反推出微软那套是怎么搭的：它的**栏底是 #141414（20）**，
+     * 按钮叠加标准的白 6% / 4% ——
+     *
+     *     悬停 0.06×255 + 0.94×20 = 34.1  ✓
+     *     按下 0.04×255 + 0.96×20 = 29.4  ✓
+     *
+     * 严丝合缝。而**我们这条栏的底是纯黑**（70% 黑叠在黑的画面上还是黑），
+     * 同样 6% 只能得到 #0F0F0F —— 难怪"太不明显"。所以这里不套那两档，
+     * 直接按**净值**补：白色的 34/255 和 29/255。
+     *
+     * 注意**按下比悬停暗**（29 < 34）—— 这不是笔误，微软那边就是这样，
+     * Fluent 的"透明按钮"本来就是 pressed 比 hover 淡。别顺手改过来。
+     *
+     * 浅色那一档继续问 FluTheme —— 那本来就是它该给的（浅底上叠白等于没叠）。
      */
-    readonly property color itemHoverColor: darkStyle ? Qt.rgba(1, 1, 1, 0.06)
+    readonly property color itemHoverColor: darkStyle ? Qt.rgba(1, 1, 1, 34 / 255)
                                                       : FluTheme.itemHoverColor
-    readonly property color itemPressColor: darkStyle ? Qt.rgba(1, 1, 1, 0.09)
+    readonly property color itemPressColor: darkStyle ? Qt.rgba(1, 1, 1, 29 / 255)
                                                       : FluTheme.itemPressColor
 
     // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
