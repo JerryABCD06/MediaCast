@@ -619,8 +619,28 @@ Item {
                     // **和其他键一样大。** 以前这里是 24（别的都是 18），一个键
                     // 显大一号，看着像忘了配。
                     iconSize: 18
-                    // 压在主题色圆底上，所以永远是白的（不再跟着主题走）。
-                    iconColor: "#FFFFFFFF"
+                    // ── 圆底上的字形：**深色那套是黑的，浅色那套才是白的** ────
+                    //
+                    // 这不是我们定的，是这套库自己的规范 —— 见库里
+                    // `FluFilledButton.qml`（主题色实心按钮）：
+                    //
+                    //     textColor: FluTheme.dark ? 黑 : 白
+                    //
+                    // 道理在配色本身：**深色那套的蓝是提亮过的**（`accentColor`
+                    // 那个属性就是照库里 `FluTheme.primaryColor` 取的 —— 深色给
+                    // `accentColor.lighter`，浅色给 `.dark`）。提亮过的蓝底上再压
+                    // 白字，对比度只有 3.2:1，糊成一片；压黑字是 6.6:1。Windows
+                    // 那套也是这么配的（WinUI 的 `TextOnAccentFillColorPrimary`：
+                    // 浅色主题白、深色主题黑）。
+                    //
+                    // 原来是写死白的 —— 2026-09-14 他看出来了："深色样式下播放/
+                    // 暂停键还是白的"。
+                    //
+                    // 判据必须和 **accentColor 用同一个** `darkStyle`，不能看
+                    // `FluTheme.dark`：这条栏压着画面时永远是深色那套，而程序主题
+                    // 可能还是浅的 —— 那就是两个字色对不上圆底的场合。
+                    iconColor: bar.darkStyle ? Qt.rgba(0, 0, 0, 1)
+                                             : Qt.rgba(1, 1, 1, 1)
                     contentDescription: showPlay ? qsTr("ui_mediabar_play")
                                                  : qsTr("ui_mediabar_pause")
                     // 圆底：常态就是主题色，悬停 / 按下各亮暗一档 —— 不这么做的话，
