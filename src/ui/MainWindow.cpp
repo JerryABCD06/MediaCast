@@ -192,9 +192,13 @@ void MainWindow::buildUi()
 
     // 把播放后端报上来的画面调节项填进下拉。一个都没有就把整行藏起来 ——
     // 空着比摆一排按不动的滑块好。
+    //
+    // 下拉里显示的就是那个中性短名（"brightness" 这种）。这一屏是**测试界面**，
+    // 不跟着语言走（见 docs/待办.md 里"旧界面退场"那一段）—— 名字的译文归
+    // 新界面去查。
     const QVector<PictureControlInfo> controls = m_renderer->pictureControls();
     for (const PictureControlInfo &control : controls)
-        m_pictureCombo->addItem(control.label, control.name);
+        m_pictureCombo->addItem(control.name, control.name);
 
     if (controls.isEmpty())
         m_pictureRow->setVisible(false);

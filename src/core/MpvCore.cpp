@@ -24,11 +24,14 @@ namespace {
  * scale 是"我们的整数 × scale = 塞给 mpv 的浮点数"。mpv 那几项 -100~100 的
  * 正好乘以 1；像 sharpen、video-align 这类 0~1 / -1~1 的，就用 0.01 把它换算成
  * 整数来给界面用 —— 界面不需要知道底下是浮点。
+ *
+ * **这张表里没有"给人看的名字"。** name 是给程序用的中性短名，界面拿
+ * `ui_picture_<name>` 去语言文件里查译文（见 MediaPlayer.h 里 PictureControlInfo
+ * 那段）。以前这里多一列中文，切到英文界面就会蹦中文。
  */
 struct PictureControlSpec
 {
     const char *name;         // 短名，界面和 DLNA 那边都用它
-    const char *label;        // 给人看的名字
     const char *mpvProperty;
     int         min;
     int         max;
@@ -37,23 +40,23 @@ struct PictureControlSpec
 };
 
 const PictureControlSpec kPictureControls[] = {
-    { "brightness", "亮度",     "brightness",     -100, 100, 0, 1.0  },
-    { "contrast",   "对比度",   "contrast",       -100, 100, 0, 1.0  },
-    { "saturation", "饱和度",   "saturation",     -100, 100, 0, 1.0  },
-    { "gamma",      "伽马",     "gamma",          -100, 100, 0, 1.0  },
-    { "hue",        "色相",     "hue",            -100, 100, 0, 1.0  },
+    { "brightness", "brightness",     -100, 100, 0, 1.0  },
+    { "contrast",   "contrast",       -100, 100, 0, 1.0  },
+    { "saturation", "saturation",     -100, 100, 0, 1.0  },
+    { "gamma",      "gamma",          -100, 100, 0, 1.0  },
+    { "hue",        "hue",            -100, 100, 0, 1.0  },
     // 锐度这里是空的：它不走属性，走视频滤镜链。原因见 applySharpen 上面那段。
-    { "sharpen",    "锐度",     nullptr,          -100, 100, 0, 1.0  },
-    { "zoom",       "画面缩放", "video-zoom",      -20,  20, 0, 1.0  },
+    { "sharpen",    nullptr,          -100, 100, 0, 1.0  },
+    { "zoom",       "video-zoom",      -20,  20, 0, 1.0  },
     // 位置用 pan 而不是 align。
     //
     // align 是"在**留白**里挪画面"：没有留白就没得挪。我们这窗口是宽屏，视频被加的
     // 是左右留白，于是"垂直位置"拉了半天纹丝不动 —— 实测就是这样。
     // pan 是直接平移画面，什么时候都有反应（代价是会裁掉移出画面的部分，但"把画面
     // 往上挪一点"本来就是干这个的）。
-    { "pan-x",      "水平位置", "video-pan-x",   -100, 100, 0, 0.01 },
-    { "pan-y",      "垂直位置", "video-pan-y",   -100, 100, 0, 0.01 },
-    { "rotate",     "旋转",     "video-rotate",      0, 359, 0, 1.0  },
+    { "pan-x",      "video-pan-x",   -100, 100, 0, 0.01 },
+    { "pan-y",      "video-pan-y",   -100, 100, 0, 0.01 },
+    { "rotate",     "video-rotate",      0, 359, 0, 1.0  },
 };
 
 const PictureControlSpec *findPictureSpec(const QString &name)
@@ -585,7 +588,6 @@ QVector<PictureControlInfo> MpvCore::pictureControls() const
     for (const PictureControlSpec &spec : kPictureControls) {
         PictureControlInfo info;
         info.name = QString::fromLatin1(spec.name);
-        info.label = QString::fromUtf8(spec.label);
         info.min = spec.min;
         info.max = spec.max;
         info.neutral = spec.neutral;

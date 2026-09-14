@@ -53,5 +53,11 @@
         <file alias="legal/DocPane.qml">../src/ui/qml/legal/DocPane.qml</file>
         <file alias="legal/LicensesPane.qml">../src/ui/qml/legal/LicensesPane.qml</file>
         <file alias="legal/TextViewer.qml">../src/ui/qml/legal/TextViewer.qml</file>
+        <!--
+            「显示效果」那扇独立窗口：PicturePane 是内容（不认识窗口），
+            PictureWindow 是装它的宿主窗口。窗口由 NewUiWindow 按需建、建完留着。
+        -->
+        <file alias="picture/PicturePane.qml">../src/ui/qml/picture/PicturePane.qml</file>
+        <file alias="picture/PictureWindow.qml">../src/ui/qml/picture/PictureWindow.qml</file>
     </qresource>
 </RCC>

@@ -56,6 +56,15 @@ Item {
     id: bar
 
     /**
+     * 「显示效果」那个按钮被按了。
+     *
+     * **这条栏自己不窗口、也不开窗口** —— 那个调节窗口是个独立窗口，归窗口
+     * 外壳管（见 NewUiWindow.qml 里 openPictureWindow 那段）。这里只把"用户
+     * 要调画面"这件事说出去，至于开在哪儿、怎么开，是宿主的事。
+     */
+    signal pictureRequested()
+
+    /**
      * 栏有多高。压在画面上时外面不用管，将来要是改成占位排布会用得上。
      *
      * = 上边距 4 + 进度条那行 28 + 按键那行 48 + 下边距 11。
@@ -848,8 +857,9 @@ Item {
                     }
                 }
 
-                // 壳子：显示效果调节。以后开**独立窗口**（不是这里的弹层），
-                // 把旧界面那十多项（亮度/对比度/锐度/色温/色增益/梯形校正…）搬过去。
+                // 显示效果调节。开的是**独立窗口**（不是这里的弹层）——
+                // 十来条滑块塞不进一个浮出控件，而且调的时候得能一边看画面一边拖。
+                // 窗口归窗口外壳管，这条栏只把请求发出去（见上面 pictureRequested）。
                 TipIconButton {
                     iconSource: FluentIcons.Brightness
                     iconSize: 18
@@ -859,6 +869,7 @@ Item {
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
+                    onClicked: bar.pictureRequested()
                 }
 
                 // 全屏 / 退出全屏。**两态图标按窗口自己的可见状态换**（见 NewUiWindow

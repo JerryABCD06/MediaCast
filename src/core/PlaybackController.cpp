@@ -710,6 +710,25 @@ QVector<PictureControlInfo> PlaybackController::pictureControls() const
     return m_player ? m_player->pictureControls() : QVector<PictureControlInfo>();
 }
 
+QVariantList PlaybackController::pictureControlList() const
+{
+    QVariantList out;
+    if (!m_player)
+        return out;
+
+    const QVector<PictureControlInfo> controls = m_player->pictureControls();
+    out.reserve(controls.size());
+    for (const PictureControlInfo &control : controls) {
+        QVariantMap item;
+        item.insert(QStringLiteral("name"), control.name);
+        item.insert(QStringLiteral("min"), control.min);
+        item.insert(QStringLiteral("max"), control.max);
+        item.insert(QStringLiteral("neutral"), control.neutral);
+        out.append(item);
+    }
+    return out;
+}
+
 bool PlaybackController::setPictureControl(const QString &name, int value)
 {
     return m_player ? m_player->setPictureControl(name, value) : false;

@@ -8,6 +8,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
 
@@ -83,6 +84,22 @@ class PlaybackController : public QObject
      */
     Q_PROPERTY(int volumePercent READ volumePercent NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ isMuted NOTIFY muteChanged)
+
+    /**
+     * 画面调节项的清单：`[{ name, min, max, neutral }, …]`。
+     *
+     * 界面拿它自己长出一排滑块 —— 有几项、每项什么量程、复位到哪儿，全在这一份
+     * 数据里，界面上没有第二处写死。以后后端加一项（比如换播放器之后能调色温了），
+     * 只改后端那张表，界面不用动。
+     *
+     * **声明成 CONSTANT 是有意的**：清单来自后端一张编译期常量表，一辈子不会变，
+     * 所以没有 NOTIFY。真有一天它会变了，这里得改成带信号的属性 —— 不然界面
+     * 只会读到第一次那一份。
+     *
+     * `name` 是中性短名（"brightness"），**不是给人看的字**。界面按
+     * `ui_picture_<name>` 去语言文件里查译文，C++ 这边一个中文都没有。
+     */
+    Q_PROPERTY(QVariantList pictureControlList READ pictureControlList CONSTANT)
 
     /**
      * 有没有投送方连着。
@@ -311,10 +328,14 @@ public:
     // 全部原样转发给播放器 —— 这里不做任何数值换算。DLNA 那套 0~100（50 才是
     // "原样"）是 DLNA 自己的规矩，换算写在协议层。
 
+    /** 清单本身见上面 `pictureControlList` 那个属性。 */
+    QVariantList pictureControlList() const;
+
     QVector<PictureControlInfo> pictureControls() const;
-    bool setPictureControl(const QString &name, int value);
-    int  pictureControlValue(const QString &name) const;
-    void resetPictureControls();
+    // 这三个是给 QML 用的 —— 界面读不了 C++ 的方法，只能走 Q_INVOKABLE。
+    Q_INVOKABLE bool setPictureControl(const QString &name, int value);
+    Q_INVOKABLE int  pictureControlValue(const QString &name) const;
+    Q_INVOKABLE void resetPictureControls();
 
     // ── 状态读取（取缓存，立刻返回）──────────────────────────────────────
 

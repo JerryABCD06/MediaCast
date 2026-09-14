@@ -5,6 +5,7 @@ import QtQuick
 import FluentUI
 import MediaCast 1.0
 import "components"
+import "picture"
 
 // 新界面的窗口外壳。它只做三件事：
 //   一、把 FluentUI 的窗口撑起来；
@@ -281,6 +282,43 @@ FluWindow {
     // 混在一起用户会分不清自己在哪一层 —— 尤其"设置"里以后会长出子页面。
     property int page: 0        // 0 = 投屏，1 = 设置
 
+    // ── 「显示效果」那个独立窗口 ─────────────────────────────────────────
+    //
+    // **先建后留**（不是每次开都新建一个）：
+    //
+    //   · 建：`Component` + `createObject` —— **不能写在上面那棵树里**。写进去
+    //     就是窗口一出生就跟着建出来，而这扇窗大多数人整个会话都不开一次；
+    //     FluentUI 那一套的构造开销是实打实的一秒多（主窗口那边量过），
+    //     白掏在启动上不值。
+    //   · 留：那个窗口设了 `autoDestroy: false`（见 PictureWindow.qml），
+    //     关掉只是隐藏，引用一直有效 —— 下次点按钮直接 show() 回来。
+    //
+    // **为什么引用放在这儿而不是页面里**：控制栏只管发"用户要调画面"这件事
+    // （MediaBar.pictureRequested），投屏页只是转手往上递（CastPage 里那个同名
+    // 信号里写着）。窗口归窗口外壳管 —— 和"这一个进程只建一个引擎、窗口可以
+    // 建了又销毁"那条规矩是一个意思（见 docs/待办.md）。
+    Component {
+        id: com_picture_window
+
+        PictureWindow { }
+    }
+
+    property var pictureWindow: null
+
+    function openPictureWindow() {
+        if (!pictureWindow)
+            pictureWindow = com_picture_window.createObject(window)
+
+        // createObject 失败会返回 null（组件写错了之类）。真到那一步宁可什么都
+        // 不发生，也别在这儿崩一下。
+        if (!pictureWindow)
+            return
+
+        pictureWindow.show()
+        pictureWindow.raise()
+        pictureWindow.requestActivate()
+    }
+
     // ── 顶栏 ─────────────────────────────────────────────────────────────
     //
     // 整条换掉 FluWindow 自带的那条（自带那条只有一个图标和一个标题）。
@@ -338,6 +376,7 @@ FluWindow {
 
         CastPage {
             anchors.fill: parent
+            onPictureRequested: window.openPictureWindow()
         }
 
         // 设置页：盖满整页，所以下面那些控件点不到；自己带一块实心底，
