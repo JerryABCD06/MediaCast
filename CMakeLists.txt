@@ -127,11 +127,21 @@ add_dependencies(MCast fluentuiplugin)
 
 # QML 引擎按 <导入路径>/FluentUI/qmldir 找模块，所以把整个模块目录
 # 放到 exe 旁边的 qml/ 下。main() 里会把那个目录加进导入路径。
-add_custom_command(TARGET MCast POST_BUILD
+#
+# 这一步**踩过坑，别改回 POST_BUILD(MCast)**：挂在 MCast 上的话，只有"我们自己的
+# QML（走 qrc）改了、MCast 重新链接"时才会拷一次；而**只改库里的 QML**（比如
+# FluAppBar.qml）时 MCast 没有理由重链，拷贝就不跑 —— 表现是"改了库、重编了、
+# 跑起来还是老样子"（亲眼见了一次：按下态的字形怎么改都不变）。
+#
+# 所以给它一个自己的目标：每次构建都跟着源目录抄一遍（几 MB，代价可以忽略），
+# 顺序上靠 add_dependencies 等插件先编好。跨目录不能用 TARGET POST_BUILD
+# （CMake 会报 "TARGET was not created in this directory"）。
+add_custom_target(mcast_copy_fluentui_qml ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${FLUENTUI_QML_PLUGIN_DIRECTORY}"
             "$<TARGET_FILE_DIR:MCast>/qml/FluentUI"
     COMMENT "复制 FluentUI QML 模块到构建目录")
+add_dependencies(mcast_copy_fluentui_qml fluentuiplugin)
 
 # ── Windows 媒体面板（SMTC）───────────────────────────────────────────────
 #
