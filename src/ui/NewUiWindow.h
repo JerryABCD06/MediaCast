@@ -9,10 +9,11 @@
 class QQmlApplicationEngine;
 class QQuickWindow;
 
-// NewUiWindow —— 用 QML + FluentUI 搭的新界面。
+// NewUiWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
+// （旧的 Widgets 界面 2026-09-14 退场了）。
 //
-// 现阶段的定位是**并存**：旧的 Widgets 界面照常工作，这个是旁路加进来的，
-// 由托盘菜单手工打开。等它长齐了，旧界面才退场。
+// 什么时候开：有东西投过来（或者用户在托盘里点「打开主界面」）。启动时不开窗口 ——
+// 这台设备平时的样子就是"在托盘里待着、等手机投过来"。
 //
 // 三条约定：
 //

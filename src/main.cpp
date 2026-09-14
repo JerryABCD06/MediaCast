@@ -9,11 +9,11 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTime>
+#include <QWidget>
 #include <QtQml/qqml.h>
 
 #include <memory>
 
-#include "core/LibMpvPlayer.h"
 #include "core/AppSettings.h"
 #include "core/LegalDocs.h"
 #include "core/MpvCore.h"
@@ -22,13 +22,15 @@
 #include "core/Tr.h"
 #include "platform/windows/WindowsMediaControls.h"
 #include "protocols/dlna/DlnaRenderer.h"
-#include "ui/MainWindow.h"
 #include "ui/NewUiWindow.h"
 #include "ui/TrayIcon.h"
 #include "ui/UiState.h"
 
 /**
  * 组装整个程序。这里只做五件事：造零件、接日志、接 Windows 媒体面板、开窗口、起服务。
+ *
+ * （"开窗口"现在只剩托盘；主界面是**有东西投过来才开**的 —— 见下面 mediaChanged
+ *   那一段。启动时不再弹任何窗口，这是旧界面退场之后的样子。）
  *
  * 依赖是**单向**的，方向不能反：
  *
@@ -170,34 +172,20 @@ int main(int argc, char *argv[])
                                               : QStringLiteral("写不进去，改动不会保留")));
     QObject::connect(&settings, &AppSettings::logMessage, writeLog);
 
-    // ── 零件 ─────────────────────────────────────────────────────────────
-    // 播放后端二选一，改下面这一行就能换：
-    //   LibMpvPlayer   —— 内嵌 libmpv，画面画进我们自己的窗口（当前用这个）
-    //   MpvMediaPlayer —— 外部 mpv.exe + 命名管道（保留着，排查问题时能换回来，
-    //                     但它需要把 mpv.exe 的路径传给 start()）
     // ── 播放后端 ─────────────────────────────────────────────────────────
     //
-    // 【过渡开关】两套界面现在还并存，而**一个 mpv 实例只能有一条画面输出
-    // 路径**（mpv 的 vo 只能设一次，wid 和 render API 互斥）。所以画面只可能
-    // 出现在其中一边：
+    // 走 **render API**：mpv 的画面由 QML 场景图合成，所以它能被裁剪、被别的控件
+    // 压住（旧界面那条 wid 路做不到 —— 视频是独立的原生子窗口，永远盖在所有 QML
+    // 之上）。**一个 mpv 实例只能有一条画面输出路径**（vo 只能设一次，wid 和
+    // render API 互斥），旧界面退场之后只剩这一条，那个过渡开关也就删掉了。
     //
-    //   false → LibMpvPlayer 走 wid，画面画进旧界面的画面区。
-    //           手机投屏时电脑上能看到画面 —— 现在就是这条。
-    //   true  → MpvCore 走 render API，画面由新的 QML 界面渲染。
-    //           代价是旧界面的画面区会变成空的。
-    //
-    // DLNA 那一层**两条路都不受影响** —— 它只认 MediaPlayer 接口，不关心
-    // 画面往哪出。等旧界面退场之后，这个开关就能删掉，只剩上面那条。
-    constexpr bool kRenderVideoInNewUi = true;
-
+    // `LibMpvPlayer`（wid 外壳）和 `MpvMediaPlayer`（外部 mpv.exe + 命名管道）
+    // 都还在源码里、没人构造了 —— 留着是"排查问题时能换回来"的那条退路。
     std::unique_ptr<MpvCore> ownedPlayer;
-    if (kRenderVideoInNewUi) {
+    {
         auto core = std::make_unique<MpvCore>();
         core->setOutputMode(MpvCore::RenderApiOutput);
         ownedPlayer = std::move(core);
-    } else {
-        // 构造里已经把自己设成 WindowOutput。
-        ownedPlayer = std::make_unique<LibMpvPlayer>();
     }
     MpvCore *player = ownedPlayer.get();
 
@@ -228,7 +216,6 @@ int main(int argc, char *argv[])
     qmlRegisterAnonymousType<NowPlaying>("MediaCast", 1);
 
     DlnaRenderer renderer(&playback);
-    MainWindow   window(&renderer);
 
     // 这台设备在网络里的身份（名字、地址、唯一标识、版本）给 QML 一份 ——
     // 设置页的「关于」读它。**只读**，界面改不了这些东西。
@@ -306,18 +293,9 @@ int main(int argc, char *argv[])
     QObject::connect(&newUi, &NewUiWindow::castEndRequested,
                      &renderer, &DlnaRenderer::endSession);
 
-    // 托盘的两个入口：主界面是新界面，测试界面是旧的 Widgets 界面。
+    // 托盘那个「打开主界面」。
     QObject::connect(&tray, &TrayIcon::openMainUiRequested,
                      &newUi, &NewUiWindow::show);
-    QObject::connect(&tray, &TrayIcon::openTestUiRequested, &window,
-                     [&window] {
-        if (window.isMinimized())
-            window.showNormal();
-        else
-            window.show();
-        window.raise();
-        window.activateWindow();
-    });
     // 有东西要投过来（或者界面上按了播放），就把新界面拉起来。
     //
     // 这**不只是一句方便**：render API 模式下 mpv 的视频输出要等画面 item
@@ -376,12 +354,32 @@ int main(int argc, char *argv[])
     });
 
     // ── 开跑 ─────────────────────────────────────────────────────────────
-    // 界面暂时照旧弹出来。以后换正式界面时，这里大概会变成"只留托盘"。
-    window.show();
+    //
+    // **启动时只有托盘，不弹窗口。** 这台设备平时的样子就是"在托盘里待着、等手机
+    // 投过来"；有东西投过来时 mediaChanged 会把主界面拉起来（见上面那段）。
+    // 用户想主动看看，托盘菜单里有「打开主界面」。
     tray.show();
 
-    // 媒体面板要等窗口真的存在之后才能挂 —— 它认的是窗口号。
-    mediaControls.attachToWindow(static_cast<quintptr>(window.winId()));
+    // 媒体面板要挂在**一个窗口**上（WinRT 那边只能拿窗口号换 SMTC 对象）。
+    //
+    // **不能挂到主界面那扇窗上**：它是"关了真销毁、下次再建一扇新的"，窗口号会变，
+    // 而面板挂上去之后就跟死在这一个窗口号上（重挂也来不及）。所以另起一个
+    // **常驻的、不显示的宿主窗口**，它活多久面板就活多久。
+    //
+    // 面板要的只是"一个属于本进程的顶层窗口"：它显示什么、按了什么，全走信号，
+    // 跟这个窗口长什么样、在不在屏幕上都无关。
+    QWidget mediaHostWindow;
+    mediaHostWindow.setWindowTitle(QStringLiteral("Media Cast"));
+    // `Qt::Tool`：不进任务栏、不进 Alt+Tab。这个窗口只是给面板"递一个窗口号"用的，
+    // 用户不该看见它、更不该在任务栏里发现多了一个窗口。
+    mediaHostWindow.setWindowFlags(Qt::Tool);
+    mediaHostWindow.resize(1, 1);
+    // 先 show 一次再藏起来：那个 interop 拿的是"系统里真的存在的一个窗口"，
+    // 让平台那边先把窗口建出来更稳（不 show 直接问窗口号，Qt 也会建，
+    // 但这里不想赌）。1×1、又是工具窗，露一下不会被人看见。
+    mediaHostWindow.show();
+    mediaHostWindow.hide();
+    mediaControls.attachToWindow(static_cast<quintptr>(mediaHostWindow.winId()));
 
     player->start();
     renderer.start();

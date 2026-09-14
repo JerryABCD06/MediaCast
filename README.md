@@ -18,7 +18,7 @@ Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 ```
 src/core/        播放器抽象接口、mpv 那一层、状态机、设置、语言
 src/protocols/   协议层（现在只有 dlna/；加别的协议就再加一个同级目录）
-src/ui/          QML 新界面（主力）；MainWindow 那套 Widgets 是测试界面
+src/ui/          QML + FluentUI 界面（唯一那套；旧 Widgets 界面已退场）
 docs/            设计文档、待办、协议实现情况、法律声明
 licenses/        随包分发的第三方许可全文 + 组件清单
 ```

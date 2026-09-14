@@ -19,9 +19,6 @@ TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     m_openMainAction = new QAction(tr("tray_open_main"), this);
     connect(m_openMainAction, &QAction::triggered, this, &TrayIcon::openMainUiRequested);
 
-    m_openTestAction = new QAction(tr("tray_open_test"), this);
-    connect(m_openTestAction, &QAction::triggered, this, &TrayIcon::openTestUiRequested);
-
     m_acceptAction = new QAction(tr("tray_pause"), this);
     connect(m_acceptAction, &QAction::triggered, this, &TrayIcon::toggleAccepting);
 
@@ -32,7 +29,6 @@ TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     // QSystemTrayIcon 只是引用它，不接管所有权。
     m_menu = new QMenu();
     m_menu->addAction(m_openMainAction);
-    m_menu->addAction(m_openTestAction);
     m_menu->addSeparator();
     m_menu->addAction(m_acceptAction);
     m_menu->addSeparator();
@@ -108,7 +104,6 @@ void TrayIcon::retranslate()
     // 换语言不会自己重画，得有人把文字重新设一遍。main() 那边接到
     // UiState::languageChanged 就调这儿。
     m_openMainAction->setText(tr("tray_open_main"));
-    m_openTestAction->setText(tr("tray_open_test"));
     m_quitAction->setText(tr("tray_quit"));
 
     // 这一句的文字跟状态走，refreshMenu 里一起管。

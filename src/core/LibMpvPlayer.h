@@ -14,7 +14,10 @@
  * 完全不同的画面输出路径，而**除了"画面往哪出"，两者要的东西一模一样**。
  * 所以共用的四百多行待在 MpvCore，这里只留差异的那十几行。
  *
- * 谁在用：旧的 Widgets 界面（MainWindow 把画面区的窗口号传进来）。
+ * 谁在用：**现在没人用了**。它本来服务于旧的 Widgets 界面（那边把画面区的窗口号
+ * 传进来）；2026-09-14 旧界面退场，画面统一走 render API（`MpvQmlItem`）。
+ * 留着是因为"一个 mpv 只能有一条输出路径"这个决定随时可能要往回退，而这条路
+ * 是通的、验过的 —— 真要用，在 main() 里换回 `LibMpvPlayer` + `WindowOutput`。
  * 新的 QML 界面不用它 —— 那边走 render API。
  */
 class LibMpvPlayer : public MpvCore

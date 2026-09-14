@@ -6,7 +6,6 @@
 
   "strings": {
     "tray_open_main": "Open main window",
-    "tray_open_test": "Open test window",
     "tray_pause": "Pause receiving",
     "tray_resume": "Resume receiving",
     "tray_quit": "Quit",

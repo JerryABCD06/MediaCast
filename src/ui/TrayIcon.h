@@ -52,11 +52,8 @@ public:
 signals:
     void logMessage(const QString &text);
 
-    /** 用户要打开正式界面（新的 QML 界面）。 */
+    /** 用户要打开主界面（现在只有 QML 那一套了）。 */
     void openMainUiRequested();
-
-    /** 用户要打开测试界面（旧的 Widgets 界面）。 */
-    void openTestUiRequested();
 
 private:
     /** 暂停 / 恢复接收投送。 */
@@ -72,7 +69,6 @@ private:
     QMenu *m_menu = nullptr;
 
     QAction *m_openMainAction = nullptr;
-    QAction *m_openTestAction = nullptr;
     QAction *m_acceptAction = nullptr;
     QAction *m_quitAction = nullptr;
 };

@@ -97,16 +97,14 @@ qt_add_executable(MCast
     src/platform/windows/WindowFrame.cpp
 
     # 界面
-    src/ui/MainWindow.h
-    src/ui/MainWindow.cpp
     src/ui/TrayIcon.h
     src/ui/TrayIcon.cpp
 
-    # 新界面（QML）。实验阶段，和上面那套 Widgets 界面并存，互不影响。
+    # 界面（QML）。旧的那套 Widgets 界面（MainWindow）2026-09-14 退场了。
     src/ui/NewUiWindow.h
     src/ui/NewUiWindow.cpp
 
-    # 界面状态：语言 + 深浅的唯一源头，两套界面都向它看齐。
+    # 界面状态：语言 + 深浅的唯一源头，界面和原生控件都向它看齐。
     src/ui/UiState.h
     src/ui/UiState.cpp
 

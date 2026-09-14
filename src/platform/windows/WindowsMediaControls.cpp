@@ -155,7 +155,8 @@ bool WindowsMediaControls::attachToWindow(quintptr windowId)
 
         m_impl->smtc = smtc;
 
-        // 面板上给哪几个按钮点亮。上一首/下一首先不点 —— 队列那套还没做，
+        // 面板上给哪几个按钮点亮。**上一首/下一首先灰着**：刚挂上来的时候队列
+        // 一定是空的（队列一变，setQueueAvailability 会把它们点亮）。
         // 点着却按不动比灰着更糟。
         m_impl->smtc.IsPlayEnabled(true);
         m_impl->smtc.IsPauseEnabled(true);

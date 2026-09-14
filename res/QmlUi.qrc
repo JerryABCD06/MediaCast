@@ -11,9 +11,8 @@
     FluentUI 那个模块不在这里 —— 它是个带 DLL 的 QML 插件，只能放文件系统
     （CMake 会把它拷到 exe 旁边的 qml/FluentUI）。
 
-    注意 TopNav.qml **不在**这个清单里。它是我们自己写的顶栏备选（支持图标、
-    支持左右分列），现在没在用，所以不编进 exe。哪天要用，在下面加一行
-    <file alias="TopNav.qml">../src/ui/qml/TopNav.qml</file> 就行。
+    （这里原来还有一句"TopNav.qml 不在这个清单里"——那个文件是早先自己写的
+     顶栏备选，2026-09-14 跟旧界面一起删掉了。）
 -->
 <RCC>
     <qresource prefix="/ui">
