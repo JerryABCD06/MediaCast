@@ -570,7 +570,7 @@ Item {
 
                 // 壳子：等 PlaybackController 把 previous() 暴露给 QML
                 TipIconButton {
-                    iconSource: FluentIcons.Previous
+                    iconSource: FluentIcons.BackSolidBold
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_previous")
@@ -589,9 +589,11 @@ Item {
                 // 三个键里只有它用**实心图标 + 主题色圆底**：那是这一条栏的主操作，
                 // Windows 11 的媒体播放器也是这么把它突出出来的。
                 //
-                // （"上一首 / 下一首"这套图标里**没有实心版** —— 只有空心的
-                // `Previous` / `Next`，所以那两格保持空心。实心播放键 + 空心换曲键，
-                // 正好就是系统播放器的样子。）
+                // （这里原来写着"上一首 / 下一首没有实心版，所以那两格保持空心" ——
+                // 那句话是错的，只是名字不叫 `PreviousSolid` / `NextSolid`：
+                // 实心那对叫 `BackSolidBold` / `ForwardSolidBold`。查证的办法在
+                // `work\glyph-sheet.ps1` 里 —— 把码位渲染成一张对照表看形状，
+                // 比对着名字猜靠谱。现在三个键都是实心的，和系统播放器一致。）
                 TipIconButton {
                     readonly property bool showPlay: Playback.paused || Playback.idle
                     iconSource: showPlay ? FluentIcons.PlaySolid : FluentIcons.PauseBold
@@ -618,7 +620,7 @@ Item {
 
                 // 壳子：下一个
                 TipIconButton {
-                    iconSource: FluentIcons.Next
+                    iconSource: FluentIcons.ForwardSolidBold
                     iconSize: 18
                     iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_next")
@@ -669,7 +671,25 @@ Item {
                 // 数字放上面不是装饰：滑块本身看不出"现在是几"，调的时候得有个数可看。
                 TipIconButton {
                     id: btn_volume
-                    iconSource: FluentIcons.Volume
+
+                    // ── 图标按**现在的状态**换 ───────────────────────────────────
+                    //
+                    // 五个状态，全是库里现成的字形（不是我们画的）：静音一个、
+                    // 0 一个、然后按响度分三档。
+                    //
+                    //   `.muted`      带叉的喇叭（`Mute`）—— 和系统一样，静音是
+                    //                 单独一个状态：音量为 0 和"被静音"不是一回事
+                    //   `Volume0`     一个波都没有（音量 0，但没静音）
+                    //   `Volume1..3`  一道 / 两道 / 三道波
+                    //
+                    // 分档照三分之一切（1-33 一道、34-66 两道、67-100 三道）。
+                    // 名字怎么来的、长什么样，见 `work\glyph-sheet.ps1` 那张对照表。
+                    readonly property int level: Playback.volumePercent
+                    iconSource: Playback.muted ? FluentIcons.Mute
+                              : level <= 0     ? FluentIcons.Volume0
+                              : level <= 33    ? FluentIcons.Volume1
+                              : level <= 66    ? FluentIcons.Volume2
+                                               : FluentIcons.Volume3
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
                     contentDescription: qsTr("ui_mediabar_volume")
@@ -712,7 +732,11 @@ Item {
                         onClosed: bar.popupOpen = false
 
                         background: FluRectangle {
-                            radius: 6
+                            // **`radius` 要给四个角** —— 这个属性是 `QList<int>`
+                            // （左上 / 右上 / 右下 / 左下，画的时候不够的补 0），
+                            // 写成 `radius: 6` 只会圆左上角，另外三个角是直角。
+                            // 库自己那几处也是这么写的：`[5,5,5,5]`、`[6,6,0,0]`。
+                            radius: [6, 6, 6, 6]
                             color: bar.darkStyle ? Qt.rgba(43 / 255, 43 / 255, 43 / 255, 1)
                                                  : Qt.rgba(1, 1, 1, 1)
                             FluShadow {
@@ -757,7 +781,12 @@ Item {
                                 readonly property bool pressed: volumeMouse.pressed
                                 readonly property bool hovered: volumeMouse.containsMouse
 
-                                readonly property int trackWidth: 6
+                                // 两条轨的粗细**不一样**：已经到的那一段（蓝）6、还
+                                // 没到的（灰）4。这是这套界面的规矩，不是随手定的 ——
+                                // 库自己那个 FluSlider 就这么画（灰的那条 `margins: 1`
+                                // 缩掉一圈，蓝的占满 6），上面那条进度条也照抄了它。
+                                readonly property int trackWidth: 6   // 已到的那一段（蓝）
+                                readonly property int emptyWidth: 4   // 还没到的那一段（灰）
                                 readonly property int handleSize: 20
                                 // 手柄圆心能走的上下两端（各留半个手柄，手柄才不会越出控件）
                                 //
@@ -776,9 +805,9 @@ Item {
                                     return Math.round(100 * (1 - t))
                                 }
 
-                                // 轨道（没走过的那一段的颜色）
+                                // 还没到的那一段（灰，细一圈）
                                 Rectangle {
-                                    width: volumeSlider.trackWidth
+                                    width: volumeSlider.emptyWidth
                                     x: (parent.width - width) / 2
                                     y: volumeSlider.travelTop
                                     height: volumeSlider.travelBottom - volumeSlider.travelTop
@@ -787,7 +816,7 @@ Item {
                                                          : Qt.rgba(138 / 255, 138 / 255, 138 / 255, 1)
                                 }
 
-                                // 已经到的那一段：从底部往上长到手柄中心
+                                // 已经到的那一段：从底部往上长到手柄中心（蓝，粗的那条）
                                 Rectangle {
                                     width: volumeSlider.trackWidth
                                     x: (parent.width - width) / 2
@@ -825,6 +854,20 @@ Item {
                                     }
                                 }
 
+                                /**
+                                 * 把当前值发给播放器。
+                                 *
+                                 * **拖的过程中就发**（不是等松手）—— 音量这一类调节，
+                                 * 用户要的就是"一边拖一边听见响"。设一个属性很便宜。
+                                 *
+                                 * 进度条那边正相反（松手才 seek）：那里每发一次都是一次
+                                 * 跳转，拖的时候一帧一条会把播放器淹掉。两条规矩不一样，
+                                 * 因为底下干的事不一样 —— 别看着像就抄过去。
+                                 */
+                                function push() {
+                                    Playback.setVolumePercent(volumeSlider.volume)
+                                }
+
                                 // 输入：点哪儿、拖哪儿，手柄就跟着去哪儿
                                 MouseArea {
                                     id: volumeMouse
@@ -832,14 +875,18 @@ Item {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
 
-                                    onPressed: volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
-                                    onPositionChanged: {
-                                        if (pressed)
-                                            volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
+                                    onPressed: {
+                                        volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
                                     }
-                                    // 松手才写回去 —— 拖的过程中每一帧都发命令会把播放器淹掉
-                                    // （进度条那边也是这个规矩）。
-                                    onReleased: Playback.setVolumePercent(volumeSlider.volume)
+                                    onPositionChanged: {
+                                        if (pressed) {
+                                            volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
+                                            volumeSlider.push()
+                                        }
+                                    }
+                                    // 松手再补一次：拖的过程里要是漏了最后那一格（鼠标没动
+                                    // 就抬手），这一步保证落点准。同一个值写两遍无害。
+                                    onReleased: volumeSlider.push()
                                 }
 
                                 // 控制点（手机）改音量时跟着走。**拖着的时候别抢** —— 这是
