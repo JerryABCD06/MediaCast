@@ -322,6 +322,18 @@ Item {
     readonly property color itemPressColor: darkStyle ? Qt.rgba(1, 1, 1, 29 / 255)
                                                       : FluTheme.itemPressColor
 
+    /**
+     * 图标键**不可用**时的图标颜色（灰掉）。
+     *
+     * 和上面两个是同一个理由：**必须是这条栏自己那套**。库给的那个"一眼灰"
+     * （`FluTheme` 里那对 130/161）是按**程序主题**算的，而这条栏压在画面上时
+     * 永远用深色那套 —— 浅色主题 + 暗画面的时候，那两个灰图标会糊在画面里看不清。
+     *
+     * 0.36 是 Windows 的"禁用前景色"那一档（前景色叠 36%），照它来。
+     */
+    readonly property color disabledIconColor: darkStyle ? Qt.rgba(1, 1, 1, 0.36)
+                                                         : Qt.rgba(0, 0, 0, 0.36)
+
     // 压在画面上时铺一层半透明黑；不然整条栏是透的，底下的东西直接露出来。
     Rectangle {
         anchors.fill: parent
@@ -568,16 +580,23 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 6
 
-                // 壳子：等 PlaybackController 把 previous() 暴露给 QML
+                // 上一首。**队列里没有上一条就灰着** —— 灰显和"按了有没有用"用的是
+                // 同一份判据（Playback.hasPrevious），不会出现"亮着却点不动"。
+                // 没有上一条是常态：控制点大多不排下一条、也不按上一首。
                 TipIconButton {
+                    readonly property bool canGo: Playback.hasPrevious
                     iconSource: FluentIcons.BackSolidBold
                     iconSize: 18
-                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
+                    iconColor: canGo ? (bar.overPicture ? "#FFFFFFFF"
+                                                        : FluTheme.fontPrimaryColor)
+                                     : bar.disabledIconColor
                     contentDescription: qsTr("ui_mediabar_previous")
                     width: 34
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
+                    disabled: !canGo
+                    onClicked: Playback.previous()
                 }
 
                 // 真的：播放 / 暂停
@@ -618,16 +637,21 @@ Item {
                     onClicked: Playback.togglePlayPause()
                 }
 
-                // 壳子：下一个
+                // 下一个。同上 —— 判据是 Playback.hasNext。
                 TipIconButton {
+                    readonly property bool canGo: Playback.hasNext
                     iconSource: FluentIcons.ForwardSolidBold
                     iconSize: 18
-                    iconColor: bar.overPicture ? "#FFFFFFFF" : FluTheme.fontPrimaryColor
+                    iconColor: canGo ? (bar.overPicture ? "#FFFFFFFF"
+                                                        : FluTheme.fontPrimaryColor)
+                                     : bar.disabledIconColor
                     contentDescription: qsTr("ui_mediabar_next")
                     width: 34
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
+                    disabled: !canGo
+                    onClicked: Playback.next()
                 }
             }
 

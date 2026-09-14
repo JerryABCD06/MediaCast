@@ -102,6 +102,22 @@ class PlaybackController : public QObject
     Q_PROPERTY(QVariantList pictureControlList READ pictureControlList CONSTANT)
 
     /**
+     * 队列里有没有**上一条 / 下一条** —— 控制栏那两个键亮不亮全看它。
+     *
+     * 通知信号直接用 `queueChanged`：它本来就带着这两个布尔值一起报出来
+     * （见它的签名），界面收到就重新读一遍。
+     *
+     * 判据在 C++（那三格队列只有它知道）：**上一条**是"刚才放过的那条"，
+     * **下一条**是控制点用 `SetNextAVTransportURI` 排进来的那条。
+     *
+     * 注意：这两个值**不代表控制点会去用**。规范那一侧我们做对了，但实际控制点
+     * 大多不排下一条、也不按上一首（见 `docs/DLNA实现情况.md`）—— 所以界面上
+     * 这两个键大多数时候是灰的，那是**如实显示**，不是坏了。
+     */
+    Q_PROPERTY(bool hasNext READ hasNext NOTIFY queueChanged)
+    Q_PROPERTY(bool hasPrevious READ hasPrevious NOTIFY queueChanged)
+
+    /**
      * 有没有投送方连着。
      *
      * **这个是协议层喂进来的** —— "谁连着我们"只有那一层知道。现在只有 DLNA
@@ -311,8 +327,15 @@ public:
      */
     void setNextUri(const MediaRequest &request);
 
-    void next();
-    void previous();
+    /**
+     * 「下一首」/「上一首」。
+     *
+     * **队列里没有的时候就什么都不做**（只在日志里说一句）—— 界面那边这两个键
+     * 在那种情况下是灰的，正常点不到；灰显的判据和这里用的是同一份（`hasNext` /
+     * `hasPrevious`），不会出现"键亮着、点了没反应"。
+     */
+    Q_INVOKABLE void next();
+    Q_INVOKABLE void previous();
 
     bool hasNext() const { return !m_next.uri.isEmpty(); }
     bool hasPrevious() const { return !m_previous.uri.isEmpty(); }
