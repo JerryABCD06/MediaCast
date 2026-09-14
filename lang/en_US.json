@@ -56,7 +56,7 @@
     "ui_mediabar_fullscreen_exit": "Exit full screen",
 
     "ui_picture_title": "Display",
-    "ui_picture_hint": "Changes take effect right away and stay until you reset them here.",
+    "ui_picture_hint": "Changes take effect right away, and are remembered across restarts.",
     "ui_picture_reset": "Reset all",
     "ui_picture_reset_desc": "Restore every picture setting to its default",
     "ui_picture_brightness": "Brightness",

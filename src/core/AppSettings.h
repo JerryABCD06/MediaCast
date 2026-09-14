@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
+#include <QTimer>
+#include <QVariantMap>
 
 /**
  * AppSettings —— 用户设置。
@@ -26,6 +28,9 @@
  *   cast.newcast              要不要接收新的投送
  *   cast.broadcast            要不要定期对外广播（关了就只响应搜索）
  *   cast.broadcast_interval   广播间隔，毫秒
+ *   picture.brightness        ┐
+ *   picture.contrast          │ 画面调节（「显示效果」那十来项），
+ *   …                         ┘ 键名 = 后端那张表里的短名
  *
  * ── 它是"唯一的那一份"，不是"一份副本" ────────────────────────────────────
  *
@@ -58,6 +63,7 @@ class AppSettings : public QObject
 
 public:
     explicit AppSettings(QObject *parent = nullptr);
+    ~AppSettings() override;
 
     /** 设置文件在哪儿。 */
     QString filePath() const { return m_path; }
@@ -96,6 +102,29 @@ public:
     int broadcastIntervalMs() const;
     void setBroadcastIntervalMs(int ms);
 
+    // ── 画面调节（「显示效果」那十来项）──────────────────────────────────
+    //
+    // **这里存的只是"备忘"，权威始终在播放器手里。** 界面读的是播放器、不读
+    // 这份文件；这份唯一的用处是**开机时把上次的值放回去**（`main()` 里
+    // `player->start()` 之后那几行）。所以方向只有一条：播放器变了 → 写文件。
+    //
+    // 为什么不做成 Q_PROPERTY 给界面读：那等于给"同一样东西有两份状态"开口子 ——
+    // 一份在 mpv 手里、一份在配置文件里，谁说了算迟早要吵。
+    //
+    // 存过的项才在文件里（改过哪几项就有哪几行）。删掉整段 `picture` 就等于
+    // "全部回到没调过的样子"。
+
+    /** 存下来的那些值（短名 → 整数）。没存过就是空的。 */
+    QVariantMap pictureValues() const;
+
+    /**
+     * 记一项。
+     *
+     * **不立刻写盘**：拖一次滑块能发几十条变化，一条写一次盘太浪费。合并到
+     * 800 毫秒之后写一次；万一用户拖完就退出，析构里会把没落盘的补上。
+     */
+    void setPictureValue(const QString &name, int value);
+
 signals:
     void languageChanged(const QString &value);
     void darkModeChanged(const QString &value);
@@ -110,6 +139,9 @@ private:
     /** 读文件。读不到就按默认值来（并顺手写一份出来）。 */
     void load();
     void save();
+
+    /** 画面调节那几项攒着一起写盘用（见 setPictureValue）。 */
+    QTimer m_pictureSaveTimer;
 
     /** 从嵌套的 JSON 里按点分路径取值，取不到就用 fallback。 */
     QString stringValue(const QString &path, const QString &fallback) const;

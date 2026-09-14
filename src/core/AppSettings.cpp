@@ -38,7 +38,21 @@ AppSettings::AppSettings(QObject *parent)
     // 真到要打包安装的那一步再考虑退回 %LOCALAPPDATA%。
     m_path = QCoreApplication::applicationDirPath() + QStringLiteral("/MediaCast.json");
 
+    // 画面调节那几项攒着一起写盘 —— 见 setPictureValue 上面那段。
+    m_pictureSaveTimer.setSingleShot(true);
+    m_pictureSaveTimer.setInterval(800);
+    connect(&m_pictureSaveTimer, &QTimer::timeout, this, &AppSettings::save);
+
     load();
+}
+
+AppSettings::~AppSettings()
+{
+    // 还没落盘的那几项（刚拖完滑块就退出）补上 —— 别默默丢掉用户刚调的东西。
+    if (m_pictureSaveTimer.isActive()) {
+        m_pictureSaveTimer.stop();
+        save();
+    }
 }
 
 // ── 读 / 写 ──────────────────────────────────────────────────────────────
@@ -259,4 +273,36 @@ void AppSettings::setBroadcastIntervalMs(int ms)
 
     setValue(QString::fromLatin1(kCastInterval), ms);
     emit broadcastIntervalChanged(ms);
+}
+
+// ── 画面调节 ─────────────────────────────────────────────────────────────
+
+QVariantMap AppSettings::pictureValues() const
+{
+    QVariantMap out;
+    const QJsonObject node = m_root.value(QStringLiteral("picture")).toObject();
+    for (auto it = node.constBegin(); it != node.constEnd(); ++it) {
+        // 只要数字。用户手改坏了（写成字符串之类）就当没存过 —— 宁可回到
+        // "没调过"，也别把一个垃圾值塞给播放器。
+        if (it.value().isDouble())
+            out.insert(it.key(), it.value().toInt());
+    }
+    return out;
+}
+
+void AppSettings::setPictureValue(const QString &name, int value)
+{
+    if (name.isEmpty())
+        return;
+
+    const QJsonObject picture = m_root.value(QStringLiteral("picture")).toObject();
+    const QJsonValue old = picture.value(name);
+
+    // 没变就别动。这一条还顺手挡住了开机那一下的回路：读取时把它们放回播放器，
+    // 播放器报回来 "变了"，值其实一模一样，不必再写一遍盘。
+    if (old.isDouble() && old.toInt() == value)
+        return;
+
+    m_root = insertAt(m_root, QStringList{ QStringLiteral("picture"), name }, 0, value);
+    m_pictureSaveTimer.start();
 }

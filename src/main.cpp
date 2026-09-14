@@ -359,6 +359,22 @@ int main(int argc, char *argv[])
     QObject::connect(&renderer, &DlnaRenderer::acceptingChanged,
                      &settings, &AppSettings::setAcceptNewCast);
 
+    // ── 画面调节（「显示效果」那十来项）：改了记下来，开机再放回去 ────────
+    //
+    // 方向只有一条：**播放器变了 → 写文件**。反方向不接 —— 设置文件里那份只在
+    // 开机那一次读（见下面 player->start() 之后那几行），运行中它只是"备忘"，
+    // 权威始终在播放器手里。这样就不存在"两份状态谁说了算"。
+    //
+    // 放在这一层而不是塞进播放器：**存哪儿、什么时候存**是应用的事，不是
+    // "怎么调 mpv"的事（见 MediaPlayer 那条抽象边界）。
+    //
+    // 顺带一提，控制点（手机）调的画面走的是同一条路 —— 它也是"播放器的值变了"，
+    // 所以手机上把亮度拉过之后，那一条也会记住。
+    QObject::connect(&playback, &PlaybackController::pictureControlChanged,
+                     &settings, [&settings](const QString &name, int value) {
+        settings.setPictureValue(name, value);
+    });
+
     // ── 开跑 ─────────────────────────────────────────────────────────────
     // 界面暂时照旧弹出来。以后换正式界面时，这里大概会变成"只留托盘"。
     window.show();
@@ -376,6 +392,17 @@ int main(int argc, char *argv[])
     renderer.setBroadcasting(settings.broadcast());
     if (!settings.acceptNewCast())
         renderer.pauseAccepting();
+
+    // 把上次记住的画面调节放回去。
+    //
+    // **必须等 player->start()** —— 在那之前 mpv 实例还没建起来，设属性是空操作
+    // （MpvCore::setPictureControl 一开头就 `if (!m_mpv) return false;`）。
+    //
+    // 文件里没有的项**不碰** —— 让播放器留着自己的默认值，比我们猜一个"0"
+    // 塞进去靠谱（后端以后加一项、或者某一项的中性值不是 0 都不会出错）。
+    const QVariantMap savedPicture = settings.pictureValues();
+    for (auto it = savedPicture.constBegin(); it != savedPicture.constEnd(); ++it)
+        playback.setPictureControl(it.key(), it.value().toInt());
 
     return app.exec();
 }

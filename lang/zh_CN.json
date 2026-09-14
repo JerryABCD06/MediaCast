@@ -56,7 +56,7 @@
     "ui_mediabar_fullscreen_exit": "退出全屏",
 
     "ui_picture_title": "显示效果",
-    "ui_picture_hint": "调整立刻生效，并会一直留着 —— 直到这里点「全部复位」。",
+    "ui_picture_hint": "调整立刻生效，并会记下来 —— 关掉程序再打开，它还在这。",
     "ui_picture_reset": "全部复位",
     "ui_picture_reset_desc": "把所有画面调节恢复到默认值",
     "ui_picture_brightness": "亮度",
