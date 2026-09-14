@@ -201,7 +201,7 @@ FluWindow {
 
         // 先让窗口层那边置顶、去圆角（QML 调不到 Win32），再摆位置 —— 顺序反了
         // 会先看见任务栏压在上面一瞬。
-        Shell.setFullscreenWindowMode(true, pictureWindow)
+        Shell.setFullscreenWindowMode(true)
 
         x = screen.virtualX
         y = screen.virtualY
@@ -219,7 +219,7 @@ FluWindow {
             return
 
         fullscreen = false
-        Shell.setFullscreenWindowMode(false, pictureWindow)
+        Shell.setFullscreenWindowMode(false)
 
         // 先把尺寸锁解开，不然下面那句摆位置会被 min/max 顶住。
         fixSize = false
@@ -262,6 +262,7 @@ FluWindow {
         else
             enterFullscreen()
     }
+
 
 
     // 全屏时的出口。只在全屏下生效 —— 不然以后设置页想用 Esc 返回就没位置了。
@@ -372,20 +373,33 @@ FluWindow {
 
     property var pictureWindow: null
 
+    /**
+     * 建一个**依附于主窗口**的子窗口（Win32 里的 owned window）。
+     *
+     * 以后再加子窗口就用它 —— 别自己 ``createObject``，那样全屏来回一次窗口就
+     * 没了、或者回来时四周胖一圈。它替你做两件事：
+     *
+     *   一、按 ``transientParent`` 建。这**必须是建的时候给的**（Qt 文档里写死的
+     *       "第一次露面之前"），建完再设不管用 —— 所以只能在 createObject 的
+     *       初始属性里写；
+     *   二、登记到 C++ 那边（``Shell.adoptChildWindow``）。主窗口切全屏时会把
+     *       原生窗口拆掉重建，那一下系统会把 owned 窗口一起带走 —— C++ 那边
+     *       负责先摘开、重建完再挂回来（含"原来露着的再显示一次"、样式位、几何）。
+     *
+     * 给上以后子窗口就是标准语义：压在主窗口上面、不占任务栏按钮、主窗口最小化
+     * 它跟着藏、主窗口销毁它跟着走。
+     */
+    function createChildWindow(component) {
+        const child = component.createObject(window, { "transientParent": window })
+        if (child)
+            Shell.adoptChildWindow(child)
+        return child
+    }
+
     function openPictureWindow() {
-        // ── 它**依附于主窗口**（Win32 里叫 owned window）────────────────────
-        //
-        // `transientParent` 就是这件事的入口，给上以后这扇窗：
-        //   · 始终压在主窗口上面（不会被主窗口盖住）；
-        //   · **不占任务栏按钮**（Alt+Tab 里也不单独出现）；
-        //   · 主窗口最小化时跟着藏起来；
-        //   · 主窗口销毁时跟着走。
-        // Qt 文档里那句"必须在窗口第一次露面之前设"是硬性的 —— 所以只能在
-        // 建的时候给，之后再设不管用。**别把这句挪到下面 show() 之后。**
+        // 走通用的建子窗口入口（见 createChildWindow 的注释）。
         if (!pictureWindow)
-            pictureWindow = com_picture_window.createObject(window, {
-                "transientParent": window
-            })
+            pictureWindow = createChildWindow(com_picture_window)
 
         // createObject 失败会返回 null（组件写错了之类）。真到那一步宁可什么都
         // 不发生，也别在这儿崩一下。

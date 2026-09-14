@@ -4,6 +4,8 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
+#include <QList>
 #include <QString>
 
 class QQmlApplicationEngine;
@@ -62,7 +64,23 @@ public:
      * 全黑，见 NewUiWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
      * 就没有这个问题 —— 这是平台相关的活儿，收在 WindowFrame 里。
      */
-    Q_INVOKABLE void setFullscreenWindowMode(bool on, QObject *pictureWindow = nullptr);
+    Q_INVOKABLE void setFullscreenWindowMode(bool on);
+
+    /**
+     * 把一个**子窗口**（比如"显示效果"）登记成主窗口的从属窗口。
+     *
+     * 以后再加子窗口，只要建的时候走 QML 那边那个 `createChildWindow(component)`
+     * 就够了（它会先按 `transientParent` 建、再调这里登记）——**不用再动全屏那段
+     * 逻辑**。登记之后，主窗口切全屏时这边会统一替它处理：
+     *
+     *   · 主窗口的原生窗口会被拆掉重建（全屏那条路，见 setFullscreenWindowMode），
+     *     而 Win32 的规矩是"**销毁 owner 会连带销毁 owned 窗口**"——所以先把它
+     *     从主窗口上摘开，重建完再挂到新的句柄上；
+     *   · 那一下系统还会把它一并藏起来，owner 回来时它不会自己出现 —— 原来露着
+     *     的替它显式再显示一次；
+     *   · 它的原生窗口这一趟也换了，所以样式位、阴影、几何都替它补回去。
+     */
+    Q_INVOKABLE void adoptChildWindow(QObject *child);
 
 public slots:
     /**
@@ -82,6 +100,14 @@ signals:
 
 private:
     bool load();
+
+    /**
+     * 登记过的子窗口（从属窗口）。
+     *
+     * 用 `QPointer` 存：子窗口哪天被销毁了，这里自己变空，遍历时跳过就行 ——
+     * 不用连着"谁关了我"的通知一起维护（这个工程在裸指针上栽过，见 docs/待办.md）。
+     */
+    QList<QPointer<QObject>> m_childWindows;
 
     QQmlApplicationEngine *m_engine = nullptr;
     QQuickWindow *m_window = nullptr;

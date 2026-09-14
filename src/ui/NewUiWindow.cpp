@@ -160,26 +160,57 @@ void NewUiWindow::endCasting()
     emit castEndRequested();
 }
 
-void NewUiWindow::setFullscreenWindowMode(bool on, QObject *pictureWindow)
+void NewUiWindow::adoptChildWindow(QObject *child)
+{
+    if (!child)
+        return;
+
+    for (const QPointer<QObject> &entry : std::as_const(m_childWindows)) {
+        if (entry == child)
+            return;                 // 已经登记过
+    }
+    m_childWindows.append(QPointer<QObject>(child));
+
+    // 从属关系本身是靠建窗口时的 `transientParent` 生效的（见 NewUiWindow.qml
+    // 里 createChildWindow）。这里再显式设一次原生 owner，是为了让这条登记
+    // **不管调用方怎么建窗口**都能成立。
+    if (m_window) {
+        if (auto *childWindow = qobject_cast<QWindow *>(child))
+            WindowFrame::setWindowOwner(childWindow, m_window);
+    }
+}
+
+void NewUiWindow::setFullscreenWindowMode(bool on)
 {
     // 窗口还没建起来就没什么可调的（正常情况下不会发生：这是界面调过来的）。
     if (!m_window)
         return;
 
-    // ── 先把"显示效果"那扇窗从主窗口上摘下来 ──────────────────────────────
+    // ── 先把登记过的子窗口从主窗口上摘下来 ────────────────────────────────
     //
-    // 它是主窗口的**从属窗口**（owned window，见 NewUiWindow.qml 里 openPictureWindow
-    // 那段），而 Win32 有一条规矩：**销毁 owner 会把 owned 窗口一起销毁**。
-    // 下面那句 destroy() 正是把主窗口的原生窗口拆掉 —— 不先摘，用户开着"显示
-    // 效果"时一切全屏，它就被系统带走了（实测就是这么没的）。
+    // 它们是主窗口的**从属窗口**（owned window，见 NewUiWindow.qml 里
+    // createChildWindow / adoptChildWindow），而 Win32 有一条规矩：
+    // **销毁 owner 会把 owned 窗口一起销毁**。下面那句 destroy() 正是把主窗口的
+    // 原生窗口拆掉 —— 不先摘，用户开着"显示效果"时一切全屏，它就被系统带走了
+    // （实测就是这么没的）。
     //
     // 摘的是**原生那一层**的关系（GWLP_HWNDPARENT），不走 Qt 的 transientParent
-    // —— 那个只在窗口创建时生效一次，运行时改它不动原生 owner。重建完再挂回新句柄上。
-    QWindow *picture = qobject_cast<QWindow *>(pictureWindow);
-    const bool pictureWasVisible = picture && picture->isVisible();
-    const QRect pictureGeometry = picture ? picture->geometry() : QRect();
-    if (picture)
-        WindowFrame::setWindowOwner(picture, nullptr);
+    // —— 那个只在窗口创建时生效一次，运行时改它不动原生 owner。重建完再挂回去。
+    //
+    // 顺手把"露着没有、多大"记下来：重建之后要照原样还给用户。
+    struct ChildState {
+        QWindow *window = nullptr;
+        bool wasVisible = false;
+        QRect geometry;
+    };
+    std::vector<ChildState> children;
+    for (const QPointer<QObject> &entry : std::as_const(m_childWindows)) {
+        auto *childWindow = qobject_cast<QWindow *>(entry.data());
+        if (!childWindow)
+            continue;               // 没建起来 / 已经被销毁（QPointer 自己变空）
+        children.push_back({ childWindow, childWindow->isVisible(), childWindow->geometry() });
+        WindowFrame::setWindowOwner(childWindow, nullptr);
+    }
 
     // ── 先把原生窗口拆掉重来 ─────────────────────────────────────────────
     //
@@ -216,22 +247,27 @@ void NewUiWindow::setFullscreenWindowMode(bool on, QObject *pictureWindow)
     // 退出时把阴影挂回来。边框那个属性退出时也会自动回到系统默认。
     WindowFrame::setFullscreenBorderless(m_window, on);
 
-    // 把"显示效果"那扇窗挂回**新的**主窗口句柄上（从属关系照旧）。
-    if (picture) {
-        WindowFrame::setWindowOwner(picture, m_window);
+    // ── 再按原样把它们挂回去 ──────────────────────────────────────────────
+    for (const ChildState &state : children) {
+        QWindow *child = state.window;
+        if (!child)
+            continue;
+
+        WindowFrame::setWindowOwner(child, m_window);
+
         // **重建过程中系统会把从属窗口一起藏起来**（"owner 没了"那一下的连带），
         // 而"owner 又出现"时它**不会**自己回来 —— 所以原来露着的要显式再显示一次。
-        if (pictureWasVisible) {
-            picture->show();
-            // 它的原生窗口也被系统/ Qt 换过了，所以和主窗口一样要补一遍样式位和
-            // 阴影 —— 不补的话回到屏幕上会"四周胖一圈"（库里那几个样式位只在
-            // 创建时打过一次，实测差 16 像素 × 2）。
-            WindowFrame::reapplyFramelessStyle(picture);
-            WindowFrame::reapplyDwmShadow(picture);
-            // 它的原生窗口是新造的，框架那一套算出来的几何和原来差一点
-            // （实测四周各胖 16 像素）—— 显式摆回原来的几何。
-            if (!pictureGeometry.isNull())
-                picture->setGeometry(pictureGeometry);
-        }
+        if (!state.wasVisible)
+            continue;
+
+        child->show();
+        // 它的原生窗口这一趟也被换过了，所以和主窗口一样要补一遍样式位和阴影
+        // —— 不补的话回到屏幕上会"四周胖一圈"（库里那几个样式位只在创建时打过
+        // 一次，实测差 16 像素 × 2）。
+        WindowFrame::reapplyFramelessStyle(child);
+        WindowFrame::reapplyDwmShadow(child);
+        // 框架那套算出来的几何和原来也差一点，显式摆回原来的。
+        if (!state.geometry.isNull())
+            child->setGeometry(state.geometry);
     }
 }
