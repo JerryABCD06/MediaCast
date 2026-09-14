@@ -290,7 +290,13 @@ PlaybackController::CastState PlaybackController::castState() const
     //
     // 这两个判据的差别就在 Stopped 上：hasMedia 说"会话还在"，idle 说"屏幕上空了"。
     // 界面要的是后者 —— 片子自然播完之后，胶囊该回到"已连接"，而不是继续写着
-    // "正在投屏"。（关窗口前要不要警告看的是另一个，用的是 hasMedia，别改错。）
+    // "正在投屏"。
+    //
+    // **别把这一条和"关窗口要不要警告"混起来**：那一处看的是另一个概念 ——
+    // "有没有投送方连着"（`peerConnected`，见 NewUiWindow.qml）。它和顶栏那个
+    // 「断开连接」按钮是同一条判据（那个按钮的显隐是 `castState !== NoViewer`，
+    // 而 castState 只在没连着时返回 NoViewer —— 两者等价）。
+    // 早先这里写着"那一处用的是 hasMedia"，那是旧说法，已经改掉了。
     if (isIdle())
         return CastState::ViewerIdle;
 
