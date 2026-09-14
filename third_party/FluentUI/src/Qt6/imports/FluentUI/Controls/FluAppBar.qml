@@ -282,8 +282,15 @@ Rectangle{
             visible: !isMac && showClose
             radius: 0
             iconSize: 10
-            // 悬停/按下时字形转白（压在红背板上）；平时跟标题栏文字走。
-            iconColor: (hovered || pressed) ? Qt.rgba(1,1,1,1) : control.textColor
+            // 悬停时字形转白；**按下时再暗一档，不是纯白** —— 这是 Windows 的标准行为，
+            // 由他悬停/按住分别截图量出来的：
+            //   悬停：接近纯白（量到 #F4F6FC，≈96% 白）
+            //   按下：白色约 67% 不透明 —— 压在按下态那个红(#C53D30)上就是 #EDBEBB，
+            //         三个通道分别反算出来的比例都是 0.67，所以这个数不是猜的。
+            // 平时（没悬停没按下）跟标题栏文字走。
+            iconColor: pressed     ? Qt.rgba(1, 1, 1, 0.67)
+                     : hovered     ? Qt.rgba(1, 1, 1, 1)
+                                   : control.textColor
             color:{
                 if(pressed){
                     return closePressColor
