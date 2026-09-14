@@ -75,6 +75,16 @@ class PlaybackController : public QObject
     Q_PROPERTY(bool paused READ isPaused NOTIFY pausedChanged)
 
     /**
+     * 音量与静音，0..100 —— 和 DLNA RenderingControl 同一把尺子。
+     *
+     * **界面能直接读写它**（媒体控制栏那个音量滑块就是）：手机改音量、界面上拖
+     * 滑块，两条路都从这儿过，所以两边不会各记一份状态 —— 控制点改了音量，
+     * 界面上的滑块也会跟着动。
+     */
+    Q_PROPERTY(int volumePercent READ volumePercent NOTIFY volumeChanged)
+    Q_PROPERTY(bool muted READ isMuted NOTIFY muteChanged)
+
+    /**
      * 有没有投送方连着。
      *
      * **这个是协议层喂进来的** —— "谁连着我们"只有那一层知道。现在只有 DLNA
@@ -263,8 +273,8 @@ public:
     Q_INVOKABLE void seekTo(double seconds);
 
     /** 0..100，和 DLNA RenderingControl 同一把尺子（这个换算是通用的，不是 DLNA 独有）。 */
-    void setVolumePercent(int percent);
-    void setMuted(bool muted);
+    Q_INVOKABLE void setVolumePercent(int percent);
+    Q_INVOKABLE void setMuted(bool muted);
 
     // ── 队列 ─────────────────────────────────────────────────────────────
     //

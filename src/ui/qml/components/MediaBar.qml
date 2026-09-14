@@ -3,6 +3,8 @@
 
 import QtQuick
 import QtQuick.Layouts
+// Popup（音量那个浮出控件）在 QtQuick.Controls 里 —— 这个文件以前用不上它。
+import QtQuick.Controls
 import FluentUI
 // Playback 是 main.cpp 注册进来的播放控制（MediaCast 模块的单例）。
 // **每个 QML 文件都要自己 import 一次**，不是页面 import 了组件就跟着有。
@@ -32,10 +34,10 @@ import MediaCast 1.0
 // 中间那三个键**锚在正中间**，不是"左中右三格等宽" —— 左右两边的内容宽度差得
 // 多，等宽会把中组挤偏。窗口变窄时先牺牲左边：标题走省略号。
 //
-// ── 现在哪些是真的、哪些还是壳子（2026-09-12）────────────────────────────
+// ── 现在哪些是真的、哪些还是壳子（2026-09-14 更新）──────────────────────
 //
-//   真的：进度条（可拖）、播放/暂停、时间文字
-//   壳子：上一首、下一首、字幕、音量、画面调节、全屏
+//   真的：进度条（可拖）、播放/暂停、时间文字、全屏、音量
+//   壳子：上一首、下一首、字幕、画面调节
 //
 // ── 那一排图标键的悬停提示从哪来 ─────────────────────────────────────────
 //
@@ -46,9 +48,8 @@ import MediaCast 1.0
 // 壳子分成两类原因，接的时候各自的着落点不一样：
 //
 //   · 上一首 / 下一首 —— PlaybackController 还没把 next()/previous() 暴露给 QML
-//   · 字幕 / 音量 / 画面调节 / 全屏 —— 功能要么没做，要么**形式还没定**
-//     （音量要在这个按钮上方弹一条纵向滑块；画面调节要做成**独立窗口**；
-//       全屏要处理 FluFrameless 那套边框助手）
+//   · 字幕 / 画面调节 —— 功能要么没做，要么**形式还没定**
+//     （画面调节要做成**独立窗口**，把旧界面那十多项搬过来）
 //
 // 接壳子的时候**只动这个文件**，别碰排版。
 Item {
@@ -147,6 +148,14 @@ Item {
     property bool freshMedia: false
 
     /**
+     * 弹出层（音量那条滑块）开着的时候**不许把栏收起来**。
+     *
+     * 少了它会出现这种怪事：点开音量、鼠标往上挪到滑块上 —— 那一瞬间鼠标既不在
+     * 栏上、也不在下沿热区里，栏按规矩淡出，滑块跟着一起没了。
+     */
+    property bool popupOpen: false
+
+    /**
      * 窗口是**这一下投送才打开**的时候，上面那两个信号在控制栏建起来之前就发完了
      * —— 它收不到，"新视频先露 5 秒"这条就丢了（实测报过来的就是这个：窗口没开
      * 时投视频，唤起的窗口里控制栏干脆不出来）。
@@ -214,6 +223,8 @@ Item {
 
     /** 这一条栏现在该不该露着。 */
     readonly property bool wanted: {
+        if (popupOpen)                        // 弹出层开着：不许收
+            return true
         if (!overPicture)                     // 空闲 / 放音乐：常显
             return true
         if (holdTimer.running)                // 新视频那 5 秒
@@ -643,9 +654,12 @@ Item {
                     pressedColor: bar.itemPressColor
                 }
 
-                // 壳子：音量。以后点它**在按钮上方**弹一条纵向的 FluSlider
-                // （FluSlider 继承 T.Slider，本身支持 Qt.Vertical）。
+                // 音量。点它在按钮**正上方**弹一条纵向滑块 —— 照 Windows 11 那个
+                // 音量浮出控件的样子：上面一个数字，下面一条滑块。
+                //
+                // 数字放上面不是装饰：滑块本身看不出"现在是几"，调的时候得有个数可看。
                 TipIconButton {
+                    id: btn_volume
                     iconSource: FluentIcons.Volume
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
@@ -654,6 +668,161 @@ Item {
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
+                    onClicked: volumePopup.opened ? volumePopup.close() : volumePopup.open()
+
+                    Popup {
+                        id: volumePopup
+
+                        // **挂在按钮自己身上**：这样 x/y 就是"相对按钮"算的，不用
+                        // 去 mapToItem 换算 —— 那个在本工程里踩过坑（算出来恒为 0）。
+                        parent: btn_volume
+                        x: Math.round((parent.width - width) / 2)
+                        y: -height - 8
+                        padding: 10
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                        // **必须模态**，虽然它看着不像个"对话框"。
+                        //
+                        // Qt 的 Popup 默认 `modal: false`：点外面会把它关掉，但**不
+                        // 吃掉那一下点击** —— 于是那一下会漏到底下的画面上去，触发
+                        // "点画面 = 播放/暂停"。实测过一次：弹出层开着时点画面空白处，
+                        // 传输状态从 STOPPED 直接变成 PLAYING。
+                        //
+                        // 模态之后那一下被挡住，只起"关掉弹出层"的作用 —— 和 Windows
+                        // 自己那个音量浮出控件的行为一致。
+                        //
+                        // **但默认那层遮罩会变暗**（实测：整窗明显暗下去一块），那是给
+                        // 对话框用的。这里换成一个铺满窗口的 MouseArea —— 它不画任何
+                        // 东西，但**照样吃点击**，于是"挡住了但看不见"。
+                        modal: true
+                        Overlay.modal: MouseArea { }
+
+                        // 开着的时候告诉栏一声"别收"：鼠标从按钮挪到滑块上要往上走，
+                        // 那一瞬间既不在栏上也不在下沿热区里，栏会直接淡出。
+                        onOpened: bar.popupOpen = true
+                        onClosed: bar.popupOpen = false
+
+                        background: FluRectangle {
+                            radius: 6
+                            color: bar.darkStyle ? Qt.rgba(43 / 255, 43 / 255, 43 / 255, 1)
+                                                 : Qt.rgba(1, 1, 1, 1)
+                            FluShadow {
+                                radius: 6
+                            }
+                        }
+
+                        contentItem: ColumnLayout {
+                            spacing: 8
+
+                            FluText {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: Math.round(volumeSlider.value)
+                                font: FluTextStyle.Caption
+                                textColor: bar.overPicture ? "#E6FFFFFF"
+                                                           : FluTheme.fontSecondaryColor
+                            }
+
+                            FluSlider {
+                                id: volumeSlider
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.preferredWidth: 32
+                                Layout.preferredHeight: 150
+                                orientation: Qt.Vertical
+                                from: 0
+                                to: 100
+                                stepSize: 1
+                                tooltipEnabled: false
+                                padding: 0
+
+                                // 颜色自己来 —— 理由和上面进度条那段一模一样：
+                                // FluSlider 把轨道和手柄的颜色写死在组件内部、只认
+                                // FluTheme，而这一条栏有它**自己的**明暗规矩。
+                                readonly property bool darkStyle: bar.darkStyle
+
+                                // **别写成 `value: Playback.volumePercent`。**
+                                // 用户一拖，控件自己会写 value，绑定当场被打断，
+                                // 之后再也跟不回真实音量。
+                                // 平时（没按住）跟着 C++ 走，按住时 UI 说了算，松手写回去。
+                                Connections {
+                                    target: Playback
+                                    function onVolumeChanged() {
+                                        if (!volumeSlider.pressed)
+                                            volumeSlider.value = Playback.volumePercent
+                                    }
+                                }
+                                Component.onCompleted: value = Playback.volumePercent
+                                onPressedChanged: {
+                                    if (!pressed)
+                                        Playback.setVolumePercent(Math.round(value))
+                                }
+
+                                handle: Rectangle {
+                                    x: volumeSlider.leftPadding
+                                       + (volumeSlider.availableWidth - width) / 2
+                                    y: volumeSlider.topPadding
+                                       + (1 - volumeSlider.visualPosition)
+                                         * (volumeSlider.availableHeight - height)
+                                    implicitWidth: 20
+                                    implicitHeight: 20
+                                    radius: 10
+                                    color: volumeSlider.darkStyle
+                                           ? Qt.rgba(69 / 255, 69 / 255, 69 / 255, 1)
+                                           : Qt.rgba(1, 1, 1, 1)
+                                    FluShadow {
+                                        radius: 10
+                                    }
+                                    FluIcon {
+                                        width: 10
+                                        height: 10
+                                        anchors.centerIn: parent
+                                        iconSource: FluentIcons.FullCircleMask
+                                        iconSize: 10
+                                        iconColor: bar.accentColor
+                                        scale: volumeSlider.pressed ? 0.9
+                                               : (volumeSlider.hovered ? 1.2 : 1)
+                                        Behavior on scale {
+                                            NumberAnimation {
+                                                duration: 167
+                                                easing.type: Easing.OutCubic
+                                            }
+                                        }
+                                    }
+                                }
+
+                                background: Item {
+                                    x: volumeSlider.leftPadding
+                                       + (volumeSlider.availableWidth - width) / 2
+                                    y: volumeSlider.topPadding
+                                    implicitWidth: 6
+                                    implicitHeight: 150
+                                    width: implicitWidth
+                                    height: volumeSlider.availableHeight
+
+                                    // 还没到的那一段（上面）
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        radius: 2
+                                        color: volumeSlider.darkStyle
+                                               ? Qt.rgba(162 / 255, 162 / 255, 162 / 255, 1)
+                                               : Qt.rgba(138 / 255, 138 / 255, 138 / 255, 1)
+                                    }
+
+                                    // 已经到的那一段（下面，跟着 visualPosition 往上长）
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 1
+                                        height: Math.max(0, (parent.height - 2)
+                                                           * volumeSlider.visualPosition)
+                                        radius: 2
+                                        color: bar.accentColor
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // 壳子：显示效果调节。以后开**独立窗口**（不是这里的弹层），
