@@ -153,6 +153,12 @@ add_dependencies(mcast_copy_fluentui_qml fluentuiplugin)
 # 都从它转发过去，标准库里没有。
 target_link_libraries(MCast PRIVATE windowsapp.lib)
 
+# ── dwmapi ────────────────────────────────────────────────────────────────
+#
+# WindowFrame 里那句 DwmSetWindowAttribute（全屏时关掉 Win11 窗口圆角）要它。
+# 老系统的 SDK 里也有这个库，只是那个属性设不上 —— 运行时失败、编译期无害。
+target_link_libraries(MCast PRIVATE dwmapi.lib)
+
 # ── libmpv（内嵌播放后端）──────────────────────────────────────────────────
 #
 # 开发包放在项目的 runtime 目录下，和 mpv.exe 那一份并列。

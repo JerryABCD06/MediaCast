@@ -52,9 +52,31 @@ FluWindow {
 
     // 光有 autoVisible 还不够：**QML 的 Window 本身默认就是 visible: true**，
     // 引擎一建出这个对象它就露出来了。所以这里显式压住，等 C++ 那边把树建完、
-    // 并且**离屏渲染过一帧**之后再 show()。（这是常量，C++ 调 show() 之后
-    // 不会再被它拽回去。）
-    visible: false
+    // 并且**离屏渲染过一帧**之后再 show()。
+    //
+    // ── 这里**必须**写 `visibility`，不能写 `visible: false` ───────────────
+    //
+    // 这两个是同一件事的两种说法（`visible = false` 等价于
+    // `visibility = Window.Hidden`），但 QML 的 Window 类型**两个都显式设过就会
+    // 打架** —— 一改 `visibility`（进 / 退全屏都要改它），Qt 就报：
+    //
+    //     QML NewUiWindow: Conflicting properties 'visible' and 'visibility'
+    //
+    // 而这一打架是**真的会坏**，不是一句唠叨：进全屏报一次、退全屏再报一次之后，
+    // 窗口就再也画不出东西 —— 整扇窗全黑，可按钮还点得动（输入照旧、渲染停了）。
+    // 退出全屏那一下还可能停在"铺满工作区 + 没有边框 + 按钮显示最大化"的半截
+    // 状态（那是窗口样式没恢复：还是全屏那套 WS_POPUP）。
+    //
+    // 2026-09-14 的实测时间线（`work/windowstate.txt` + 日志里 `Qt` 前缀那几行）：
+    //
+    //     19:43:02  进全屏      Qt 报"Conflicting properties"一次
+    //     19:43:03  退全屏      Qt 又报一次 → 同一秒窗口全黑，之后一直是黑的
+    //     19:43:20  退全屏      → 停在 (-9,-9) 1938×1038、样式 0x97080000（WS_POPUP）
+    //
+    // 所以两个属性里**只用 `visibility`** —— 一个属性自己跟自己不会冲突。
+    // （C++ 那边 `NewUiWindow::show()` 调的是 Qt 的 C++ 接口，不走 QML 属性，
+    //   不会把这一行拽回去。）
+    visibility: Window.Hidden
 
     // ── 窗口的"底色声明" ─────────────────────────────────────────────────
     //
@@ -131,71 +153,90 @@ FluWindow {
      */
     property Item backdropItem: null
 
-    // ── 全屏 ─────────────────────────────────────────────────────────────
+    // ── 全屏：**自己铺满**，不用 Qt 的 FullScreen 状态 ────────────────────
     //
-    // **一个事实 + 一张表 + 一处执行。**
+    // 这一条是踩出来的，改之前先看完：
     //
-    // "是不是全屏"这件事只有一处来源：**窗口自己的 `visibility`**（Qt 那边给的）。
-    // 下面这个只读属性就是它 —— 不在别处另立一个开关。理由：窗口的可见状态还可能
-    // 被系统改（比如 Win+↑、或者从全屏里被拽出来），自己另存一份迟早对不上。
-    readonly property bool fullscreen: visibility === Window.FullScreen
+    //   在这台机器上（AMD Radeon 780M + Qt 6.11 + **OpenGL 后端**），窗口只要
+    //   经过一次 FullScreen 状态切换，**切回来之后就再也不上屏了** —— 场景照常
+    //   在渲染（挂探针数过：每秒上百帧、`frameSwapped` 也在涨），可屏幕上是纯黑，
+    //   连 DWM 手里那份内容都是黑的。
+    //
+    //   这不是本工程的毛病：一个跟本工程毫无关系的 `qml.exe`，只要设
+    //   `QSG_RHI_BACKEND=opengl`，同样的窗口全屏一来回同样全黑；换成它默认的
+    //   D3D11 就完全正常。也就是说 —— **Qt 的 OpenGL 后端在这台机器/这块驱动上
+    //   会丢窗口表面**。（mpv、库的边框助手、云母、渲染循环模式都逐个排除过；
+    //   证据和测试脚本在 docs 的"全屏"那一节里。）
+    //
+    //   本工程**必须**用 OpenGL（mpv 的 render API 只有 OpenGL 一种 GPU 后端），
+    //   所以只能绕开那个状态切换本身：**全屏 = 把窗口自己摆成铺满整块屏**。
+    //   同一个 `qml.exe` 测试里，只用几何铺满，来回几十次都正常。
+    //
+    // 三个"不许做"，都是这条路上试出来会坏的：
+    //   · 不许 `showFullScreen()` / `visibility = Window.FullScreen`（就是上面那个坑）；
+    //   · 不许藏一下再显示（一样会重建表面）；
+    //   · 不许改 `flags` —— 改窗口标志会让 Qt 重建原生窗口，照样黑。置顶得走
+    //     Win32 的 `WS_EX_TOPMOST`（见 `Shell.setFullscreenWindowMode`）。
+    //
+    // 进出全屏要**自己记、自己摆**：位置尺寸就是 QML 的 x/y/width/height
+    // （逻辑像素，不涉及坐标系换算），
+    // 记不住就会出现"退出全屏回不到原来的位置和大小"。
+    property bool fullscreen: false
 
-    // 全屏这件事只改这几样，别的一个都不许碰：
-    //
-    //   一、窗口的可见状态（交给 Qt：`showFullScreen()` → 无边框、铺满所在那块屏）
-    //   二、顶栏在不在
-    //   三、内容区铺不铺满（`fitsAppBarWindows`：顶栏那 48 像素归不归画面）
-    //
-    // 退出时**逐项还原**，而且是"原样返回"：进去前是最大化就回最大化、是普通就
-    // 回普通，**位置和尺寸也照旧**。
-    //
-    //    窗口的"普通几何"Qt 自己也记着一份，但不赌它 —— 进全屏前自己存一份，
-    //    退出时按存的摆回去。（顺带记一笔：全屏状态下改几何是**不生效**的，
-    //    所以顺序必须是"先退出全屏、再摆位置"。）
-    //
-    // 小窗（还没定）以后就是这个表里多一行：无边框 + 无顶栏 + 置顶 + 固定小尺寸。
-    // 现在**不预留空壳** —— 按这个项目的规矩，不摆按了没反应的开关。
-    property int savedVisibility: Window.Windowed
+    /** 进全屏前的窗口几何（逻辑像素）。退出时摆回去。 */
+    property rect savedGeometry: Qt.rect(0, 0, 0, 0)
+    /** 进全屏前是不是最大化着 —— 是的话退出时回到最大化，而不是那个小窗口。 */
+    property bool savedMaximized: false
 
     function enterFullscreen() {
         if (fullscreen)
             return
 
-        savedVisibility = visibility
+        savedGeometry = Qt.rect(x, y, width, height)
+        savedMaximized = (visibility === Window.Maximized)
 
+        fullscreen = true
         topBar.visible = false
         fitsAppBarWindows = true
 
-        // **先藏一下，再全屏。** 这不是讲究，是必须的：
-        //
-        // 切进全屏时 Windows 会把窗口样式换成无边框（WS_POPUP），而 Qt 那层
-        // 渲染面**不跟着重建** —— 结果是整个窗口什么都渲染不出来（全黑），
-        // 而且退出全屏也回不来（同一块坏掉的表面）。藏一次等于把表面丢掉重建，
-        // 实测一切正常。
-        //
-        // 证据（都在 work/captures 里）：不藏 -> 全屏后抓图全黑（试过 mpv 藏起来、
-        // 云母关掉、去掉启动时那次离屏渲染，都还是黑）；藏一下 -> 全屏后内容都在。
-        // 顺带排除过的：一个最朴素的 Qt 窗口（同样的 OpenGL 后端）全屏是正常的，
-        // 所以问题在"这个窗口 + 库的边框助手"这一层，不在 Qt 本身。
-        visibility = Window.Hidden
-        showFullScreen()
+        // 先让窗口层那边置顶、去圆角（QML 调不到 Win32），再摆位置 —— 顺序反了
+        // 会先看见任务栏压在上面一瞬。
+        Shell.setFullscreenWindowMode(true)
+
+        x = screen.virtualX
+        y = screen.virtualY
+        width = screen.width
+        height = screen.height
+
+        // 全屏期间不许拉边改大小（FluFrameless 靠 fixSize 那一位决定边框好不好拖）：
+        // 锁死在刚摆好的这个尺寸上。退出时在下面对称地解开。
+        fixSize = true
+        fixWindowSize()
     }
 
     function exitFullscreen() {
         if (!fullscreen)
             return
 
-        // 同样是"先藏一下"—— 出来的这一步也要重建表面，理由同上。
-        // 位置和尺寸**不自己摆** —— 交给 Qt 自己那份"进全屏之前的普通几何"。
-        // 量过：进去前窗口在 (335,18) 1250×985，出来还是 (335,18) 1250×985。
-        //
-        // （先写过一版"自己存一份再摆回去"，后来发现是多余的：存下来的 x/y 和
-        //   写回去时用的坐标系不一定是一套，反倒容易引入换算坑。拆了。）
-        visibility = Window.Hidden
-        if (savedVisibility === Window.Maximized)
+        fullscreen = false
+        Shell.setFullscreenWindowMode(false)
+
+        // 先把尺寸锁解开，不然下面那句摆位置会被 min/max 顶住。
+        fixSize = false
+        minimumWidth = 0
+        minimumHeight = 0
+        maximumWidth = 16777215
+        maximumHeight = 16777215
+
+        if (savedMaximized) {
+            // 最大化那份几何交给 Qt 自己算（它记着工作区大小），比我们照着摆准。
             showMaximized()
-        else
-            showNormal()
+        } else {
+            x = savedGeometry.x
+            y = savedGeometry.y
+            width = savedGeometry.width
+            height = savedGeometry.height
+        }
 
         fitsAppBarWindows = false
         topBar.visible = true

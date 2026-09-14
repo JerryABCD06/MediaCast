@@ -6,6 +6,8 @@
 #include <QDateTime>
 #include <QFile>
 #include <QIcon>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTime>
@@ -25,6 +27,64 @@
 #include "ui/NewUiWindow.h"
 #include "ui/TrayIcon.h"
 #include "ui/UiState.h"
+
+// ── Qt 自己的消息也写进日志 ──────────────────────────────────────────────
+//
+// Qt 内部（窗口状态、OpenGL/RHI、图形后端）出问题时报的话默认只往 stderr 吐，
+// 而这个程序平时是**双击/托盘起来的** —— stderr 没人接，出了事就只剩"窗口黑
+// 了"这种现象，一点线索都没有。2026-09-14 查"全屏切回来窗口变黑"就卡在这儿。
+//
+// 所以把 Qt 的消息也接进同一份 MCast.log，前缀标成 `Qt`，和界面自己的日志区分开。
+// 原来的处理函数照样调一遍 —— 从控制台跑的时候，终端上还照常看得见。
+//
+// **必须是普通函数**（qInstallMessageHandler 收的是函数指针，不能带捕获），
+// 所以文件句柄用这两个文件作用域的变量传进去。
+namespace {
+
+QFile *g_qtLogFile = nullptr;
+QMutex g_qtLogMutex;
+QtMessageHandler g_previousQtHandler = nullptr;
+
+void qtMessageToLogFile(QtMsgType type, const QMessageLogContext &context,
+                        const QString &message)
+{
+    if (g_qtLogFile) {
+        const char *kind = "信息";
+        switch (type) {
+        case QtDebugMsg:    kind = "调试"; break;
+        case QtInfoMsg:     kind = "信息"; break;
+        case QtWarningMsg:  kind = "警告"; break;
+        case QtCriticalMsg: kind = "严重"; break;
+        case QtFatalMsg:    kind = "致命"; break;
+        }
+
+        QMutexLocker locker(&g_qtLogMutex);
+        QByteArray line;
+        line += QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz")).toUtf8();
+        line += "  Qt ";
+        line += kind;
+        line += "  ";
+        line += message.toUtf8();
+        // 哪一行 Qt 代码报的 —— 只有 Qt 自己知道的时候（比如 RHI 那层）很管用。
+        if (context.file) {
+            line += "  (";
+            line += context.file;
+            line += ':';
+            line += QByteArray::number(context.line);
+            line += ')';
+        }
+        line += '\n';
+        g_qtLogFile->write(line);
+        g_qtLogFile->flush();
+    }
+
+    // 原来那个（默认就是写 stderr）放在**后面**调：QtFatalMsg 它会直接 abort，
+    // 放前面的话这行日志就永远写不进去了。
+    if (g_previousQtHandler)
+        g_previousQtHandler(type, context, message);
+}
+
+} // namespace
 
 /**
  * 组装整个程序。这里只做五件事：造零件、接日志、接 Windows 媒体面板、开窗口、起服务。
@@ -83,6 +143,12 @@ int main(int argc, char *argv[])
         logFile.write("\n");
         logFile.flush();
     };
+
+    // 从现在起，Qt 自己的消息也进这份日志（前缀 `Qt`）。为什么、怎么写，见文件
+    // 上面那段。**必须在 writeLog 之后、别的零件之前** —— 越早接上，启动那一段
+    // 的警告越不容易漏。
+    g_qtLogFile = logOk ? &logFile : nullptr;
+    g_previousQtHandler = qInstallMessageHandler(qtMessageToLogFile);
 
     // ── 语言 ─────────────────────────────────────────────────────────────
     //

@@ -40,4 +40,23 @@ namespace WindowFrame
  */
 void ensureSnapFlags(QWindow *window);
 
+/**
+ * 让窗口压在最上层（或取消）。
+ *
+ * **为什么不改 Qt 的窗口标志**（`Qt::WindowStaysOnTopHint`）：在 Windows 上改
+ * 窗口标志会让 Qt **把原生窗口销毁重建**，而这个工程用的 OpenGL 后端在这一步会
+ * 把窗口表面丢掉 —— 表现是整扇窗全黑（2026-09-14 查实：一个最朴素的 `qml.exe`
+ * 窗口，只要图形后端是 OpenGL，全屏来回一次也黑；D3D11 就没事）。这里直接改
+ * `WS_EX_TOPMOST`，只碰扩展样式，不重建窗口。
+ */
+void setTopMost(QWindow *window, bool onTop);
+
+/**
+ * Win11 窗口圆角开/关。
+ *
+ * "自己铺满"那种全屏下窗口还是个普通窗口，Win11 会给它留四个圆角 —— 那四个角
+ * 会把桌面露出来。全屏期间关掉它。非 Win11 或属性设不上就静默忽略。
+ */
+void setRoundedCorners(QWindow *window, bool rounded);
+
 }

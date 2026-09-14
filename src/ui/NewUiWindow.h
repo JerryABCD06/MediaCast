@@ -50,6 +50,20 @@ public:
      */
     Q_INVOKABLE void endCasting();
 
+    /**
+     * 进 / 出全屏时要做的**窗口层**调整（QML 那边调不到 Win32 API）。
+     *
+     * 现在是两件：
+     *   · 置顶（`WS_EX_TOPMOST`）—— 不全屏时任务栏会压在画面上；
+     *   · 关掉 Win11 的窗口圆角 —— 不然四角露出桌面。
+     *
+     * **为什么不写在 QML 里**：置顶本来可以用 `Qt::WindowStaysOnTopHint`，但那
+     * 会让 Qt 重建原生窗口，而本工程用的 OpenGL 后端在这一步会丢窗口表面（整窗
+     * 全黑，见 NewUiWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
+     * 就没有这个问题 —— 这是平台相关的活儿，收在 WindowFrame 里。
+     */
+    Q_INVOKABLE void setFullscreenWindowMode(bool on);
+
 public slots:
     /**
      * 语言变了。

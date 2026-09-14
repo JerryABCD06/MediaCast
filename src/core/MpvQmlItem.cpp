@@ -27,8 +27,79 @@ public:
     MpvItemRenderer(MpvCore *core, MpvQmlItem *)
         : m_core(core)
     {
-        if (!m_core || !m_core->handle()) {
-            qWarning() << "[mpv-qml] 没有可用的 mpv 实例，画面出不来";
+        // 构造和 render() 都是在渲染线程、GL 上下文当前的时候跑的，所以这儿取
+        // 到的就是"这块画布用的那个上下文"。
+        m_context = QOpenGLContext::currentContext();
+        createRenderContext();
+    }
+
+    ~MpvItemRenderer() override
+    {
+        destroyRenderContext();
+    }
+
+    void render() override
+    {
+        // ── GL 上下文换了，就把 mpv 的渲染上下文整个重建 ────────────────────
+        //
+        // **这一步是必须的。** mpv 的 render API（OpenGL 后端）跟**创建它的那个
+        // GL 上下文绑死** —— 它内部的纹理、FBO、着色器程序都是那个上下文里的
+        // 对象；mpv 明确要求"渲染时当前的这个上下文必须和创建时是同一个"。
+        // 而 Qt 这边**会换上下文**：全屏切换时我们主动让原生窗口重来了一遍
+        // （见 NewUiWindow::setFullscreenWindowMode），图形那一套跟着重建，
+        // 上下文自然换了一个（实测地址会变，日志里量到过）。
+        //
+        // 换完之后如果还拿老上下文里的对象去渲染，就是一堆失效句柄：mpv 这一笔
+        // 画的就不是画面（也可能把 GL 状态搅乱）。所以：**上下文一变就重建**。
+        //
+        // 判据就是上下文指针本身。重建很便宜（全屏切换本来就是低频动作），换来
+        // 的是"一个 GL 上下文配一个 render context"这条规矩始终成立。
+        QOpenGLContext *currentContext = QOpenGLContext::currentContext();
+        if (currentContext != m_context) {
+            m_context = currentContext;
+            destroyRenderContext();
+            createRenderContext();
+        }
+
+        if (!m_ctx)
+            return;
+
+        QOpenGLFramebufferObject *fbo = framebufferObject();
+        mpv_opengl_fbo mpvFbo{ static_cast<int>(fbo->handle()), fbo->width(), fbo->height(), 0 };
+
+        // flip_y 要 0，不是 1。
+        //
+        // 网上很多例子写 1，那是给别种宿主用的。Qt 的 FBO 本来就是以左下角为
+        // 原点交给场景图的，设成 1 画面会整个上下颠倒 —— 实测就是这样。
+        int flipY = 0;
+
+        mpv_render_param params[] = {
+            { MPV_RENDER_PARAM_OPENGL_FBO, &mpvFbo },
+            { MPV_RENDER_PARAM_FLIP_Y, &flipY },
+            { MPV_RENDER_PARAM_INVALID, nullptr },
+        };
+
+        mpv_render_context_render(m_ctx, params);
+
+        // 视频在播就一直要下一帧。不做按需刷新的优化 —— 那种优化要跟 mpv
+        // 的"这一帧有没有变"配合，做错了会掉帧，收益却不值。
+        update();
+    }
+
+private:
+    /**
+     * 建 mpv 的渲染上下文。
+     *
+     * **必须在渲染线程上、且 GL 上下文当前的时候调** —— mpv 会在这里把 GL 那
+     * 一套函数指针（`getProcAddress`）抄走，之后再拿它们建自己的纹理/FBO/程序。
+     * 也就是说：**一个 GL 上下文配一个 render context**，换上下文就得整份重建
+     * （见 render() 开头那段）。
+     */
+    void createRenderContext()
+    {
+        if (m_ctx || !m_core || !m_core->handle()) {
+            if (!m_ctx && (!m_core || !m_core->handle()))
+                qWarning() << "[mpv-qml] 没有可用的 mpv 实例，画面出不来";
             return;
         }
 
@@ -71,43 +142,16 @@ public:
                                   Q_ARG(bool, true));
     }
 
-    ~MpvItemRenderer() override
-    {
-        if (m_ctx) {
-            mpv_render_context_set_update_callback(m_ctx, nullptr, nullptr);
-            mpv_render_context_free(m_ctx);
-            m_ctx = nullptr;
-        }
-    }
-
-    void render() override
+    void destroyRenderContext()
     {
         if (!m_ctx)
             return;
 
-        QOpenGLFramebufferObject *fbo = framebufferObject();
-        mpv_opengl_fbo mpvFbo{ static_cast<int>(fbo->handle()), fbo->width(), fbo->height(), 0 };
-
-        // flip_y 要 0，不是 1。
-        //
-        // 网上很多例子写 1，那是给别种宿主用的。Qt 的 FBO 本来就是以左下角为
-        // 原点交给场景图的，设成 1 画面会整个上下颠倒 —— 实测就是这样。
-        int flipY = 0;
-
-        mpv_render_param params[] = {
-            { MPV_RENDER_PARAM_OPENGL_FBO, &mpvFbo },
-            { MPV_RENDER_PARAM_FLIP_Y, &flipY },
-            { MPV_RENDER_PARAM_INVALID, nullptr },
-        };
-
-        mpv_render_context_render(m_ctx, params);
-
-        // 视频在播就一直要下一帧。不做按需刷新的优化 —— 那种优化要跟 mpv
-        // 的"这一帧有没有变"配合，做错了会掉帧，收益却不值。
-        update();
+        mpv_render_context_set_update_callback(m_ctx, nullptr, nullptr);
+        mpv_render_context_free(m_ctx);
+        m_ctx = nullptr;
     }
 
-private:
     static void *getProcAddress(void *, const char *name)
     {
         QOpenGLContext *ctx = QOpenGLContext::currentContext();
@@ -125,6 +169,8 @@ private:
 
     MpvCore *m_core = nullptr;
     mpv_render_context *m_ctx = nullptr;
+    /** 建 m_ctx 时那个 GL 上下文。它一变就得重建（见 render() 开头那段）。 */
+    QOpenGLContext *m_context = nullptr;
 };
 
 } // namespace

@@ -159,3 +159,37 @@ void NewUiWindow::endCasting()
     // 再回来）是协议层的事，main() 把这个信号接在 DlnaRenderer::endSession 上。
     emit castEndRequested();
 }
+
+void NewUiWindow::setFullscreenWindowMode(bool on)
+{
+    // 窗口还没建起来就没什么可调的（正常情况下不会发生：这是界面调过来的）。
+    if (!m_window)
+        return;
+
+    // ── 先把原生窗口拆掉重来 ─────────────────────────────────────────────
+    //
+    // **这是"全屏来回一次就整窗黑"的解药。** 台机器上（AMD Radeon 780M + Qt
+    // 6.11 + OpenGL 后端）窗口表面只要经历过一次"尺寸大改 / 状态切换"，Qt 就
+    // 再也不往上送了：场景照常在渲染（探针数过每秒上百帧、`frameSwapped` 也在
+    // 涨），屏幕和 DWM 手里那份都是纯黑。这不是本工程的毛病 —— 一个跟本工程
+    // 毫无关系的 `qml.exe`，只要 `QSG_RHI_BACKEND=opengl`，同样黑；换 D3D11
+    // 就正常（详见 NewUiWindow.qml 里全屏那一大段）。
+    //
+    // 而**新建出来的窗口从来不黑**（验过很多次）。所以全屏切换时不跟它讲道理，
+    // 直接把这个原生窗口拆掉、按新尺寸重新建一个：
+    //
+    //   destroy() 放掉原生资源（Qt 会顺手销毁图形那一套、发 sceneGraphInvalidated），
+    //   show()    再建一个新的。QML 那棵树、界面状态全都留着 —— 只有原生窗口
+    //             和图形资源是新的，所以看不出来"换了个窗口"，只闪一下。
+    //
+    // 代价：切换时闪一下（几百毫秒，和之前"先藏一下再切"的观感一样）。换来的是
+    // 切完还能正常显示 —— 值。
+    //
+    // 顺序要紧：**先拆再摆几何**（几何是 QML 紧接着摆的，见 enterFullscreen）——
+    // 在旧表面上改尺寸正是会把它弄坏的那件事。
+    m_window->destroy();
+    m_window->show();
+
+    WindowFrame::setTopMost(m_window, on);
+    WindowFrame::setRoundedCorners(m_window, !on);
+}
