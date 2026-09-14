@@ -225,12 +225,16 @@ FluAppBar {
 
         // 「断开连接」：带边框的文字按钮（不是强调色那版），只在真有活儿的
         // 时候出现 —— 没连着的时候摆一个"断开连接"出来只会让人犯嘀咕。
+        //
+        // 判据**直接读"手机连着没有"**（`peerConnected`），不绕 `castState`：
+        // 两者等价（`castState` 只在没连着时返回 `NoViewer`），但同一个问题
+        // 只该有一种问法 —— 关窗那个确认框问的正是这件事，那儿读的也是它。
         FluButton {
             id: btn_disconnect
             Layout.alignment: Qt.AlignVCenter
             Layout.preferredHeight: 30
             Layout.rightMargin: 6
-            visible: Playback.castState !== Playback.NoViewer
+            visible: Playback.peerConnected
             contentDescription: qsTr("ui_topbar_disconnect")
             onClicked: bar.disconnectClicked()
 

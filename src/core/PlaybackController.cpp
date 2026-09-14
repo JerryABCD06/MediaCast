@@ -293,10 +293,10 @@ PlaybackController::CastState PlaybackController::castState() const
     // "正在投屏"。
     //
     // **别把这一条和"关窗口要不要警告"混起来**：那一处看的是另一个概念 ——
-    // "有没有投送方连着"（`peerConnected`，见 NewUiWindow.qml）。它和顶栏那个
-    // 「断开连接」按钮是同一条判据（那个按钮的显隐是 `castState !== NoViewer`，
-    // 而 castState 只在没连着时返回 NoViewer —— 两者等价）。
-    // 早先这里写着"那一处用的是 hasMedia"，那是旧说法，已经改掉了。
+    // "有没有投送方连着"（`peerConnected`）：关窗确认框（NewUiWindow.qml）和顶栏
+    // 那个「断开连接」按钮的显隐**读的都是它**，三处问同一件事就写同一个属性。
+    // （那两个地方早先分别写的是 hasMedia 和 `castState !== NoViewer`，都对、但
+    // 都是绕着的说法，2026-09-14 统一了。）
     if (isIdle())
         return CastState::ViewerIdle;
 
