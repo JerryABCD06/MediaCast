@@ -697,7 +697,9 @@ Item {
                     height: 34
                     hoverColor: bar.itemHoverColor
                     pressedColor: bar.itemPressColor
-                    onClicked: volumePopup.opened ? volumePopup.close() : volumePopup.open()
+                    // 面板开着的时候，这一下**到不了这儿** —— 面板自己摆了一块
+                    // 透明的"静音键"盖在它上面（见 Popup 里那段）。所以这里只管开。
+                    onClicked: volumePopup.open()
 
                     Popup {
                         id: volumePopup
@@ -723,6 +725,10 @@ Item {
                         // **但默认那层遮罩会变暗**（实测：整窗明显暗下去一块），那是给
                         // 对话框用的。这里换成一个铺满窗口的 MouseArea —— 它不画任何
                         // 东西，但**照样吃点击**，于是"挡住了但看不见"。
+                        //
+                        // 于是"面板开着的时候，除了那个音量键，哪儿都点不动"这条就有了
+                        // —— 点别处的效果是关面板（关自己由 closePolicy 负责，这层只
+                        // 负责把点击吃掉、不放它穿到画面上去）。
                         modal: true
                         Overlay.modal: MouseArea { }
 
@@ -741,6 +747,51 @@ Item {
                                                  : Qt.rgba(1, 1, 1, 1)
                             FluShadow {
                                 radius: 6
+                            }
+
+                            // ── 盖在控制栏那个音量键上的"静音键" ────────────────────
+                            //
+                            // 面板开着的时候要能切静音，可遮罩（和面板本身）把下面那个
+                            // 按钮挡住了 —— 所以在这一层摆一个**和它一模一样的按钮**，
+                            // 正好盖在它上面：点它就是切静音，点面板以外别的地方才是关面板。
+                            //
+                            // 用**控制栏自己那个按钮组件**（TipIconButton），不是光秃秃的
+                            // MouseArea：它悬停有底色、按下有动画，和栏上其它键一模一样 ——
+                            // 底下的按钮被它盖住了，要是没有反馈，按下去就像"没反应"。
+                            //
+                            // **它自己不画图标**（`iconSource: 0` 就是"不画"，FluIcon 里
+                            // 认这个值）：图标由下面那个真按钮画，它一直画着、看得见。
+                            // 两块都画就是同一个位置、同一个字形叠两遍 —— 抗锯齿的边缘
+                            // 会被叠一次，那个键看着比旁边几个粗一圈（他定的：上面这块不画）。
+                            //
+                            // 颜色**必须引用这条栏自己那套**（`bar.itemHoverColor` /
+                            // `itemPressColor`）：栏压在画面上时永远是深色的，而
+                            // `FluTheme` 那套是按程序主题算的，两边会对不上。
+                            //
+                            // 提示（tooltip）故意关掉：面板就开在旁边，再弹一句话会压在
+                            // 滑块上。`tip: ""` 就是"不显示"。
+                            //
+                            // **位置反而不用算**：`volumePopup.x / .y` 本来就是"相对那个
+                            // 按钮"的坐标（见上面 `parent: btn_volume` 那段），所以按钮在
+                            // 这一层里的位置就是它的相反数。这比"给整窗遮罩挖个洞"省事
+                            // 得多（那是他提的），而且**从根上绕开了那个坑**：挖洞得算出
+                            // 按钮在窗口里的绝对坐标，这里根本不需要窗口坐标 —— 面板跟着
+                            // 按钮走，它也就跟着走。
+                            //
+                            // 它会伸到面板外面去（按钮在面板下方 8 像素处）：这是有意的。
+                            // Popup 不裁自己的子项（面板四周那圈阴影就是这么画出来的），
+                            // 所以伸出去也点得到。
+                            TipIconButton {
+                                x: -volumePopup.x
+                                y: -volumePopup.y
+                                width: btn_volume.width
+                                height: btn_volume.height
+                                iconSource: 0
+                                hoverColor: bar.itemHoverColor
+                                pressedColor: bar.itemPressColor
+                                tip: ""
+                                // 静音 / 取消静音。图标会跟着变（见音量那个按钮里那段）。
+                                onClicked: Playback.setMuted(!Playback.muted)
                             }
                         }
 
