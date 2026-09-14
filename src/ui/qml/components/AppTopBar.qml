@@ -133,9 +133,15 @@ FluAppBar {
 
         Image {
             Layout.alignment: Qt.AlignVCenter
-            Layout.preferredWidth: 20
-            Layout.preferredHeight: 20
-            sourceSize: Qt.size(40, 40)     // 高 DPI 下取大图，别糊
+            // **16 × 16** —— 微软《标题栏设计》里窗口图标的标准尺寸（原来是 20）。
+            // 左边距 16 本来就是对的（leftGroup 的 leftMargin），不用动。
+            Layout.preferredWidth: 16
+            Layout.preferredHeight: 16
+            // 再补 6 像素右边距，让"图标 → 标题"正好是标准要求的 16 ——
+            // 用右边距补而不是改整组的 spacing，是因为后面还跟着我们自己的
+            // 状态胶囊，改组间距会把它一起推走。
+            Layout.rightMargin: 6
+            sourceSize: Qt.size(32, 32)     // 高 DPI 下取大图，别糊
             source: "qrc:/icons/mcast-32.png"
             fillMode: Image.PreserveAspectFit
         }
