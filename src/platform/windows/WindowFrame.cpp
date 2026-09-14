@@ -25,19 +25,17 @@ HWND nativeHandle(QWindow *window)
 
 } // namespace
 
-void ensureSnapFlags(QWindow *window)
+void reapplyFramelessStyle(QWindow *window)
 {
 #ifdef Q_OS_WIN
-    if (!window)
-        return;
-
-    // winId() 会顺手把原生窗口建出来（如果还没建），所以这个调用不挑时机。
-    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    const HWND hwnd = nativeHandle(window);
     if (!hwnd)
         return;
 
     const LONG_PTR style = ::GetWindowLongPtrW(hwnd, GWL_STYLE);
-    const LONG_PTR wanted = style | WS_SYSMENU | WS_MINIMIZEBOX;
+    // 这一套 = 库里创建时打的那三个 + 它少打的那两个。硬要求见头注释。
+    const LONG_PTR wanted = style | WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX
+                                  | WS_MINIMIZEBOX | WS_SYSMENU;
     if (wanted == style)
         return;
 
@@ -50,6 +48,21 @@ void ensureSnapFlags(QWindow *window)
     ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
                        | SWP_NOZORDER | SWP_NOACTIVATE);
+#else
+    Q_UNUSED(window);
+#endif
+}
+
+void reapplyDwmShadow(QWindow *window)
+{
+#ifdef Q_OS_WIN
+    const HWND hwnd = nativeHandle(window);
+    if (!hwnd)
+        return;
+
+    // 和 FluFrameless::setShadow() 用的是同一组参数：左边留 1 像素。
+    const MARGINS shadow = { 1, 0, 0, 0 };
+    ::DwmExtendFrameIntoClientArea(hwnd, &shadow);
 #else
     Q_UNUSED(window);
 #endif

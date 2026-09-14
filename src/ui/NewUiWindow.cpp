@@ -108,8 +108,8 @@ bool NewUiWindow::load()
     });
 
     // FluentUI 建这个窗口的时候少设了两个样式位，补上。
-    // 为什么在这儿补、补的是哪两个，见 WindowFrame.h 的注释。
-    WindowFrame::ensureSnapFlags(m_window);
+    // 为什么在这儿补、补的是哪几个，见 WindowFrame.h 的注释。
+    WindowFrame::reapplyFramelessStyle(m_window);
 
     return true;
 }
@@ -189,6 +189,12 @@ void NewUiWindow::setFullscreenWindowMode(bool on)
     // 在旧表面上改尺寸正是会把它弄坏的那件事。
     m_window->destroy();
     m_window->show();
+
+    // **重建出来的窗口要把库那套样式重新打上。** 库只在创建时打过一次，新的
+    // 原生窗口一个都没有 —— 少了它：最大化键悬停不出快速贴靠、客户区算法也变
+    // （退出全屏后"顶栏上面多出一小块"就是它），阴影也没了。见 WindowFrame.h。
+    WindowFrame::reapplyFramelessStyle(m_window);
+    WindowFrame::reapplyDwmShadow(m_window);
 
     WindowFrame::setTopMost(m_window, on);
     WindowFrame::setRoundedCorners(m_window, !on);

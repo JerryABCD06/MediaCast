@@ -519,7 +519,25 @@ void FluFrameless::componentComplete() {
         return false;
     }
     const quint64 wid = reinterpret_cast<qint64>(hwnd);
-    if (wid != _current) {
+    // ── 本地改动（补丁 6，见 third_party/PATCHES.md）──────────────────────
+    //
+    // 上游这里是 `if (wid != _current)`：只认**创建时**记下的那个原生句柄。
+    // 本工程的"全屏"切换会主动 `destroy()` + `show()` **把原生窗口拆掉重建**
+    // （见 NewUiWindow::setFullscreenWindowMode），句柄就变了 —— 用老句柄比，
+    // 新窗口的消息全被放过去，无边框助手等于失效：冒出一条系统标题栏，
+    // 拖拽/缩放/贴靠也都不管了。
+    //
+    // 改成跟**当前**的句柄比。这个事件过滤器本来就属于这扇窗，认当前句柄才对。
+    //
+    // **必须先用 handle() 问一句"现在有没有原生窗口"**：`window()->winId()` 在
+    // 没有原生窗口的时候会去**创建**一个，而这里是个全局消息过滤器 —— 一旦在
+    // 别的窗口的创建过程中被回调进去，就会递归创建、CreateWindowEx 失败、
+    // Qt 直接断言崩掉（实测：改完一进全屏就崩在 qwindow.cpp:576）。
+    // handle() 只是读指针，不创建；没有原生窗口时就把消息放过去。
+    const quint64 currentId = window()->handle()
+        ? static_cast<quint64>(window()->winId()) : 0;
+    if (wid != currentId) {
+        _current = wid;
         return false;
     }
     const auto uMsg = msg->message;
