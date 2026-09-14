@@ -73,6 +73,19 @@ void reapplyDwmShadow(QWindow *window);
 void setFullscreenBorderless(QWindow *window, bool borderless);
 
 /**
+ * 设 / 清窗口的原生 owner（从属窗口关系）。
+ *
+ * Qt 那边对应的入口是 `QWindow::setTransientParent()`，但**它只在窗口创建时
+ * 生效一次**（Qt 文档里写死的那句"必须在第一次露面之前设"，实测运行时改它
+ * 原生 owner 不动）。而我们需要在运行时动它一次 —— 主窗口切换全屏时会把自己
+ * 的原生窗口拆掉重建，而 Win32 的规矩是"销毁 owner 会连带销毁 owned 窗口"，
+ * 所以那一下必须先把从属窗口摘下来（owner = nullptr），重建完再挂到新句柄上。
+ *
+ * 直接改 `GWLP_HWNDPARENT` 就行，不重建窗口、不影响画面。
+ */
+void setWindowOwner(QWindow *window, QWindow *owner);
+
+/**
  * 让窗口压在最上层（或取消）。
  *
  * **为什么不改 Qt 的窗口标志**（`Qt::WindowStaysOnTopHint`）：在 Windows 上改

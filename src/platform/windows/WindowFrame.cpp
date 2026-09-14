@@ -91,6 +91,33 @@ void setFullscreenBorderless(QWindow *window, bool borderless)
 #endif
 }
 
+void setWindowOwner(QWindow *window, QWindow *owner)
+{
+#ifdef Q_OS_WIN
+    const HWND hwnd = nativeHandle(window);
+    if (!hwnd)
+        return;
+
+    // GWLP_HWNDPARENT 对顶层窗口就是"owner"；设成 0 就是摘下来。
+    // 取 owner 的句柄前先用 handle() 问一句"它现在有没有原生窗口"，
+    // **别用 winId() 直接取** —— 没有原生窗口时它会顺手去创建一个（踩过）。
+    HWND ownerHandle = nullptr;
+    if (owner && owner->handle())
+        ownerHandle = reinterpret_cast<HWND>(owner->winId());
+
+    ::SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(ownerHandle));
+    // 让系统按新关系重算一次（z 序、任务栏那一套）。
+    // **别带 SWP_FRAMECHANGED** —— 那是"边框变了、客户区重算一次"，会把窗口
+    // 的非客户区重新算一遍（实测从属窗口来回一次会四周各胖 16 像素）。改 owner
+    // 跟边框没关系，不需要它。
+    ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
+#else
+    Q_UNUSED(window);
+    Q_UNUSED(owner);
+#endif
+}
+
 void setTopMost(QWindow *window, bool onTop)
 {
 #ifdef Q_OS_WIN

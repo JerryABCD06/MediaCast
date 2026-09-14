@@ -62,7 +62,7 @@ public:
      * 全黑，见 NewUiWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
      * 就没有这个问题 —— 这是平台相关的活儿，收在 WindowFrame 里。
      */
-    Q_INVOKABLE void setFullscreenWindowMode(bool on);
+    Q_INVOKABLE void setFullscreenWindowMode(bool on, QObject *pictureWindow = nullptr);
 
 public slots:
     /**

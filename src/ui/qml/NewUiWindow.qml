@@ -201,7 +201,7 @@ FluWindow {
 
         // 先让窗口层那边置顶、去圆角（QML 调不到 Win32），再摆位置 —— 顺序反了
         // 会先看见任务栏压在上面一瞬。
-        Shell.setFullscreenWindowMode(true)
+        Shell.setFullscreenWindowMode(true, pictureWindow)
 
         x = screen.virtualX
         y = screen.virtualY
@@ -219,7 +219,7 @@ FluWindow {
             return
 
         fullscreen = false
-        Shell.setFullscreenWindowMode(false)
+        Shell.setFullscreenWindowMode(false, pictureWindow)
 
         // 先把尺寸锁解开，不然下面那句摆位置会被 min/max 顶住。
         fixSize = false
@@ -236,6 +236,20 @@ FluWindow {
             y = savedGeometry.y
             width = savedGeometry.width
             height = savedGeometry.height
+
+            // **再补一次（下一轮事件循环）**：上面那次赋值是在"原生窗口刚重建完"
+            // 的同一瞬间发生的，实测有时会被平台那边按旧的位置信息盖回去（退出
+            // 全屏后窗口还停在全屏那么大）。隔一轮再摆一次就稳了 —— 这两句是
+            // 幂等的，没被盖回去时等于白写一遍。
+            const g = savedGeometry
+            Qt.callLater(function () {
+                if (!window.fullscreen) {
+                    window.x = g.x
+                    window.y = g.y
+                    window.width = g.width
+                    window.height = g.height
+                }
+            })
         }
 
         fitsAppBarWindows = false
@@ -248,6 +262,7 @@ FluWindow {
         else
             enterFullscreen()
     }
+
 
     // 全屏时的出口。只在全屏下生效 —— 不然以后设置页想用 Esc 返回就没位置了。
     Shortcut {
@@ -358,8 +373,19 @@ FluWindow {
     property var pictureWindow: null
 
     function openPictureWindow() {
+        // ── 它**依附于主窗口**（Win32 里叫 owned window）────────────────────
+        //
+        // `transientParent` 就是这件事的入口，给上以后这扇窗：
+        //   · 始终压在主窗口上面（不会被主窗口盖住）；
+        //   · **不占任务栏按钮**（Alt+Tab 里也不单独出现）；
+        //   · 主窗口最小化时跟着藏起来；
+        //   · 主窗口销毁时跟着走。
+        // Qt 文档里那句"必须在窗口第一次露面之前设"是硬性的 —— 所以只能在
+        // 建的时候给，之后再设不管用。**别把这句挪到下面 show() 之后。**
         if (!pictureWindow)
-            pictureWindow = com_picture_window.createObject(window)
+            pictureWindow = com_picture_window.createObject(window, {
+                "transientParent": window
+            })
 
         // createObject 失败会返回 null（组件写错了之类）。真到那一步宁可什么都
         // 不发生，也别在这儿崩一下。
