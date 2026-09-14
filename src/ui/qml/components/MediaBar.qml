@@ -716,61 +716,88 @@ Item {
 
                             FluText {
                                 Layout.alignment: Qt.AlignHCenter
-                                text: Math.round(volumeSlider.value)
+                                text: volumeSlider.volume
                                 font: FluTextStyle.Caption
                                 textColor: bar.overPicture ? "#E6FFFFFF"
                                                            : FluTheme.fontSecondaryColor
                             }
 
-                            FluSlider {
+                            // ── 音量滑块：自己画 ──────────────────────────────────
+                            //
+                            // **为什么不用 FluSlider（或者任何现成的 Slider）**：
+                            // Qt 的纵向 Slider 有两套互相矛盾的规则，实测了三轮：
+                            //
+                            //   · 显示侧认 from/to（`position = (value-from)/(to-from)`），
+                            //     而且 `visualPosition = 1 - position`，本身又是倒的；
+                            //   · 但**点击侧是归一化的** —— 点轨道顶部永远得到"最小值"，
+                            //     把 from/to 倒过来也不管用（点顶部照样给 0）。
+                            //
+                            // 结果就是"点上面、手柄跑到下面"，怎么配都对不齐。
+                            // 自己画之后，显示和输入都由这里算，方向不可能再反。
+                            //
+                            // 规矩只有一条：**volume 0..100，顶 = 100**（和 Windows 那根一致）。
+                            Item {
                                 id: volumeSlider
                                 Layout.alignment: Qt.AlignHCenter
                                 Layout.preferredWidth: 32
                                 Layout.preferredHeight: 150
-                                orientation: Qt.Vertical
-                                from: 0
-                                to: 100
-                                stepSize: 1
-                                tooltipEnabled: false
-                                padding: 0
 
-                                // 颜色自己来 —— 理由和上面进度条那段一模一样：
-                                // FluSlider 把轨道和手柄的颜色写死在组件内部、只认
-                                // FluTheme，而这一条栏有它**自己的**明暗规矩。
-                                readonly property bool darkStyle: bar.darkStyle
+                                /** 音量 0..100。**顶 = 100**。 */
+                                property int volume: 0
 
-                                // **别写成 `value: Playback.volumePercent`。**
-                                // 用户一拖，控件自己会写 value，绑定当场被打断，
-                                // 之后再也跟不回真实音量。
-                                // 平时（没按住）跟着 C++ 走，按住时 UI 说了算，松手写回去。
-                                Connections {
-                                    target: Playback
-                                    function onVolumeChanged() {
-                                        if (!volumeSlider.pressed)
-                                            volumeSlider.value = Playback.volumePercent
-                                    }
-                                }
-                                Component.onCompleted: value = Playback.volumePercent
-                                onPressedChanged: {
-                                    if (!pressed)
-                                        Playback.setVolumePercent(Math.round(value))
+                                readonly property bool pressed: volumeMouse.pressed
+                                readonly property bool hovered: volumeMouse.containsMouse
+
+                                readonly property int trackWidth: 6
+                                readonly property int handleSize: 20
+                                // 手柄圆心能走的上下两端（各留半个手柄，手柄才不会越出控件）
+                                //
+                                // **别叫 top / bottom** —— 那是 Item 的 FINAL 属性（锚点用），
+                                // 覆盖它会报 "Cannot override FINAL property"，而且整个
+                                // 界面都加载不出来（实测踩过）。
+                                readonly property real travelTop: handleSize / 2
+                                readonly property real travelBottom: height - handleSize / 2
+                                readonly property real handleCenterY:
+                                    travelBottom - (travelBottom - travelTop) * (volume / 100)
+
+                                /** 把控件内的 y 换算成音量（顶 = 100）。压到范围外就夹住。 */
+                                function volumeAt(y) {
+                                    const span = travelBottom - travelTop
+                                    const t = Math.max(0, Math.min(1, (y - travelTop) / span))
+                                    return Math.round(100 * (1 - t))
                                 }
 
-                                handle: Rectangle {
-                                    x: volumeSlider.leftPadding
-                                       + (volumeSlider.availableWidth - width) / 2
-                                    y: volumeSlider.topPadding
-                                       + (1 - volumeSlider.visualPosition)
-                                         * (volumeSlider.availableHeight - height)
-                                    implicitWidth: 20
-                                    implicitHeight: 20
-                                    radius: 10
-                                    color: volumeSlider.darkStyle
-                                           ? Qt.rgba(69 / 255, 69 / 255, 69 / 255, 1)
-                                           : Qt.rgba(1, 1, 1, 1)
-                                    FluShadow {
-                                        radius: 10
-                                    }
+                                // 轨道（没走过的那一段的颜色）
+                                Rectangle {
+                                    width: volumeSlider.trackWidth
+                                    x: (parent.width - width) / 2
+                                    y: volumeSlider.travelTop
+                                    height: volumeSlider.travelBottom - volumeSlider.travelTop
+                                    radius: width / 2
+                                    color: bar.darkStyle ? Qt.rgba(162 / 255, 162 / 255, 162 / 255, 1)
+                                                         : Qt.rgba(138 / 255, 138 / 255, 138 / 255, 1)
+                                }
+
+                                // 已经到的那一段：从底部往上长到手柄中心
+                                Rectangle {
+                                    width: volumeSlider.trackWidth
+                                    x: (parent.width - width) / 2
+                                    y: volumeSlider.handleCenterY
+                                    height: volumeSlider.travelBottom - volumeSlider.handleCenterY
+                                    radius: width / 2
+                                    color: bar.accentColor
+                                }
+
+                                // 手柄
+                                Rectangle {
+                                    width: volumeSlider.handleSize
+                                    height: volumeSlider.handleSize
+                                    radius: width / 2
+                                    x: (parent.width - width) / 2
+                                    y: volumeSlider.handleCenterY - height / 2
+                                    color: bar.darkStyle ? Qt.rgba(69 / 255, 69 / 255, 69 / 255, 1)
+                                                         : Qt.rgba(1, 1, 1, 1)
+                                    FluShadow { radius: 10 }
                                     FluIcon {
                                         width: 10
                                         height: 10
@@ -789,37 +816,33 @@ Item {
                                     }
                                 }
 
-                                background: Item {
-                                    x: volumeSlider.leftPadding
-                                       + (volumeSlider.availableWidth - width) / 2
-                                    y: volumeSlider.topPadding
-                                    implicitWidth: 6
-                                    implicitHeight: 150
-                                    width: implicitWidth
-                                    height: volumeSlider.availableHeight
+                                // 输入：点哪儿、拖哪儿，手柄就跟着去哪儿
+                                MouseArea {
+                                    id: volumeMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
 
-                                    // 还没到的那一段（上面）
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        anchors.margins: 1
-                                        radius: 2
-                                        color: volumeSlider.darkStyle
-                                               ? Qt.rgba(162 / 255, 162 / 255, 162 / 255, 1)
-                                               : Qt.rgba(138 / 255, 138 / 255, 138 / 255, 1)
+                                    onPressed: volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
+                                    onPositionChanged: {
+                                        if (pressed)
+                                            volumeSlider.volume = volumeSlider.volumeAt(mouse.y)
                                     }
+                                    // 松手才写回去 —— 拖的过程中每一帧都发命令会把播放器淹掉
+                                    // （进度条那边也是这个规矩）。
+                                    onReleased: Playback.setVolumePercent(volumeSlider.volume)
+                                }
 
-                                    // 已经到的那一段（下面，跟着 visualPosition 往上长）
-                                    Rectangle {
-                                        anchors.left: parent.left
-                                        anchors.right: parent.right
-                                        anchors.bottom: parent.bottom
-                                        anchors.margins: 1
-                                        height: Math.max(0, (parent.height - 2)
-                                                           * volumeSlider.visualPosition)
-                                        radius: 2
-                                        color: bar.accentColor
+                                // 控制点（手机）改音量时跟着走。**拖着的时候别抢** —— 这是
+                                // 双向同步里最容易打架的一处。
+                                Connections {
+                                    target: Playback
+                                    function onVolumeChanged() {
+                                        if (!volumeSlider.pressed)
+                                            volumeSlider.volume = Playback.volumePercent
                                     }
                                 }
+                                Component.onCompleted: volume = Playback.volumePercent
                             }
                         }
                     }
