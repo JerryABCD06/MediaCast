@@ -548,7 +548,18 @@ void FluFrameless::componentComplete() {
             clientRect->left += tx;
             clientRect->right -= tx;
         }
-        if (isMax || isFull) {
+        // ── 本地改动（补丁 5，见 third_party/PATCHES.md）────────────────────
+        //
+        // 上游这里是 `if (isMax || isFull)`。这一段整体是给**最大化**窗口用的
+        // （任务栏自动隐藏时给它留 1 像素，否则把客户区往下多伸 1 像素，免得
+        // 内容被任务栏压住）—— 全屏窗口不该沾。
+        //
+        // 沾上的后果：全屏（WS_POPUP，正好铺满那块屏）的客户区会比窗口**高
+        // 1 像素**（1920×1081 vs 1920×1080）。Windows 那边实测下来，这一像素
+        // 的差会让屏幕顶边漏出一条 1 像素的窗口底色（浅色主题就是 #F3F3F3）
+        // —— 也就是用户 2026-09-14 报的"全屏时顶部有一条白线"。改回标志性的
+        // 对照：客户区 == 窗口时那条线就没有。
+        if (isMax && !isFull) {
             APPBARDATA abd;
             SecureZeroMemory(&abd, sizeof(abd));
             abd.cbSize = sizeof(abd);
