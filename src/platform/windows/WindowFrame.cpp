@@ -68,6 +68,29 @@ void reapplyDwmShadow(QWindow *window)
 #endif
 }
 
+void setFullscreenBorderless(QWindow *window, bool borderless)
+{
+#ifdef Q_OS_WIN
+    const HWND hwnd = nativeHandle(window);
+    if (!hwnd)
+        return;
+
+    // DWMWA_BORDER_COLOR = 34（Win11 才有）
+    //   DWMWA_COLOR_DEFAULT = 0xFFFFFFFF（系统默认那条边框）
+    //   DWMWA_COLOR_NONE    = 0xFFFFFFFE（不画）
+    const DWORD color = borderless ? 0xFFFFFFFEu : 0xFFFFFFFFu;
+    ::DwmSetWindowAttribute(hwnd, 34, &color, sizeof(color));
+
+    // 阴影：靠"把 DWM 的框伸进客户区 1 像素"实现。全屏时把它收回 0 ——
+    // 那 1 像素同样会落在屏幕边上（左边缘那条）。
+    const MARGINS shadow = borderless ? MARGINS{ 0, 0, 0, 0 } : MARGINS{ 1, 0, 0, 0 };
+    ::DwmExtendFrameIntoClientArea(hwnd, &shadow);
+#else
+    Q_UNUSED(window);
+    Q_UNUSED(borderless);
+#endif
+}
+
 void setTopMost(QWindow *window, bool onTop)
 {
 #ifdef Q_OS_WIN

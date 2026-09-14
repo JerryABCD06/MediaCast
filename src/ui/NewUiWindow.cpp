@@ -194,8 +194,10 @@ void NewUiWindow::setFullscreenWindowMode(bool on)
     // 原生窗口一个都没有 —— 少了它：最大化键悬停不出快速贴靠、客户区算法也变
     // （退出全屏后"顶栏上面多出一小块"就是它），阴影也没了。见 WindowFrame.h。
     WindowFrame::reapplyFramelessStyle(m_window);
-    WindowFrame::reapplyDwmShadow(m_window);
 
     WindowFrame::setTopMost(m_window, on);
     WindowFrame::setRoundedCorners(m_window, !on);
+    // 边框和阴影：全屏时都关掉（它们正好落在屏幕最外圈，就是"四周漏一条缝"），
+    // 退出时把阴影挂回来。边框那个属性退出时也会自动回到系统默认。
+    WindowFrame::setFullscreenBorderless(m_window, on);
 }

@@ -59,6 +59,20 @@ void reapplyFramelessStyle(QWindow *window);
 void reapplyDwmShadow(QWindow *window);
 
 /**
+ * 全屏期间关掉 DWM 那条 1 像素窗口边框（退出时调回来）。
+ *
+ * 为什么：我们的"全屏"是一个**普通窗口**摆到整块屏上（不是 Win32 的
+ * fullscreen/maximized），于是 Windows 11 照常给它画那圈窗口边框和阴影 ——
+ * 它们正好落在屏幕最外圈，看着就是"四周漏一条缝"（量过：最外 1~2 像素是
+ * 边框的白色 + 阴影的渐变）。真正的全屏/最大化窗口不会画这一圈（窗口矩形
+ * 本来就探到屏幕外面去了）。
+ *
+ * 这里用 `DWMWA_BORDER_COLOR`（Win11 属性）把边框设成"不画"，阴影则用
+ * `DwmExtendFrameIntoClientArea` 收回去。老系统上属性不存在，调用失败无所谓。
+ */
+void setFullscreenBorderless(QWindow *window, bool borderless);
+
+/**
  * 让窗口压在最上层（或取消）。
  *
  * **为什么不改 Qt 的窗口标志**（`Qt::WindowStaysOnTopHint`）：在 Windows 上改
