@@ -102,17 +102,22 @@ class PlaybackController : public QObject
     Q_PROPERTY(QVariantList pictureControlList READ pictureControlList CONSTANT)
 
     /**
-     * 队列里有没有**上一条 / 下一条** —— 控制栏那两个键亮不亮全看它。
+     * 播放列表里有没有**上一条 / 下一条** —— 控制栏那两个键亮不亮全看它。
      *
-     * 通知信号直接用 `queueChanged`：它本来就带着这两个布尔值一起报出来
-     * （见它的签名），界面收到就重新读一遍。
+     * **只有协议明确说了前后有东西，这里才是真。** 具体到 DLNA：
      *
-     * 判据在 C++（那三格队列只有它知道）：**上一条**是"刚才放过的那条"，
-     * **下一条**是控制点用 `SetNextAVTransportURI` 排进来的那条。
+     *   · 下一条 —— 控制点用 `SetNextAVTransportURI` 排进来的那条；
+     *   · 上一条 —— 只有**真的换过曲之后**才有（`next()` / `previous()` 里那两行），
+     *     那说明对方确实在一条列表上走。
      *
-     * 注意：这两个值**不代表控制点会去用**。规范那一侧我们做对了，但实际控制点
-     * 大多不排下一条、也不按上一首（见 `docs/DLNA实现情况.md`）—— 所以界面上
-     * 这两个键大多数时候是灰的，那是**如实显示**，不是坏了。
+     * 换句话说：**连着投两条不算列表。** 控制点先投 A、又投 B，很可能是两次独立的
+     * 投送，不是"歌单里的前后"—— 我们**不替它猜**（早先会猜：把刚放的那条记成
+     * 历史，那样这两个键几乎永远是亮的，那是错的）。
+     *
+     * 实际控制点大多不排下一条、也不按上一首，所以这两个键**大多数时候是灰的** ——
+     * 那是如实显示，不是坏了（见 `docs/DLNA实现情况.md`）。
+     *
+     * 通知信号直接用 `queueChanged`：它本来就带着这两个布尔值一起报出来。
      */
     Q_PROPERTY(bool hasNext READ hasNext NOTIFY queueChanged)
     Q_PROPERTY(bool hasPrevious READ hasPrevious NOTIFY queueChanged)
@@ -274,7 +279,15 @@ public:
     // 每种协议都翻译成这几个。**所有命令都必须从这里走** —— 直接命令播放器的话，
     // 状态机不知道，订阅过的控制点就收不到通知。
 
-    /** 开一条新内容。换内容前会把当前这条记进历史，这样「上一首」退得回去。 */
+    /**
+     * 开一条新内容（投送方投过来的那条，或者队列里跳到的下一条）。
+     *
+     * **不碰播放列表。** 这条只说明"现在放新的了"，不说明对方有列表 ——
+     * 早先这里会把当前这条记成"上一条"（这样「上一首」退得回去），那是我们
+     * 自己猜的：控制点连着投两条完全可能是两次独立的投送，不是歌单里的前后。
+     * 现在的规矩是**只有协议明确说了前后有东西，那两个键才亮**，所以历史不由
+     * 这一层攒（见 `docs/待办.md` 里"播放列表"那一节）。
+     */
     void openUri(const MediaRequest &request, const MediaSource &source);
 
     /** 只在装了内容时有效。没内容时什么也不做。 */
@@ -326,6 +339,18 @@ public:
      * 出来的标题和第一次放的时候一模一样。
      */
     void setNextUri(const MediaRequest &request);
+
+    /**
+     * 清空播放列表（"上一条 / 下一条"两格）。**不动正在放的那条** ——
+     * 列表跟"现在放什么"是两件事。
+     *
+     * 用在会话边界上：**投送方断开**时它那套前后关系作废（那些地址多半在它自己
+     * 那台临时媒体服务器上，会话一断就取不到）；**新设备连上**时从零开始，不能
+     * 接着上一台设备的列表。
+     *
+     * 现在只有 `setPeerConnected()` 里那两个边沿会调它（协议层想清也可以自己调）。
+     */
+    Q_INVOKABLE void clearPlaylist();
 
     /**
      * 「下一首」/「上一首」。
@@ -481,9 +506,6 @@ signals:
 private:
     /** 真正开播的地方 —— openUri / next / previous / 自动接下一首都走它。 */
     void startPlaying(const MediaRequest &request, const MediaSource &source);
-
-    /** 把当前这条记进历史。 */
-    void pushCurrentIntoHistory();
 
     /** 当前这条是谁送来的（队列自动接上时要沿用同一个来源）。 */
     MediaSource sourceForCurrent() const;

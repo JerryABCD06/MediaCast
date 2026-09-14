@@ -260,6 +260,20 @@ void PlaybackController::setPeerConnected(bool connected)
     const CastState castBefore = castState();
 
     m_peerConnected = connected;
+
+    // ── 会话边界：播放列表作废 ──────────────────────────────────────────
+    //
+    //   断开 —— 对方那套"上一条 / 下一条"没意义了（那些地址多半在它自己那台
+    //           临时媒体服务器上，会话一断就取不到）；
+    //   连上 —— 新设备从零开始，不能接着上一台设备的列表。清完之后协议层再按
+    //           自己的方式把列表填回来（DLNA 没有"查列表"这个动作，控制点要是
+    //           有下一条，它会自己发 SetNextAVTransportURI）。
+    //
+    // **这一层只认"谁连着变了"。** 网络抖一下算不算断开，是协议层的事 ——
+    // 那边已经留了宽限（见 DlnaRenderer::refreshPeerConnected 和 kPeerGraceMs），
+    // 别把那种判断搬到这儿来，那会把协议特有的东西漏进来。
+    clearPlaylist();
+
     emit peerConnectedChanged();
 
     if (castState() != castBefore)
@@ -376,24 +390,17 @@ void PlaybackController::setMuted(bool muted)
 
 void PlaybackController::openUri(const MediaRequest &request, const MediaSource &source)
 {
-    // 换内容之前先记一笔历史，这样「上一首」退得回去。
-    //
-    // 队列（下一条）**不动**：控制点排歌单就是"设当前、再设下一条"，
-    // 在这里清掉等于把它的意图抹了。
-    pushCurrentIntoHistory();
+    // 只放新的，**两格队列都不动**：
+    //   · "下一条"不动 —— 控制点排歌单就是"设当前、再设下一条"，在这里清掉
+    //     等于把它的意图抹了；
+    //   · "上一条"**不记** —— 早先这里会把刚才那条记成历史（"这样「上一首」
+    //     退得回去"），那是我们替对方猜的。他定的规矩是：**只有协议明确说了
+    //     前后有东西，那两个键才亮**（见 docs/待办.md 里"播放列表"那一节）。
+    //     "上一条"只在真的用按键换曲时才有（next()/previous() 里那两行）。
     startPlaying(request, source);
 }
 
 // ── 队列 ─────────────────────────────────────────────────────────────────
-
-void PlaybackController::pushCurrentIntoHistory()
-{
-    if (m_current.uri.isEmpty())
-        return;   // 还没放过东西，"刚才那条"不存在
-
-    m_previous = m_current;
-    emitQueueChanged();
-}
 
 MediaSource PlaybackController::sourceForCurrent() const
 {
@@ -404,6 +411,18 @@ MediaSource PlaybackController::sourceForCurrent() const
 void PlaybackController::emitQueueChanged()
 {
     emit queueChanged(hasNext(), hasPrevious(), m_next.uri, m_playMode);
+}
+
+void PlaybackController::clearPlaylist()
+{
+    if (m_next.uri.isEmpty() && m_previous.uri.isEmpty())
+        return;   // 本来就是空的，不白报一次
+
+    m_next = MediaRequest();
+    m_previous = MediaRequest();
+
+    emit logMessage(QStringLiteral("播放列表：清空（上一条 / 下一条都没了）"));
+    emitQueueChanged();
 }
 
 void PlaybackController::setNextUri(const MediaRequest &request)

@@ -95,6 +95,18 @@ signals:
     void subscriptionCountChanged(int count);
 
     /**
+     * 有订阅**因为推不出去**被丢掉了（对方连着几次收不到我们的 NOTIFY）。
+     *
+     * **和"对方明确退订"必须分开**，上层要拿它做不同的判断：明确退订（或者订阅
+     * 到期）是真断开；而这一种很可能是网络抖了一下、或者对方的回调服务器临时不在
+     * ——上层要是直接判成"断开"，会把播放列表清掉，那就太狠了（他特意叮嘱过
+     * 这一条：网络不佳时不能把列表清了）。
+     *
+     * `remaining` 是丢掉之后还剩几个订阅（0 = 一个都不剩了）。
+     */
+    void subscriptionUnreachable(int remaining);
+
+    /**
      * 控制点又来搭理我们了：新订阅、或者续订。
      *
      * 和 subscriptionCountChanged 不是一回事 —— **续订不改变订阅数**，

@@ -10,6 +10,24 @@
 #include "SsdpService.h"
 
 #include <QCoreApplication>
+
+namespace {
+
+/**
+ * "订阅可能只是暂时联系不上"的宽限时长。
+ *
+ * 为什么不是 0（也就是立刻判断开）：`GenaManager` 连着五次推不出去就会把这个订阅
+ * 丢掉，而我们的 NOTIFY 只在状态变化时发 —— 也就是说"订阅被丢"这件事本身已经
+ * 意味着对方有一阵子收不到我们了（五次失败，每次最多等 5 秒）。网络抖一下正好
+ * 落在这一档里，而判成"断开"的后果是**播放列表被清掉**，用户什么都没干就丢了歌单。
+ *
+ * 给一分钟：对方要是还在（只是刚才不通），多半会重新订阅（它的续订拿到 412 之后
+ * 就会重新 SUBSCRIBE），那个信号一到，宽限立刻作废。真走了的，一分钟之后照清。
+ */
+constexpr int kPeerGraceMs = 60 * 1000;
+
+} // namespace
+
 DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     : QObject(parent)
     , m_ctl(controller)
@@ -18,6 +36,12 @@ DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     m_soap = new SoapHandler(controller, this);
     m_gena = new GenaManager(this);
     m_http = new HttpServer(this);
+
+    // "订阅没了，但可能只是暂时联系不上"的那段宽限 —— 见 kPeerGraceMs 和
+    // refreshPeerConnected() 里的说明。
+    m_peerGrace.setSingleShot(true);
+    m_peerGrace.setInterval(kPeerGraceMs);
+    connect(&m_peerGrace, &QTimer::timeout, this, [this] { refreshPeerConnected(); });
 
     m_http->setSoapHandler(m_soap);
     m_http->setGenaHandler(m_gena);
@@ -92,7 +116,16 @@ DlnaRenderer::DlnaRenderer(PlaybackController *controller, QObject *parent)
     // 界面不该认识 GENA 是什么。控制器那边给的是一个中性属性（peerConnected），
     // 将来接 AirPlay 之类，那边也往里报一声就行。
     connect(m_gena, &GenaManager::subscriptionCountChanged, this, [this](int) {
+        // 这一下要是正好是"推不出去丢掉订阅"引起的那一下，宽限已经在路上
+        // （那个信号先来，见 GenaManager::noteSendFailed），这里就先别判断开。
+        if (m_peerGrace.isActive())
+            return;
         refreshPeerConnected();
+    });
+    connect(m_gena, &GenaManager::subscriptionUnreachable, this, [this](int remaining) {
+        // 还剩别的订阅就不算"人都走了"；剩 0 才值得等一等。
+        if (remaining == 0)
+            startPeerGrace();
     });
     connect(m_gena, &GenaManager::subscriptionActivity, this, [this] {
         // 对方又搭理我们了（新订阅或续订）—— 之前那条"是我们主动挂断的"作废。
@@ -237,6 +270,9 @@ void DlnaRenderer::endSession()
     // 东西）才清掉。有个细节不能省：**不能真的把订阅删掉** —— 对方要是还开着
     // 投屏界面、并且不再重新订阅，那它就成"听不见我们"的那种半隐状态了，
     // 那正是我们花很久才修掉的那个毛病。
+    //
+    // 宽限那一条在这儿也要**取消**：我们自己挂断是明确的，不该再等一分钟。
+    m_peerGrace.stop();
     m_disconnectedByUs = true;
     refreshPeerConnected();
 }
@@ -247,7 +283,43 @@ void DlnaRenderer::refreshPeerConnected()
         return;
 
     // 有人订阅、并且不是我们主动挂断的 —— 才算"连着"。
-    m_ctl->setPeerConnected(m_gena->subscriptionCount() > 0 && !m_disconnectedByUs);
+    const bool reachable = m_gena->subscriptionCount() > 0 && !m_disconnectedByUs;
+
+    if (reachable) {
+        const bool wasConnected = m_ctl->peerConnected();
+
+        m_peerGrace.stop();          // 人还在（或者又回来了），宽限作废
+        m_ctl->setPeerConnected(true);
+
+        // ── 新会话：先清空、再按协议查列表 ──────────────────────────────
+        //
+        // "清空"那一步在控制器里（会话边界的规矩，中立层只认"谁连着变了"）。
+        // 这一步是**按协议查一遍播放列表** —— DLNA 这边是**空的**：
+        // AVTransport 里没有"查列表"这个动作，它只认"当前这条"和"下一条"，
+        // 而且两条都得由控制点告诉我们。所以控制点要是有列表，它会自己发
+        // `SetNextAVTransportURI`（见 SoapHandler）。
+        // 将来接一个真能查列表的协议（比如带着播放队列的那种），查询写在这儿。
+        if (!wasConnected)
+            emit logMessage(QStringLiteral("新的投送方连上了：播放列表从零开始"));
+        return;
+    }
+
+    // 联系不上了，但还在宽限里 —— 先当"还连着"，等它到期再说（见 kPeerGraceMs）。
+    if (m_peerGrace.isActive())
+        return;
+
+    m_ctl->setPeerConnected(false);
+}
+
+void DlnaRenderer::startPeerGrace()
+{
+    if (m_peerGrace.isActive())
+        return;
+
+    emit logMessage(QStringLiteral("订阅掉了（我们推不出去）—— 先宽限 %1 秒再算断开，"
+                                   "免得网络抖一下就清掉播放列表")
+                        .arg(kPeerGraceMs / 1000));
+    m_peerGrace.start();
 }
 
 void DlnaRenderer::next()

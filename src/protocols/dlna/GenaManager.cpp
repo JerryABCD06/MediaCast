@@ -519,6 +519,11 @@ void GenaManager::noteSendFailed(const QString &sid)
                         .arg(it->failures)
                         .arg(it->callbackUrl));
     m_subscriptions.erase(it);
+
+    // **先报"是推不出去丢的"，再报数变了。** 顺序要紧：上层收到前者会开始宽限，
+    // 收到后者时就不会立刻判成"断开"（见 DlnaRenderer::refreshPeerConnected）。
+    // 反过来的话，那条"断开"已经发出去、播放列表已经清了，宽限就没有意义了。
+    emit subscriptionUnreachable(m_subscriptions.size());
     notifyCountIfChanged();
 }
 

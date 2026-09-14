@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QTimer>
 #include <QVector>
 #include <QtGlobal>
 
@@ -192,8 +193,13 @@ private:
      * 重新算一遍"有没有投送方连着"，喂给控制器。
      *
      * 判据是"有订阅 **且** 不是我们主动挂断的"，理由见 endSession() 里那段注释。
+     * 另有一条耐心：**订阅是因为"推不出去"被丢掉的时候，先宽限一会儿再算断开**
+     * （见 m_peerGrace 和 startPeerGrace）。
      */
     void refreshPeerConnected();
+
+    /** 开始"订阅可能只是联系不上"的那段宽限（见 m_peerGrace）。 */
+    void startPeerGrace();
 
     PlaybackController *m_ctl = nullptr;
     SsdpService *m_ssdp = nullptr;
@@ -218,4 +224,14 @@ private:
      * 对方要是还开着投屏界面又不重新订阅，就成"听不见我们"的半隐状态了。
      */
     bool    m_disconnectedByUs = false;
+
+    /**
+     * "订阅没了，但可能只是暂时联系不上"的那段宽限。
+     *
+     * 两种"订阅归零"要分开：**对方明确退订 / 订阅到期**是真断开，立刻算；
+     * 而**我们推事件推不出去、订阅被丢掉**（GenaManager 连着失败五次会丢）很可能
+     * 只是网络抖了一下 —— 直接判成断开的话，播放列表就被清掉了，而用户什么都没干。
+     * 所以那一种先起这个定时器；期间对方又冒出来（重新订阅）就当作没事。
+     */
+    QTimer  m_peerGrace;
 };
