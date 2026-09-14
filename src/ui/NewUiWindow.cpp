@@ -9,6 +9,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlError>
 #include <QQuickWindow>
+#include <QScopeGuard>
 #include <QUrl>
 
 NewUiWindow::NewUiWindow(QObject *parent)
@@ -28,6 +29,32 @@ bool NewUiWindow::load()
     // 窗口还在就什么都不用做。
     if (m_window)
         return true;
+
+    // ── 防重入：正在建的时候，第二次进来直接让路 ────────────────────────
+    //
+    // `m_engine->load()` 不是"与世隔绝"的一步 —— 它建窗口、建场景图，期间
+    // **会把事件循环转起来**（窗口创建本身要过一遍消息循环；投送那条路还会
+    // 在渲染面就绪时"把攒着的那条片子放出去"，那又会发信号）。
+    // 于是别的信号（`mediaChanged`、托盘那条）能在第一扇窗**还没登记到
+    // m_window** 的时候调回 `show()` —— 两次都看到"窗口不在"，各建一扇。
+    //
+    // 实测就是这么来的（2026-09-14）：一次投送让 show() 被调两次，
+    // 日志里两条"新界面已打开"时间戳一模一样，同时冒出两行
+    // `mpv: There is already a mpv_render_context set.` —— 两扇窗里各有一个
+    // MpvQmlItem，而 mpv 的 render API 只允许一个渲染者。从托盘再开一个主窗口
+    // 也是同一条路。
+    //
+    // 让路是对的：这一趟本来就要把那扇窗建出来，第二趟什么都不用做。
+    if (m_loading) {
+        // 留一行日志：这条路径平时不出现，一旦出现就是"投送和托盘撞在一起"的
+        // 现场，排查时序问题时有它比没有强得多。
+        emit logMessage(QStringLiteral("新界面正在打开，这次的请求并进去（不重复建窗）"));
+        return false;
+    }
+
+    m_loading = true;
+    // 不管从哪条 return 出去，都要把闸放开（下面的分支有好几个 return）。
+    const auto loadingGuard = qScopeGuard([this] { m_loading = false; });
 
     // **引擎一辈子只建一个。** 窗口可以建了又销毁（用户关掉它），引擎不能 ——
     // 在这个进程里加载第二个 QQmlApplicationEngine 会崩在 Qt6Qml 里（踩过）。

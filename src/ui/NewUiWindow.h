@@ -71,4 +71,18 @@ private:
 
     QQmlApplicationEngine *m_engine = nullptr;
     QQuickWindow *m_window = nullptr;
+
+    /**
+     * 正在加载 QML 的那一小会儿。
+     *
+     * **它是防重入的闸**，不是"加载完了没有"的标志 —— `m_engine->load()` 里面
+     * 会把事件循环转起来（建窗口、建场景图、把"攒着的那条片子"放出去），
+     * 期间别的信号又调回 `show()` 的话，两次都会看到"窗口还没建好"（`m_window`
+     * 还没赋值），于是**建出两扇窗**。
+     *
+     * 后果不只是多一个窗口：每扇窗里各有一个 `MpvQmlItem`，而 mpv 的 render API
+     * **只允许一个渲染者** —— 日志里那两行 `There is already a mpv_render_context
+     * set.` 就是它，画面会打架。2026-09-14 从托盘开出第二个主窗口就是这么来的。
+     */
+    bool m_loading = false;
 };
