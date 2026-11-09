@@ -36,6 +36,18 @@ QString themeModeName(int mode)
     }
 }
 
+int accentModeFromName(const QString &name)
+{
+    return name == QLatin1String("System") ? UiState::SystemAccent
+                                           : UiState::WindowsBlue;
+}
+
+QString accentModeName(int mode)
+{
+    return mode == UiState::SystemAccent ? QStringLiteral("System")
+                                         : QStringLiteral("WindowsBlue");
+}
+
 } // namespace
 
 UiState::UiState(AppSettings *settings, Tr *tr, QObject *parent)
@@ -46,6 +58,7 @@ UiState::UiState(AppSettings *settings, Tr *tr, QObject *parent)
     // 先把设置文件里的值读进来 —— 它们是"上次关掉时的样子"。
     if (m_settings) {
         m_themeMode = themeModeFromName(m_settings->darkMode());
+        m_accentMode = accentModeFromName(m_settings->accentMode());
         m_language = m_settings->language();
         if (m_language == QLatin1String("System"))
             m_language.clear();   // 空串 = 跟随系统，内部就是这么表示的
@@ -69,6 +82,8 @@ UiState::UiState(AppSettings *settings, Tr *tr, QObject *parent)
     if (m_settings) {
         connect(m_settings, &AppSettings::darkModeChanged, this,
                 [this](const QString &name) { setThemeMode(themeModeFromName(name)); });
+        connect(m_settings, &AppSettings::accentModeChanged, this,
+                [this](const QString &name) { setAccentMode(accentModeFromName(name)); });
         connect(m_settings, &AppSettings::languageChanged, this,
                 [this](const QString &code) {
             setLanguage(code == QLatin1String("System") ? QString() : code);
@@ -112,6 +127,17 @@ void UiState::setThemeMode(int mode)
     // 写回设置文件 —— 下次启动还是这个样子。
     if (m_settings)
         m_settings->setDarkMode(themeModeName(mode));
+}
+
+void UiState::setAccentMode(int mode)
+{
+    if (mode < WindowsBlue || mode > SystemAccent || m_accentMode == mode)
+        return;
+
+    m_accentMode = mode;
+    emit accentModeChanged();
+    if (m_settings)
+        m_settings->setAccentMode(accentModeName(mode));
 }
 
 void UiState::applyTheme()

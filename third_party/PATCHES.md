@@ -172,3 +172,22 @@ y 0..31（高 32），三个字形都是 10 高、中心间距 46.0 / 46.0。
 
 改成跟当前句柄比：这个事件过滤器本来就属于这扇窗，认当前句柄才对（顺手把
 `_current` 更新上，保持它和实际一致）。
+
+---
+
+## 补丁 7：跟着对象内部色阶变化刷新 primaryColor
+
+**文件**：`FluentUI/src/FluTheme.{h,cpp}`
+
+**问题**：`accentColor` 是一个 `FluAccentColor` **对象**。上游只在
+`accentColor` 这个指针被替换时刷新 `primaryColor`；Windows 主题色变化时我们
+更新的是同一个对象里的 `normal/lighter/dark/...`，指针没变，所以 `primaryColor`
+会一直缓存旧值。表现正是：直接读 `accentColor.lighter` 的媒体栏立刻变色，
+而依赖 `primaryColor` 的二级界面要等重新赋值或重开窗口。
+
+**改法**：`watchAccentColor()` 监听七级颜色的 `*Changed` 信号，任一变化都重新
+计算 `FluTheme.primaryColor`。`accentColor` 指针变化时先摘旧连接、再挂新的。
+
+**顺带**：`FluColors.Blue` 的官方 Windows 蓝两档也改正了：
+浅色模式 `dark` 从 `#0066B4` 改为 `#0067C0`，深色模式 `lighter`
+从 `#4CA0E0` 改为 `#4CC2FF`。

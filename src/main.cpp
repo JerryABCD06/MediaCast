@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFile>
@@ -14,6 +15,7 @@
 #include <QWidget>
 #include <QtQml/qqml.h>
 
+#include <cstring>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -23,6 +25,8 @@
 #include "core/PlaybackController.h"
 #include "core/Tr.h"
 #include "platform/windows/WindowsMediaControls.h"
+#include "platform/windows/SplashWindow.h"
+#include "platform/windows/SystemAccentColors.h"
 #include "protocols/dlna/DlnaRenderer.h"
 #include "ui/NewUiWindow.h"
 #include "ui/TrayIcon.h"
@@ -89,8 +93,8 @@ void qtMessageToLogFile(QtMsgType type, const QMessageLogContext &context,
 /**
  * 组装整个程序。这里只做五件事：造零件、接日志、接 Windows 媒体面板、开窗口、起服务。
  *
- * （"开窗口"现在只剩托盘；主界面是**有东西投过来才开**的 —— 见下面 mediaChanged
- *   那一段。启动时不再弹任何窗口，这是旧界面退场之后的样子。）
+ * （普通启动会打开主界面；`--background` 只开托盘。手机投送和托盘菜单也都能
+ *   把主界面叫回来，见下面 mediaChanged 和托盘那两段。）
  *
  * 依赖是**单向**的，方向不能反：
  *
@@ -102,6 +106,19 @@ void qtMessageToLogFile(QtMsgType type, const QMessageLogContext &context,
  */
 int main(int argc, char *argv[])
 {
+    bool backgroundStart = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--background") == 0) {
+            backgroundStart = true;
+            break;
+        }
+    }
+
+    // 启动屏幕先于 QApplication 建起来。它自己的绘图线程与 Qt 完全分开，
+    // 因此 QML 同步加载时加载条仍然会动。这里只预创建，不立刻显示：
+    // 先等 UiState 算出实际浅/深，避免强制主题下先闪一帧系统主题。
+    SplashWindow splash;
+
     // ── 图形后端 ─────────────────────────────────────────────────────────
     //
     // 新界面要用 QML 渲染，而里面的视频区将来是 libmpv 的 render API —— 那套只有
@@ -150,6 +167,12 @@ int main(int argc, char *argv[])
     g_qtLogFile = logOk ? &logFile : nullptr;
     g_previousQtHandler = qInstallMessageHandler(qtMessageToLogFile);
 
+    // Windows 当前主题色的官方七级色阶，给界面和启动屏幕共用。
+    SystemAccentColors systemColors;
+    QObject::connect(&systemColors, &SystemAccentColors::logMessage, writeLog);
+    systemColors.refresh();
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "SystemColors", &systemColors);
+
     // ── 语言 ─────────────────────────────────────────────────────────────
     //
     // 有哪些语言、哪个键对应哪句话、系统语言该对到哪个 —— 全在 Tr 里，它扫的是
@@ -180,6 +203,26 @@ int main(int argc, char *argv[])
     // 用户想改直接拿记事本改，不用翻界面。
     AppSettings settings;
     UiState uiState(&settings, &tr);
+    auto updateSplashAppearance = [&] {
+        splash.setTheme(uiState.themeMode() == UiState::System, uiState.dark());
+        const bool useSystemAccent =
+            uiState.accentMode() == UiState::SystemAccent;
+        const QColor light = useSystemAccent
+            ? systemColors.accentDark1() : QColor(0x0067c0);
+        const QColor dark = useSystemAccent
+            ? systemColors.accentLight2() : QColor(0x4cc2ff);
+        splash.setAccent(light.rgb() & 0x00ffffff,
+                         dark.rgb() & 0x00ffffff);
+    };
+    updateSplashAppearance();
+    QObject::connect(&uiState, &UiState::darkChanged, &app,
+                     updateSplashAppearance);
+    QObject::connect(&uiState, &UiState::accentModeChanged, &app,
+                     updateSplashAppearance);
+    QObject::connect(&systemColors, &SystemAccentColors::colorsChanged, &app,
+                     updateSplashAppearance);
+    if (!backgroundStart)
+        splash.show();
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
     // 设置页直接读这一份 —— 它是"唯一的那一份"，界面不该再存副本。
     // 名字叫 Settings 而不是 AppSettings：QML 那边写 `Settings.castNewCast`
@@ -236,6 +279,8 @@ int main(int argc, char *argv[])
                  .arg(settings.filePath(),
                       settings.isPersistent() ? QStringLiteral("可读写")
                                               : QStringLiteral("写不进去，改动不会保留")));
+    writeLog(backgroundStart ? QStringLiteral("启动模式：仅后台")
+                             : QStringLiteral("启动模式：显示主界面"));
     QObject::connect(&settings, &AppSettings::logMessage, writeLog);
 
     // ── 播放后端 ─────────────────────────────────────────────────────────
@@ -347,7 +392,7 @@ int main(int argc, char *argv[])
     // 它懒加载 —— 没人点它就不建 QML 引擎，程序启动该多快还多快。
     //
     // 它的日志和大门面走同一条路。
-    NewUiWindow newUi;
+    NewUiWindow newUi(&splash);
     QObject::connect(&newUi, &NewUiWindow::logMessage,
                      &renderer, &DlnaRenderer::logMessage);
 
@@ -421,9 +466,8 @@ int main(int argc, char *argv[])
 
     // ── 开跑 ─────────────────────────────────────────────────────────────
     //
-    // **启动时只有托盘，不弹窗口。** 这台设备平时的样子就是"在托盘里待着、等手机
-    // 投过来"；有东西投过来时 mediaChanged 会把主界面拉起来（见上面那段）。
-    // 用户想主动看看，托盘菜单里有「打开主界面」。
+    // 托盘始终先起来。普通启动在 main() 末尾打开主界面；--background 则停在
+    // 这里，只驻留托盘，等托盘菜单或手机投送再拉主界面。
     tray.show();
 
     // 媒体面板要挂在**一个窗口**上（WinRT 那边只能拿窗口号换 SMTC 对象）。
@@ -467,6 +511,11 @@ int main(int argc, char *argv[])
     const QVariantMap savedPicture = settings.pictureValues();
     for (auto it = savedPicture.constBegin(); it != savedPicture.constEnd(); ++it)
         playback.setPictureControl(it.key(), it.value().toInt());
+
+    // 普通启动直接显示主界面；登录自启等后台入口传 --background，
+    // 此时只驻留托盘，等托盘或投送请求再打开。
+    if (!backgroundStart)
+        newUi.show();
 
     return app.exec();
 }

@@ -27,7 +27,7 @@ import "legal"
 //   三、**宁可有 2 个类目，也不要造空壳类目。** 一个类目里孤零零一条会显得敷衍，
 //       用户还会以为漏了什么。
 //
-// 现在只有 2 个类目，因为设置一共就五项。将来长出来的（播放、网络、开机自启）
+// 现在只有 2 个类目，因为设置项还不多。将来长出来的（播放、网络、开机自启）
 // 各自独立成类目就行，这里的结构不用动。
 //
 // **「关于」不在这儿** —— 它在顶栏那个 ⓘ 里（设备名、设备标识、版本、日志位置）。
@@ -60,6 +60,12 @@ Item {
         { title: qsTr("ui_settings_theme_system"), mode: UiState.System },
         { title: qsTr("ui_settings_theme_light"), mode: UiState.Light },
         { title: qsTr("ui_settings_theme_dark"), mode: UiState.Dark }
+    ]
+
+    /** 主题色来源。 */
+    readonly property var accentModes: [
+        { title: qsTr("ui_settings_accent_windows_blue"), mode: UiState.WindowsBlue },
+        { title: qsTr("ui_settings_accent_system"), mode: UiState.SystemAccent }
     ]
 
     /** 广播间隔的几档。数字是毫秒。 */
@@ -163,7 +169,7 @@ Item {
 
                 // ══ 类目：界面 ═══════════════════════════════════════════
                 //
-                // 这两项是"每个人都会碰"的，所以放在最前面、不加任何层级。
+                // 语言、深浅、主题色、Mica 是"每个人都会碰"的，放在最前面。
 
                 SettingsCard {
                     visible: page.category === 0
@@ -203,6 +209,27 @@ Item {
                         }
                         onActivated: function (index) {
                             UiState.themeMode = page.themeModes[index].mode
+                        }
+                    }
+                }
+
+                SettingsCard {
+                    visible: page.category === 0
+                    icon: FluentIcons.Color
+                    title: qsTr("ui_settings_accent")
+                    subtitle: qsTr("ui_settings_accent_desc")
+
+                    FluComboBox {
+                        Layout.preferredWidth: 150
+                        model: page.accentModes.map(function (item) { return item.title })
+                        currentIndex: {
+                            for (var i = 0; i < page.accentModes.length; ++i)
+                                if (page.accentModes[i].mode === UiState.accentMode)
+                                    return i
+                            return 0
+                        }
+                        onActivated: function (index) {
+                            UiState.accentMode = page.accentModes[index].mode
                         }
                     }
                 }

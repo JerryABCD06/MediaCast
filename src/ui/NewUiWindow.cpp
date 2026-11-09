@@ -3,18 +3,32 @@
 
 #include "NewUiWindow.h"
 
+#include "platform/windows/SplashWindow.h"
 #include "platform/windows/WindowFrame.h"
 
 #include <QCoreApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QScopeGuard>
+#include <QTimer>
 #include <QUrl>
 
-NewUiWindow::NewUiWindow(QObject *parent)
+NewUiWindow::NewUiWindow(SplashWindow *splash, QObject *parent)
     : QObject(parent)
+    , m_splash(splash)
 {
+    m_splashTimeout = new QTimer(this);
+    m_splashTimeout->setSingleShot(true);
+    m_splashTimeout->setInterval(5000);
+    connect(m_splashTimeout, &QTimer::timeout, this, [this] {
+        if (!m_splashRequested)
+            return;
+        m_splash->dismiss();
+        m_splashRequested = false;
+        emit logMessage(QStringLiteral("启动屏幕：等待首帧超时，按兜底路径退场"));
+    });
 }
 
 NewUiWindow::~NewUiWindow() = default;
@@ -56,9 +70,8 @@ bool NewUiWindow::load()
     // 不管从哪条 return 出去，都要把闸放开（下面的分支有好几个 return）。
     const auto loadingGuard = qScopeGuard([this] { m_loading = false; });
 
-    // **引擎一辈子只建一个。** 窗口可以建了又销毁（用户关掉它），引擎不能 ——
-    // 在这个进程里加载第二个 QQmlApplicationEngine 会崩在 Qt6Qml 里（踩过）。
-    // 所以引擎建好之后只反复 load()，永远不销毁它重来。
+    // **引擎只建一次。** 在这个进程里加载第二个 QQmlApplicationEngine 会崩在
+    // Qt6Qml 里。QML 文档则由一个持久 QQmlComponent 只编译一次。
     if (!m_engine) {
         m_engine = new QQmlApplicationEngine(this);
 
@@ -76,19 +89,30 @@ bool NewUiWindow::load()
         });
     }
 
-    m_engine->load(QUrl(QStringLiteral("qrc:/ui/NewUiWindow.qml")));
-
-    // 取**最后**一个根对象：重新 load 出来的窗口是追加在后面的，前面那些
-    // 是已经被销毁的旧窗口（引擎未必及时把它们从表里摘掉）。
-    const QList<QObject *> roots = m_engine->rootObjects();
-    if (roots.isEmpty()) {
+    // 不要用 QQmlApplicationEngine::load() 反复建根对象。那条路会让 Qt6Qml
+    // 在窗口销毁后继续访问旧对象；改用持久组件 create()，每次实例的生命周期
+    // 边界清楚，而且关闭窗口能释放整棵 QML 树和它持有的图形资源。
+    if (!m_component) {
+        m_component = new QQmlComponent(
+            m_engine, QUrl(QStringLiteral("qrc:/ui/NewUiWindow.qml")),
+            QQmlComponent::PreferSynchronous, this);
+    }
+    if (m_component->isError()) {
+        for (const QQmlError &error : m_component->errors())
+            emit logMessage(QStringLiteral("QML 报错：%1").arg(error.toString()));
         emit logMessage(QStringLiteral("新界面加载失败 —— 看上面的 QML 报错"));
         return false;
     }
 
-    // 根对象得是个窗口，否则后面 show()/raise() 都是空谈。
-    m_window = qobject_cast<QQuickWindow *>(roots.constLast());
+    QObject *root = m_component->create();
+    if (!root) {
+        emit logMessage(QStringLiteral("新界面加载失败 —— 组件没有创建出根对象"));
+        return false;
+    }
+
+    m_window = qobject_cast<QQuickWindow *>(root);
     if (!m_window) {
+        delete root;
         emit logMessage(QStringLiteral("新界面的根对象不是窗口，加载失败"));
         return false;
     }
@@ -99,9 +123,7 @@ bool NewUiWindow::load()
     // 下一次 show() 就会去碰已经释放的内存 —— 崩在 Qt6Gui 内部读一个非法
     // 地址，栈上什么线索都没有（踩过一次：Qt6Guid+0x34BA22）。
     //
-    // 现在"关窗"是真的销毁（用户在关闭确认框里点了确定，或者当时没有投送），
-    // 所以这条路径是常规路径，不是兜底。清掉指针之后，下一次 load() 会因为
-    // m_window 为空而重新 load 出一个窗口。
+    // 正常关窗会通过 FluRouter 延迟销毁根对象，所以这里负责及时清掉裸指针。
     connect(m_window, &QObject::destroyed, this, [this] {
         m_window = nullptr;
         emit logMessage(QStringLiteral("新界面窗口已关闭（需要时会重新打开）"));
@@ -116,13 +138,45 @@ bool NewUiWindow::load()
 
 void NewUiWindow::show()
 {
-    if (!load())
+    // 已经有一趟加载在跑：把启动屏幕继续压在最上面，等那一趟完成。
+    if (m_loading) {
+        if (m_splashRequested && m_splash)
+            m_splash->bringToFront();
+        emit logMessage(QStringLiteral("新界面正在打开，这次的请求并进去（不重复建窗）"));
         return;
+    }
+
+    // 窗口已经露着就只是把它叫到前面。Windows 托盘一次双击可能同时送来
+    // Trigger 和 DoubleClick，不去重的话会在这里把同一扇窗连续 show 两遍。
+    if (m_window && m_window->isVisible()) {
+        m_window->raise();
+        m_window->requestActivate();
+        return;
+    }
+
+    // 首次加载和从后台重新唤起都显示启动屏幕。
+    if (m_splash) {
+        m_splashRequested = true;
+        m_splash->show();
+    }
+
+    if (!load()) {
+        if (m_splashRequested && m_splash)
+            m_splash->hideImmediately();
+        m_splashRequested = false;
+        m_splashTimeout->stop();
+        return;
+    }
 
     // load() 里窗口没建出来的话已经 return 了，这里只是把话说死：
     // 宁愿什么都不做，也不要再去碰一个可能已经没了的窗口。
-    if (!m_window)
+    if (!m_window) {
+        if (m_splashRequested && m_splash)
+            m_splash->hideImmediately();
+        m_splashRequested = false;
+        m_splashTimeout->stop();
         return;
+    }
 
     // ── 先让它离屏渲染一帧，再露出来 ─────────────────────────────────────
     //
@@ -144,6 +198,31 @@ void NewUiWindow::show()
     m_window->requestActivate();
 
     emit logMessage(QStringLiteral("新界面已打开"));
+
+    if (m_splashRequested && m_splash) {
+        // 启动屏幕是 topmost，主窗口 raise/activate 也不能把它压下去。
+        m_splash->bringToFront();
+        emit logMessage(QStringLiteral("启动屏幕：等待主界面首帧"));
+
+        connect(m_window, &QQuickWindow::frameSwapped, this,
+                [this] {
+            if (m_splashRequested)
+                m_splash->dismiss();
+            m_splashRequested = false;
+            m_splashTimeout->stop();
+            emit logMessage(QStringLiteral("启动屏幕：主界面首帧已到，开始退场"));
+            QTimer::singleShot(500, this, [this] {
+                if (!m_window)
+                    return;
+                m_window->raise();
+                m_window->requestActivate();
+            });
+        }, Qt::SingleShotConnection);
+
+        // 首帧信号偶发丢失时不能永远留着加载条。使用成员定时器，重新打开时
+        // 先停掉上一轮，避免旧计时器把新一轮启动屏幕提前收起。
+        m_splashTimeout->start();
+    }
 }
 
 void NewUiWindow::retranslate()

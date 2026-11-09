@@ -81,10 +81,10 @@ FluColors::FluColors(QObject *parent) : QObject{parent} {
     auto blue = new FluAccentColor(this);
     blue->darkest(QColor(0, 74, 131));
     blue->darker(QColor(0, 84, 148));
-    blue->dark(QColor(0, 102, 180));
+    blue->dark(QColor(0, 103, 192));
     blue->normal(QColor(0, 120, 212));
     blue->light(QColor(38, 140, 220));
-    blue->lighter(QColor(76, 160, 224));
+    blue->lighter(QColor(76, 194, 255));
     blue->lightest(QColor(96, 171, 228));
     _Blue = blue;
 

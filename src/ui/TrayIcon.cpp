@@ -44,8 +44,15 @@ TrayIcon::TrayIcon(DlnaRenderer *renderer, QObject *parent)
     // 双击图标也把正式界面叫回来 —— 大家的习惯就是这样，不做反而别扭。
     connect(m_tray, &QSystemTrayIcon::activated, this,
             [this](QSystemTrayIcon::ActivationReason reason) {
-        if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger)
-            emit openMainUiRequested();
+        if (reason != QSystemTrayIcon::DoubleClick && reason != QSystemTrayIcon::Trigger)
+            return;
+
+        // Qt 在 Windows 上一次双击可能连续送来 Trigger 和 DoubleClick。
+        // 两次都放过去的话，主窗口和启动屏幕会在同一时刻被连续打开两遍。
+        if (m_lastOpenActivation.isValid() && m_lastOpenActivation.elapsed() < 300)
+            return;
+        m_lastOpenActivation.start();
+        emit openMainUiRequested();
     });
 
     // 菜单文字要跟着实际状态走，**不能只在构造时算一次**。

@@ -18,6 +18,31 @@ import "picture"
 FluWindow {
     id: window
 
+    /**
+     * Windows 系统主题色的完整七级色阶。
+     *
+     * 映射顺序和微软的 SystemAccentColor / Light1..3 / Dark1..3 一一对应；
+     * FluTheme 在浅色模式使用 dark（Dark1），深色模式使用 lighter（Light2），
+     * 与 WinUI 的 AccentFillColorDefaultBrush 一致。
+     */
+    FluAccentColor {
+        id: systemAccent
+        darkest: SystemColors.accentDark3
+        darker: SystemColors.accentDark2
+        dark: SystemColors.accentDark1
+        normal: SystemColors.accent
+        light: SystemColors.accentLight1
+        lighter: SystemColors.accentLight2
+        lightest: SystemColors.accentLight3
+    }
+
+    Binding {
+        target: FluTheme
+        property: "accentColor"
+        value: UiState.accentMode === UiState.SystemAccent
+               ? systemAccent : FluColors.Blue
+    }
+
     // 产品名，不翻译 —— 所以**不套 qsTr**。套了的话哪天有人做了个语言文件
     // 顺手把它翻成中文，任务栏和窗口标题上的名字就跟着变了。
     title: "Media Cast"
@@ -277,19 +302,13 @@ FluWindow {
     // FluWindow 自带一个 closeListener：autoDestroy 为真就把窗口销毁，为假就
     // 改成"藏起来"。这里把它整个换掉，因为我们要三件事：
     //
-    //   一、**关掉就真的关掉**（窗口对象销毁）。这个程序是常驻托盘的接收器，
-    //       但界面不该赖着不走；下次要用时（有人投屏、或者托盘点「打开主界面」）
-    //       再建一个新的。
+    //   一、**关掉就真正释放这次窗口实例**。这个程序是常驻托盘的接收器；
+    //       下次要用时（有人投屏、或者托盘点「打开主界面」）再从编译好的
+    //       QQmlComponent 新建，既不积累内存，也不走 Qt 的重复 load() 崩溃路径。
     //   二、**正在投送的时候先问一句**。关掉界面确实会把这边的投送断掉，
     //       用户应该知道，而不是点完 X 才发现手机上的投屏没了。
-    //   三、真关的时候走 FluRouter.removeWindow(window) —— 那是 FluentUI 自己的
-    //       关窗方式（从它的窗口表里摘掉 + deleteLater）。直接调 destroy() 等于
-    //       在自己的信号处理里把自己拆掉；只调 FluWindow 那个 deleteLater() 又
-    //       漏了摘登记。
-    //
-    // 早先这里是 autoDestroy: false（关窗只藏起来），原因是窗口一销毁，
-    // NewUiWindow 里那个裸指针就野了，下一次投屏进来会崩。那个问题已经在
-    // C++ 那边解决 —— 引擎只建一次、窗口可以反复建。
+    //   三、**关窗仍走 FluRouter.removeWindow(window)**，即先摘路由登记再
+    //       deleteLater。C++ 侧只复用 QQmlComponent，不重复 load()。
     closeListener: function(event) {
         // 判据是**有没有投送方连着**，不是"mpv 手里有没有东西"。
         //
@@ -327,18 +346,14 @@ FluWindow {
     // 会把它覆盖掉，更麻烦的是无边框助手已经在窗口创建时改过样式位了，
     // 事后关掉它原生边框也不会自己长回来。
 
-    // 深浅只有 UiState 一个源头，FluentUI 的 FluTheme 是**跟着它走**的，
-    // 不是反过来。这里用 Binding 而不是赋值，这样 UiState 一变它就跟着变。
-    //
-    // 两边的枚举名不一样，所以要做一次映射：UiState 是我们自己的（不依赖
-    // FluentUI），FluThemeType 是 FluentUI 的。这个映射只能写在使用方，
-    // 写进 UiState 就把它和第三方库绑死了。
+    // 深浅只有 UiState 一个源头。这里传**算完之后的实际布尔值**，而不是把
+    // System 再交给 FluTheme 自己判断一次 —— 否则 UiState 走 colorScheme、
+    // FluTheme 走 palette 亮度，极端主题下可能一个认为是浅色、另一个认为是
+    // 深色。UiState 已经负责监听系统变化；这里只做枚举名映射。
     Binding {
         target: FluTheme
         property: "darkMode"
-        value: UiState.themeMode === UiState.Dark ? FluThemeType.Dark
-             : UiState.themeMode === UiState.Light ? FluThemeType.Light
-                                                   : FluThemeType.System
+        value: UiState.dark ? FluThemeType.Dark : FluThemeType.Light
     }
 
     // ── 导航：设置是**二级页**，不是平级页签 ─────────────────────────────

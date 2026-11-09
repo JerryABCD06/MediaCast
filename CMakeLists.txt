@@ -95,6 +95,10 @@ qt_add_executable(MCast
     src/platform/windows/WindowsMediaControls.cpp
     src/platform/windows/WindowFrame.h
     src/platform/windows/WindowFrame.cpp
+    src/platform/windows/SplashWindow.h
+    src/platform/windows/SplashWindow.cpp
+    src/platform/windows/SystemAccentColors.h
+    src/platform/windows/SystemAccentColors.cpp
 
     # 界面
     src/ui/TrayIcon.h
@@ -158,6 +162,10 @@ target_link_libraries(MCast PRIVATE windowsapp.lib)
 # WindowFrame 里那句 DwmSetWindowAttribute（全屏时关掉 Win11 窗口圆角）要它。
 # 老系统的 SDK 里也有这个库，只是那个属性设不上 —— 运行时失败、编译期无害。
 target_link_libraries(MCast PRIVATE dwmapi.lib)
+# SplashWindow 的原生图形栈：D3D11 + Direct2D + DirectComposition + WIC；
+# advapi32 只用来读系统深浅色和主题强调色。
+target_link_libraries(MCast PRIVATE
+    d2d1.lib d3d11.lib dxgi.lib dcomp.lib windowscodecs.lib advapi32.lib)
 
 # ── libmpv（内嵌播放后端）──────────────────────────────────────────────────
 #
@@ -207,7 +215,9 @@ set_target_properties(MCast PROPERTIES
 #
 # 唯一编进 exe 的是基准语言 en_US.json（见 res/Lang.qrc）：lang 目录被删了、
 # 或者发布时漏拷的时候靠它兜底 —— 界面最坏是英文，不会是满屏键名。
-add_custom_command(TARGET MCast POST_BUILD
+# 和上面的 FluentUI QML 一样，不能挂成 MCast 的 POST_BUILD：只改语言 JSON
+# 时 MCast 没有理由重新链接，POST_BUILD 不跑，程序就会继续读上一次的文案。
+add_custom_target(mcast_copy_lang ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/lang"
             "$<TARGET_FILE_DIR:MCast>/lang"

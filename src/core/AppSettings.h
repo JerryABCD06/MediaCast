@@ -25,6 +25,7 @@
  *
  *   ui.language               "System" / "zh_CN" / "en_US" …
  *   ui.darkmode               "System" / "Light" / "Dark"
+ *   ui.accentmode             "WindowsBlue" / "System"
  *   cast.newcast              要不要接收新的投送
  *   cast.broadcast            要不要定期对外广播（关了就只响应搜索）
  *   cast.broadcast_interval   广播间隔，毫秒
@@ -53,6 +54,8 @@ class AppSettings : public QObject
                    NOTIFY languageChanged)
     Q_PROPERTY(QString uiDarkMode READ darkMode WRITE setDarkMode
                    NOTIFY darkModeChanged)
+    Q_PROPERTY(QString uiAccentMode READ accentMode WRITE setAccentMode
+                   NOTIFY accentModeChanged)
     Q_PROPERTY(bool castNewCast READ acceptNewCast WRITE setAcceptNewCast
                    NOTIFY acceptNewCastChanged)
     Q_PROPERTY(bool castBroadcast READ broadcast WRITE setBroadcast
@@ -78,6 +81,10 @@ public:
 
     QString darkMode() const;
     void setDarkMode(const QString &value);
+
+    /** Windows 蓝，或者跟随 Windows 当前的系统主题色。 */
+    QString accentMode() const;
+    void setAccentMode(const QString &value);
 
     /**
      * 窗口底色要不要跟着桌面壁纸取色（云母）。
@@ -128,6 +135,7 @@ public:
 signals:
     void languageChanged(const QString &value);
     void darkModeChanged(const QString &value);
+    void accentModeChanged(const QString &value);
     void acceptNewCastChanged(bool value);
     void broadcastChanged(bool value);
     void broadcastIntervalChanged(int ms);

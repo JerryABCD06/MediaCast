@@ -22,7 +22,7 @@ class Tr;
 // 三个设计约束，都是为了让这个文件保持"干净"：
 //
 //   一、**不认识 FluentUI。** 它不知道 FluTheme 存在，也不 include 它的头文件。
-//      QML 那边自己把 FluTheme.darkMode 绑到 UiState.themeMode 上。
+//      QML 那边把 FluTheme.darkMode 绑到 UiState.dark 的最终结果上。
 //      反过来的话，C++ 层就被一个第三方 QML 库绑住了。
 //
 //   二、**不认识任何窗口或 QML 引擎。** 它只发信号。谁想跟着变，谁自己连。
@@ -41,6 +41,7 @@ class UiState : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(int themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged)
+    Q_PROPERTY(int accentMode READ accentMode WRITE setAccentMode NOTIFY accentModeChanged)
     Q_PROPERTY(bool dark READ dark NOTIFY darkChanged)
     Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY languageChanged)
 
@@ -53,6 +54,13 @@ public:
     };
     Q_ENUM(ThemeMode)
 
+    /** 主题色来源：FluentUI 的 Windows 蓝，或 Windows 当前系统主题色。 */
+    enum AccentMode {
+        WindowsBlue = 0,
+        SystemAccent = 1,
+    };
+    Q_ENUM(AccentMode)
+
     /**
      * 语言和深浅的初始值从设置文件里读，之后用户一改就写回去。
      *
@@ -64,6 +72,7 @@ public:
     ~UiState() override;
 
     int themeMode() const { return m_themeMode; }
+    int accentMode() const { return m_accentMode; }
 
     /** 当前**实际**是不是深色。System 模式下它跟着 Windows 走。 */
     bool dark() const;
@@ -72,10 +81,12 @@ public:
     QString language() const { return m_language; }
 
     void setThemeMode(int mode);
+    void setAccentMode(int mode);
     void setLanguage(const QString &code);
 
 signals:
     void themeModeChanged();
+    void accentModeChanged();
     void darkChanged();
     void languageChanged();
 
@@ -84,6 +95,7 @@ private:
     void applyLanguage();
 
     int m_themeMode = System;
+    int m_accentMode = WindowsBlue;
     QString m_language;   // 空 = 跟随系统
 
     /** 我们自己那套（查的是 lang/*.json）。**只借不拥有** —— 它归 main()。 */

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 
@@ -71,4 +72,7 @@ private:
     QAction *m_openMainAction = nullptr;
     QAction *m_acceptAction = nullptr;
     QAction *m_quitAction = nullptr;
+
+    /** Windows 双击托盘时可能连续发 Trigger 和 DoubleClick，用它合并重复请求。 */
+    QElapsedTimer m_lastOpenActivation;
 };

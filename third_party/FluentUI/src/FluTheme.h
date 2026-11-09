@@ -47,6 +47,7 @@ private:
     bool eventFilter(QObject *obj, QEvent *event) override;
 
     void refreshColors();
+    void watchAccentColor();
 
 protected:
     void timerEvent(QTimerEvent *event) override;

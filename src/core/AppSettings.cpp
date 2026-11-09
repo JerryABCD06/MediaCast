@@ -13,6 +13,7 @@ namespace {
 
 constexpr const char *kUiLanguage        = "ui.language";
 constexpr const char *kUiDarkMode        = "ui.darkmode";
+constexpr const char *kUiAccentMode      = "ui.accentmode";
 constexpr const char *kCastNewCast       = "cast.newcast";
 constexpr const char *kCastBroadcast     = "cast.broadcast";
 constexpr const char *kCastInterval      = "cast.broadcast_interval";
@@ -21,6 +22,7 @@ constexpr const char *kUiMica            = "ui.mica";
 // 默认值只有这一处。load() 生成的那份文件、和读不到时的兜底，用的都是它。
 constexpr const char *kDefaultLanguage   = "System";
 constexpr const char *kDefaultDarkMode   = "System";
+constexpr const char *kDefaultAccentMode = "System";
 constexpr bool        kDefaultNewCast    = true;
 constexpr bool        kDefaultBroadcast  = true;
 constexpr int         kDefaultIntervalMs = 10000;
@@ -86,6 +88,7 @@ void AppSettings::load()
     QJsonObject ui;
     ui.insert(QStringLiteral("language"), QString::fromLatin1(kDefaultLanguage));
     ui.insert(QStringLiteral("darkmode"), QString::fromLatin1(kDefaultDarkMode));
+    ui.insert(QStringLiteral("accentmode"), QString::fromLatin1(kDefaultAccentMode));
     ui.insert(QStringLiteral("mica"), kDefaultMica);
 
     QJsonObject cast;
@@ -215,6 +218,20 @@ void AppSettings::setDarkMode(const QString &value)
 
     setValue(QString::fromLatin1(kUiDarkMode), value);
     emit darkModeChanged(value);
+}
+
+QString AppSettings::accentMode() const
+{
+    return stringValue(kUiAccentMode, QString::fromLatin1(kDefaultAccentMode));
+}
+
+void AppSettings::setAccentMode(const QString &value)
+{
+    if (accentMode() == value)
+        return;
+
+    setValue(QString::fromLatin1(kUiAccentMode), value);
+    emit accentModeChanged(value);
 }
 
 bool AppSettings::mica() const

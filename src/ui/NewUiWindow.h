@@ -9,23 +9,26 @@
 #include <QString>
 
 class QQmlApplicationEngine;
+class QQmlComponent;
 class QQuickWindow;
+class QTimer;
+class SplashWindow;
 
 // NewUiWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
 // （旧的 Widgets 界面 2026-09-14 退场了）。
 //
-// 什么时候开：有东西投过来（或者用户在托盘里点「打开主界面」）。启动时不开窗口 ——
-// 这台设备平时的样子就是"在托盘里待着、等手机投过来"。
+// 什么时候开：普通启动、手机投送、或者用户在托盘里点「打开主界面」。
+// `--background` 启动不会主动打开；此时从托盘或投送进来才显示。
 //
 // 三条约定：
 //
 // 一、**引擎是懒创建的。** 没人打开新界面就不建，省得程序一启动就多几百毫秒，
 //     也省得 QML 里的错误拖累主程序启动。
 //
-// 二、**引擎一辈子只建一个，窗口可以建了又销毁。** 用户在界面上把窗口关掉是
-//     "真的关掉"（不是藏起来），关掉之后下次还能再开一个 —— 但**不能**为此
-//     新建第二个 QQmlApplicationEngine，那会崩在 Qt6Qml 里。所以引擎建成之后
-//     就只反复 load()。
+// 二、**引擎只建一次，QML 文档只编译一次，窗口实例可以反复创建。** 用户关窗后
+//     实例会被释放；下次打开时从同一个 QQmlComponent 新建。不要改成反复调用
+//     QQmlApplicationEngine::load()：Qt6Qml 会留下悬空访问（2026-11-10 的
+//     0xC0000005 转储里访问的指针是 MSVC 的 0xFEEEFEEE 释放填充值）。
 //
 // 三、**它不认识 DLNA，也不认识播放器。** QML 那两件事都走信号：要断投送就把
 //     意思发出去（main() 接在 DlnaRenderer::endSession 上），要读播放状态就
@@ -35,7 +38,7 @@ class NewUiWindow : public QObject
     Q_OBJECT
 
 public:
-    explicit NewUiWindow(QObject *parent = nullptr);
+    explicit NewUiWindow(SplashWindow *splash = nullptr, QObject *parent = nullptr);
     ~NewUiWindow() override;
 
     /** 第一次调用时建引擎、加载 QML；之后再调用就是把窗口叫到前面。 */
@@ -47,8 +50,8 @@ public:
     /**
      * 「关掉窗口，顺便断开这次投送」—— 用户在关闭确认框里点了确定。
      *
-     * 它自己不会断投送（那是协议层的事），只把意思发出去。窗口的销毁由 QML
-     * 那边走 FluRouter.removeWindow() 完成，和 FluentUI 自己关窗的方式一致。
+     * 它自己不会断投送（那是协议层的事），只把意思发出去。窗口随后由 QML
+     * 那边走 FluRouter.removeWindow() 真正销毁，下次再从同一个组件新建。
      */
     Q_INVOKABLE void endCasting();
 
@@ -110,7 +113,13 @@ private:
     QList<QPointer<QObject>> m_childWindows;
 
     QQmlApplicationEngine *m_engine = nullptr;
+    QQmlComponent *m_component = nullptr;
     QQuickWindow *m_window = nullptr;
+    SplashWindow *m_splash = nullptr;
+    QTimer *m_splashTimeout = nullptr;
+
+    /** 本次唤起主窗口是否正在等待启动屏幕退场。 */
+    bool m_splashRequested = false;
 
     /**
      * 正在加载 QML 的那一小会儿。

@@ -26,7 +26,11 @@ FluTheme::FluTheme(QObject *parent) : QObject{parent} {
     refreshColors();
     connect(this, &FluTheme::darkModeChanged, this, [=] { Q_EMIT darkChanged(); });
     connect(this, &FluTheme::darkChanged, this, [=] { refreshColors(); });
-    connect(this, &FluTheme::accentColorChanged, this, [=] { refreshColors(); });
+    connect(this, &FluTheme::accentColorChanged, this, [=] {
+        watchAccentColor();
+        refreshColors();
+    });
+    watchAccentColor();
     connect(&_watcher, &QFileSystemWatcher::fileChanged, this,
             [=](const QString &path) { Q_EMIT desktopImagePathChanged(); });
     connect(this, &FluTheme::blurBehindWindowEnabledChanged, this,
@@ -35,6 +39,8 @@ FluTheme::FluTheme(QObject *parent) : QObject{parent} {
 }
 
 void FluTheme::refreshColors() {
+    if (!_accentColor)
+        return;
     auto isDark = dark();
     primaryColor(isDark ? _accentColor->lighter() : _accentColor->dark());
     backgroundColor(isDark ? QColor(0, 0, 0, 255) : QColor(255, 255, 255, 255));
@@ -55,6 +61,32 @@ void FluTheme::refreshColors() {
                           : QColor(0, 0, 0, qRound(255 * 0.06)));
     itemCheckColor(isDark ? QColor(255, 255, 255, qRound(255 * 0.12))
                           : QColor(0, 0, 0, qRound(255 * 0.09)));
+}
+
+void FluTheme::watchAccentColor() {
+    if (!_accentColor)
+        return;
+
+    // The accent color is an object, not a scalar. Replacing the object already
+    // triggers accentColorChanged, but Windows can change the seven values
+    // inside that same object. Without these connections primaryColor remains
+    // cached at the old shade and secondary windows stay stale while controls
+    // that read accentColor.* directly update correctly.
+    disconnect(_accentColor, nullptr, this, nullptr);
+    connect(_accentColor, &FluAccentColor::darkestChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::darkerChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::darkChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::normalChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::lightChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::lighterChanged, this,
+            [this] { refreshColors(); });
+    connect(_accentColor, &FluAccentColor::lightestChanged, this,
+            [this] { refreshColors(); });
 }
 
 bool FluTheme::eventFilter(QObject *, QEvent *event) {
