@@ -9,6 +9,7 @@
 #include <exception>
 #include <limits>
 #include <string_view>
+#include <utility>
 
 namespace mcast::dlna::net {
 namespace {
@@ -191,6 +192,22 @@ std::string socketError(std::string_view operation)
         + std::to_string(WSAGetLastError());
 }
 
+std::string peerAddress(SOCKET socket)
+{
+    sockaddr_in address{};
+    int size = sizeof(address);
+    if (getpeername(
+            socket, reinterpret_cast<sockaddr *>(&address), &size)
+        == SOCKET_ERROR) {
+        return {};
+    }
+    char text[INET_ADDRSTRLEN]{};
+    if (!inet_ntop(
+            AF_INET, &address.sin_addr, text, sizeof(text)))
+        return {};
+    return text;
+}
+
 std::vector<std::uint8_t> serializeResponse(const HttpResponse &response)
 {
     const bool bodyless = bodylessStatus(response.status);
@@ -228,6 +245,26 @@ bool HttpServer::listenLoopback(
     std::uint16_t port, HttpRequestHandler handler,
     HttpServerOptions options, std::string &error)
 {
+    if (!handler) {
+        stop();
+        error = "HTTP request handler is required";
+        return false;
+    }
+    AsyncHttpRequestHandler asyncHandler =
+        [handler = std::move(handler)](
+            const core::HttpRequest &request) {
+            HttpDispatchResult result;
+            result.response = handler(request);
+            return result;
+        };
+    return listenLoopback(
+        port, std::move(asyncHandler), std::move(options), error);
+}
+
+bool HttpServer::listenLoopback(
+    std::uint16_t port, AsyncHttpRequestHandler handler,
+    HttpServerOptions options, std::string &error)
+{
     error.clear();
     if (m_callbackDepth != 0) {
         error = "HTTP server cannot restart from a callback";
@@ -246,6 +283,7 @@ bool HttpServer::listenLoopback(
     }
     if (options.maxResponseBytes < 128
         || options.requestTimeout.count() <= 0
+        || options.pendingRequestTimeout.count() <= 0
         || options.limits.maxHeaderBytes == 0) {
         error = "invalid HTTP server limits";
         return false;
@@ -274,6 +312,11 @@ bool HttpServer::listenLoopback(
     m_options = std::move(options);
     m_stopRequested = false;
     m_running = true;
+    {
+        std::lock_guard lock(m_completionMutex);
+        m_completions.clear();
+        m_completionOpen = true;
+    }
     if (m_options.logger) {
         log(
             "HTTP listening on 127.0.0.1:"
@@ -289,6 +332,11 @@ bool HttpServer::listenLoopback(
 void HttpServer::stop() noexcept
 {
     m_running = false;
+    {
+        std::lock_guard lock(m_completionMutex);
+        m_completionOpen = false;
+        m_completions.clear();
+    }
     if (m_callbackDepth != 0) {
         m_stopRequested = true;
         return;
@@ -304,9 +352,32 @@ void HttpServer::finishStop() noexcept
     }
     closeAllConnections();
     m_handler = {};
+    {
+        std::lock_guard lock(m_completionMutex);
+        m_completionOpen = false;
+        m_completions.clear();
+    }
     m_acceptResume = false;
     m_stopRequested = false;
     m_running = false;
+}
+
+bool HttpServer::completeRequest(
+    std::uint64_t requestId, HttpResponse response)
+{
+    if (requestId == 0)
+        return false;
+    {
+        std::lock_guard lock(m_completionMutex);
+        if (!m_completionOpen
+            || m_completions.size() >= m_options.maxConnections) {
+            return false;
+        }
+        m_completions.push_back(
+            Completion{requestId, std::move(response)});
+    }
+    m_loop.wake();
+    return true;
 }
 
 void HttpServer::log(const std::string &message)
@@ -341,6 +412,7 @@ bool HttpServer::pollOnce(
     } guard{ m_polling };
     m_polling = true;
 
+    drainCompletions();
     expireTimers();
     if (!m_running) {
         error = "HTTP server stopped";
@@ -376,6 +448,7 @@ bool HttpServer::pollOnce(
     if (!m_loop.poll(wait, activations, woken, error))
         return false;
 
+    drainCompletions();
     for (const auto &activation : activations) {
         if (!m_running)
             break;
@@ -422,13 +495,15 @@ bool HttpServer::pollOnce(
             }
             Connection &connection = m_connections.at(activation.socket);
             connection.peerClosed = true;
-            if (connection.responseQueued)
+            if (connection.responseQueued
+                || connection.requestPending)
                 flushConnection(activation.socket);
             else
                 closeConnection(activation.socket);
         }
     }
 
+    drainCompletions();
     expireTimers();
     return true;
 }
@@ -460,6 +535,7 @@ void HttpServer::acceptPending(std::string &error)
 
         Connection connection;
         connection.socket = platform::net::SocketHandle(accepted);
+        connection.peerAddress = peerAddress(accepted);
         if (!connection.socket.setNonBlocking(error)
             || !m_loop.add(
                 connection.socket.get(), FD_READ | FD_WRITE | FD_CLOSE,
@@ -483,7 +559,8 @@ void HttpServer::readConnection(SOCKET socket)
     if (found == m_connections.end())
         return;
     Connection &connection = found->second;
-    if (connection.responseQueued || connection.peerClosed)
+    if (connection.responseQueued || connection.requestPending
+        || connection.peerClosed)
         return;
 
     std::array<std::uint8_t, 8192> buffer{};
@@ -509,7 +586,8 @@ void HttpServer::readConnection(SOCKET socket)
             processInput(socket, connection);
             if (!m_connections.contains(socket))
                 return;
-            if (m_connections.at(socket).responseQueued)
+            if (m_connections.at(socket).responseQueued
+                || m_connections.at(socket).requestPending)
                 return;
             if (connection.input.size() > maximumBufferedBytes()) {
                 queueErrorResponse(
@@ -605,6 +683,36 @@ void HttpServer::expireTimers()
     }
 }
 
+void HttpServer::drainCompletions()
+{
+    std::vector<Completion> completions;
+    {
+        std::lock_guard lock(m_completionMutex);
+        completions.swap(m_completions);
+    }
+    for (auto &completion : completions) {
+        if (!m_running)
+            return;
+        auto found = std::find_if(
+            m_connections.begin(), m_connections.end(),
+            [&](const auto &item) {
+                return item.second.requestPending
+                    && item.second.requestId == completion.requestId;
+            });
+        if (found == m_connections.end())
+            continue;
+        Connection &connection = found->second;
+        if (std::chrono::steady_clock::now()
+            >= connection.pendingDeadline) {
+            continue;
+        }
+        connection.requestPending = false;
+        connection.requestId = 0;
+        queueResponse(
+            found->first, connection, std::move(completion.response));
+    }
+}
+
 void HttpServer::processInput(SOCKET socket, Connection &connection)
 {
     core::HttpRequest request;
@@ -620,18 +728,25 @@ void HttpServer::processInput(SOCKET socket, Connection &connection)
         return;
     }
 
-    HttpResponse response;
+    if (m_nextRequestId == 0)
+        m_nextRequestId = 1;
+    request.requestId = m_nextRequestId++;
+    request.peerAddress = connection.peerAddress;
+
+    HttpDispatchResult result;
     ++m_callbackDepth;
     try {
-        response = m_handler(request);
+        result = m_handler(request);
     } catch (const std::exception &exception) {
         log(std::string("HTTP handler exception: ") + exception.what());
-        response.status = 500;
-        response.body = "HTTP handler failed";
+        result = {};
+        result.response.status = 500;
+        result.response.body = "HTTP handler failed";
     } catch (...) {
         log("HTTP handler threw an unknown exception");
-        response.status = 500;
-        response.body = "HTTP handler failed";
+        result = {};
+        result.response.status = 500;
+        result.response.body = "HTTP handler failed";
     }
     --m_callbackDepth;
     if (m_callbackDepth == 0 && m_stopRequested) {
@@ -640,8 +755,25 @@ void HttpServer::processInput(SOCKET socket, Connection &connection)
     }
     if (!m_connections.contains(socket))
         return;
+    Connection &current = m_connections.at(socket);
+    current.input.clear();
+    if (result.status == HttpDispatchStatus::Pending) {
+        current.requestId = request.requestId;
+        current.requestPending = true;
+        current.pendingDeadline =
+            std::chrono::steady_clock::now()
+            + m_options.pendingRequestTimeout;
+        m_timers.cancel(current.timer);
+        current.timer = m_timers.schedule(current.pendingDeadline);
+        return;
+    }
+    if (result.status != HttpDispatchStatus::Completed) {
+        result.response = {};
+        result.response.status = 500;
+        result.response.body = "HTTP handler returned an invalid state";
+    }
     queueResponse(
-        socket, m_connections.at(socket), std::move(response));
+        socket, current, std::move(result.response));
 }
 
 void HttpServer::queueResponse(
@@ -658,6 +790,9 @@ void HttpServer::queueResponse(
         response.body.clear();
     }
     connection.input.clear();
+    connection.requestPending = false;
+    connection.requestId = 0;
+    connection.pendingDeadline = {};
     connection.output = serializeResponse(response);
     connection.outputOffset = 0;
     connection.responseQueued = true;

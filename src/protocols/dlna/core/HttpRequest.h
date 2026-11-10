@@ -15,6 +15,8 @@
 namespace mcast::dlna::core {
 
 struct HttpRequest {
+    std::uint64_t requestId = 0;
+    std::string peerAddress;
     std::string method;
     std::string target;
     std::string version;

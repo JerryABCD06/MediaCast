@@ -77,7 +77,8 @@ struct ClientOutcome {
 
 ClientOutcome exchange(
     std::uint16_t port, std::vector<std::string> fragments,
-    std::chrono::milliseconds fragmentDelay = 0ms)
+    std::chrono::milliseconds fragmentDelay = 0ms,
+    bool halfClose = false)
 {
     ClientOutcome outcome;
     std::string connectError;
@@ -92,6 +93,11 @@ ClientOutcome exchange(
             return outcome;
         if (fragmentDelay.count() > 0 && index + 1 < fragments.size())
             std::this_thread::sleep_for(fragmentDelay);
+    }
+    if (halfClose && shutdown(socket.get(), SD_SEND) == SOCKET_ERROR) {
+        outcome.error = "client half-close failed with WSA error "
+            + std::to_string(WSAGetLastError());
+        return outcome;
     }
 
     char buffer[4096];
@@ -273,6 +279,237 @@ int main()
           "204 response is serialized without a body");
 
     server.stop();
+
+    HttpServer asyncServer;
+    HttpServerOptions asyncOptions;
+    asyncOptions.pendingRequestTimeout = 3s;
+    std::atomic_uint64_t pendingRequestId{0};
+    std::atomic_bool peerAddressMatched{false};
+    check(
+        asyncServer.listenLoopback(
+            0,
+            [&](const mcast::dlna::core::HttpRequest &request) {
+                if (request.target == "/pending") {
+                    pendingRequestId = request.requestId;
+                    peerAddressMatched =
+                        request.peerAddress == "127.0.0.1";
+                    HttpDispatchResult result;
+                    result.status = HttpDispatchStatus::Pending;
+                    return result;
+                }
+                HttpDispatchResult result;
+                result.response.body = "immediate";
+                return result;
+            },
+            asyncOptions, error),
+        "async HTTP server starts");
+
+    ClientOutcome pendingOutcome;
+    std::atomic_bool pendingClientDone{false};
+    std::jthread pendingClient([&] {
+        pendingOutcome = exchange(
+            asyncServer.localPort(),
+            {"GET /pending HTTP/1.1\r\nHost: local\r\n\r\n"});
+        pendingClientDone = true;
+    });
+    const auto pendingDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (pendingRequestId.load() == 0
+           && std::chrono::steady_clock::now() < pendingDeadline) {
+        check(asyncServer.pollOnce(20ms, error),
+              "async HTTP server accepts pending request: " + error);
+    }
+    check(pendingRequestId.load() != 0,
+          "async HTTP handler receives a nonzero request ID");
+    check(peerAddressMatched.load(),
+          "HTTP request carries the peer address");
+    check(asyncServer.activeConnections() == 1
+              && !pendingClientDone.load(),
+          "pending HTTP request remains connected without a response");
+
+    outcome = runExchange(
+        asyncServer,
+        {"GET /fast HTTP/1.1\r\nHost: local\r\n\r\n"});
+    check(outcome.response.ends_with("immediate"),
+          "pending request does not block another HTTP connection");
+
+    std::atomic_bool completionAccepted{false};
+    std::atomic_bool allowCompletion{false};
+    std::atomic_bool pollEntered{false};
+    std::atomic_bool pollReturned{false};
+    std::string blockedPollError;
+    std::jthread completeRequest([&] {
+        while (!allowCompletion.load())
+            std::this_thread::yield();
+        HttpResponse response;
+        response.body = "released";
+        completionAccepted = asyncServer.completeRequest(
+            pendingRequestId.load(), std::move(response));
+    });
+    std::jthread blockedPoller([&] {
+        pollEntered = true;
+        if (!asyncServer.pollOnce(2s, blockedPollError))
+            blockedPollError = "blocked poll failed: " + blockedPollError;
+        pollReturned = true;
+    });
+    while (!pollEntered.load())
+        std::this_thread::yield();
+    std::this_thread::sleep_for(100ms);
+    check(!pollReturned.load(),
+          "HTTP poll is blocked before cross-thread completion");
+    const auto blockedPollStarted = std::chrono::steady_clock::now();
+    allowCompletion = true;
+    blockedPoller.join();
+    const auto blockedPollElapsed =
+        std::chrono::steady_clock::now() - blockedPollStarted;
+    completeRequest.join();
+    check(blockedPollError.empty() && completionAccepted.load()
+              && blockedPollElapsed < 1s,
+          "cross-thread HTTP completion wakes a blocked poll");
+
+    const auto completionDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!pendingClientDone.load()
+           && std::chrono::steady_clock::now() < completionDeadline) {
+        check(asyncServer.pollOnce(20ms, error),
+              "async HTTP server writes delayed response: " + error);
+    }
+    pendingClient.join();
+    check(pendingClientDone.load(),
+          "delayed HTTP client receives a response");
+    check(pendingOutcome.error.empty()
+              && pendingOutcome.response.starts_with("HTTP/1.1 200 OK\r\n")
+              && pendingOutcome.response.ends_with("released"),
+          "delayed HTTP response is serialized");
+    asyncServer.stop();
+
+    HttpServer halfCloseServer;
+    HttpServerOptions halfCloseOptions;
+    halfCloseOptions.pendingRequestTimeout = 3s;
+    std::atomic_uint64_t halfCloseRequestId{0};
+    check(
+        halfCloseServer.listenLoopback(
+            0,
+            [&](const mcast::dlna::core::HttpRequest &request) {
+                halfCloseRequestId = request.requestId;
+                HttpDispatchResult result;
+                result.status = HttpDispatchStatus::Pending;
+                return result;
+            },
+            halfCloseOptions, error),
+        "half-close HTTP server starts");
+    ClientOutcome halfCloseOutcome;
+    std::atomic_bool halfCloseClientDone{false};
+    std::jthread halfCloseClient([&] {
+        halfCloseOutcome = exchange(
+            halfCloseServer.localPort(),
+            {"GET /half-close HTTP/1.1\r\nHost: local\r\n\r\n"},
+            0ms, true);
+        halfCloseClientDone = true;
+    });
+    const auto halfCloseDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (halfCloseRequestId.load() == 0
+           && std::chrono::steady_clock::now() < halfCloseDeadline) {
+        check(halfCloseServer.pollOnce(20ms, error),
+              "half-close HTTP server accepts request: " + error);
+    }
+    check(halfCloseRequestId.load() != 0,
+          "half-close request reaches handler");
+    const auto halfCloseSeen =
+        std::chrono::steady_clock::now() + 200ms;
+    while (!halfCloseClientDone.load()
+           && std::chrono::steady_clock::now() < halfCloseSeen) {
+        check(halfCloseServer.pollOnce(20ms, error),
+              "half-close HTTP server observes client close: " + error);
+    }
+    check(!halfCloseClientDone.load(),
+          "HTTP half-close keeps a pending response alive");
+    HttpResponse halfCloseResponse;
+    halfCloseResponse.body = "after-half-close";
+    check(halfCloseServer.completeRequest(
+              halfCloseRequestId.load(),
+              std::move(halfCloseResponse)),
+          "half-close pending response can complete");
+    const auto halfCloseCompletionDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!halfCloseClientDone.load()
+           && std::chrono::steady_clock::now()
+               < halfCloseCompletionDeadline) {
+        check(halfCloseServer.pollOnce(20ms, error),
+              "half-close HTTP server writes response: " + error);
+    }
+    halfCloseClient.join();
+    check(halfCloseOutcome.response.ends_with("after-half-close"),
+          "HTTP response is written after client half-close");
+    halfCloseServer.stop();
+
+    HttpServer asyncTimeoutServer;
+    HttpServerOptions asyncTimeoutOptions;
+    asyncTimeoutOptions.pendingRequestTimeout = 150ms;
+    check(
+        asyncTimeoutServer.listenLoopback(
+            0,
+            [](const mcast::dlna::core::HttpRequest &) {
+                HttpDispatchResult result;
+                result.status = HttpDispatchStatus::Pending;
+                return result;
+            },
+            asyncTimeoutOptions, error),
+        "pending-timeout HTTP server starts");
+    const auto pendingTimeoutStarted = std::chrono::steady_clock::now();
+    outcome = runExchange(
+        asyncTimeoutServer,
+        {"GET /pending HTTP/1.1\r\nHost: local\r\n\r\n"});
+    const auto pendingTimeoutElapsed =
+        std::chrono::steady_clock::now() - pendingTimeoutStarted;
+    check(outcome.completed && outcome.response.empty()
+              && pendingTimeoutElapsed >= 100ms,
+          "pending HTTP request closes on its independent timeout");
+    check(asyncTimeoutServer.activeConnections() == 0,
+          "pending HTTP timeout removes the connection");
+    asyncTimeoutServer.stop();
+
+    HttpServer asyncStopServer;
+    HttpServerOptions asyncStopOptions;
+    asyncStopOptions.pendingRequestTimeout = 3s;
+    std::atomic_uint64_t stopRequestId{0};
+    check(
+        asyncStopServer.listenLoopback(
+            0,
+            [&](const mcast::dlna::core::HttpRequest &request) {
+                stopRequestId = request.requestId;
+                HttpDispatchResult result;
+                result.status = HttpDispatchStatus::Pending;
+                return result;
+            },
+            asyncStopOptions, error),
+        "stop-test HTTP server starts");
+    ClientOutcome stoppedOutcome;
+    std::atomic_bool stoppedClientDone{false};
+    std::jthread stoppedClient([&] {
+        stoppedOutcome = exchange(
+            asyncStopServer.localPort(),
+            {"GET /pending HTTP/1.1\r\nHost: local\r\n\r\n"});
+        stoppedClientDone = true;
+    });
+    const auto stoppedDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (stopRequestId.load() == 0
+           && std::chrono::steady_clock::now() < stoppedDeadline) {
+        check(asyncStopServer.pollOnce(20ms, error),
+              "stop-test HTTP server accepts request: " + error);
+    }
+    check(stopRequestId.load() != 0,
+          "stop-test HTTP request reaches handler");
+    asyncStopServer.stop();
+    stoppedClient.join();
+    check(stoppedClientDone.load()
+              && stoppedOutcome.response.empty(),
+          "server stop closes a pending HTTP request");
+    check(!asyncStopServer.completeRequest(
+              stopRequestId.load(), HttpResponse{}),
+          "HTTP completion is rejected after server stop");
 
     HttpServer limited;
     HttpServerOptions limitedOptions;

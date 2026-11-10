@@ -89,6 +89,8 @@ target_include_directories(
 target_link_libraries(mcast_dlna_net PUBLIC mcast_net mcast_dlna_core)
 
 add_library(mcast_dlna_protocol STATIC
+    src/protocols/dlna/claim/DlnaClaimAdapter.h
+    src/protocols/dlna/claim/DlnaClaimAdapter.cpp
     src/protocols/dlna/session/DlnaSession.h
     src/protocols/dlna/session/DlnaSession.cpp
     src/protocols/dlna/soap/SoapRouter.h
@@ -101,7 +103,7 @@ target_include_directories(
     mcast_dlna_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(
     mcast_dlna_protocol
-    PUBLIC mcast_dlna_net
+    PUBLIC mcast_dlna_net mcast_cast
     PRIVATE xmllite.lib shlwapi.lib ole32.lib)
 
 execute_process(
@@ -298,6 +300,17 @@ if(BUILD_TESTING)
         mcast_soap_router_tests PRIVATE mcast_dlna_protocol)
     add_test(NAME mcast_soap_router_tests COMMAND mcast_soap_router_tests)
     set_tests_properties(mcast_soap_router_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(
+        mcast_dlna_claim_adapter_tests
+        tests/dlna_claim_adapter_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_claim_adapter_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_claim_adapter_tests
+        COMMAND mcast_dlna_claim_adapter_tests)
+    set_tests_properties(
+        mcast_dlna_claim_adapter_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_app_settings_tests
