@@ -64,6 +64,17 @@ target_compile_options(mcast_dlna_core PUBLIC /utf-8)
 target_include_directories(
     mcast_dlna_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(mcast_dlna_net STATIC
+    src/protocols/dlna/net/SsdpInterfaceSelector.h
+    src/protocols/dlna/net/SsdpInterfaceSelector.cpp
+    src/protocols/dlna/net/SsdpSocket.h
+    src/protocols/dlna/net/SsdpSocket.cpp)
+target_compile_features(mcast_dlna_net PUBLIC cxx_std_20)
+target_compile_options(mcast_dlna_net PUBLIC /utf-8)
+target_include_directories(
+    mcast_dlna_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(mcast_dlna_net PUBLIC mcast_net)
+
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -190,6 +201,11 @@ if(BUILD_TESTING)
         tests/dlna_core_tests.cpp)
     target_link_libraries(mcast_dlna_core_tests PRIVATE mcast_dlna_core)
     add_test(NAME mcast_dlna_core_tests COMMAND mcast_dlna_core_tests)
+
+    add_executable(mcast_dlna_net_tests tests/dlna_net_tests.cpp)
+    target_link_libraries(mcast_dlna_net_tests PRIVATE mcast_dlna_net)
+    add_test(NAME mcast_dlna_net_tests COMMAND mcast_dlna_net_tests)
+    set_tests_properties(mcast_dlna_net_tests PROPERTIES TIMEOUT 20)
 
     add_executable(
         mcast_playback_gateway_tests

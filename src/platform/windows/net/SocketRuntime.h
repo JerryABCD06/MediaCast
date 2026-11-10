@@ -137,12 +137,16 @@ private:
 
 struct Ipv4Interface {
     std::string name;
+    std::string description;
     std::string address;
     unsigned long index = 0;
     unsigned long ifType = 0;
     unsigned long adapterFlags = 0;
+    unsigned long ipv4Metric = 0;
     unsigned long prefixLength = 0;
     bool up = false;
+    bool hardwareInterface = true;
+    bool filterInterface = false;
     bool isLoopback = false;
     bool isLinkLocal = false;
     bool canMulticast = false;

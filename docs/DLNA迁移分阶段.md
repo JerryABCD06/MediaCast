@@ -112,7 +112,7 @@ current/next 请求和 playerLost/本地 endSession 均会同步到协议快照�
 当前进展：`mcast_net` 已提供 Winsock RAII、非阻塞 TCP/UDP、loopback
 绑定、可唤醒 socket 事件循环、保留 connect/close 错误码的激活结果、
 唯一 ID 定时器队列，以及带 ifType/multicast/prefix/scope 属性的 IPv4
-网卡枚举。默认测试不占用 1900/8200。
+网卡枚举；IPv4 接口同时保留路由 metric。默认测试不占用 1900/8200。
 
 ### 6. HTTP + SOAP
 
@@ -124,6 +124,14 @@ SOAP 全部经 `DlnaSession -> PlaybackGateway`。
 
 替换 Qt 网卡枚举、组播、定时器和 UUID 配置。UDN 最终由 Shell 提供；
 迁移期可注入现有 `renderer.ini` 快照。默认测试不绑定 1900。
+
+当前进展：已加入无 Qt `mcast_dlna_net`。网卡选择器保留旧实现
+“Wi-Fi > 有线 > 其他”的优先级，并用 IPv4 metric、接口 index、名称和地址
+形成稳定顺序；接口信息带 hardware/filter 标志，明确排除回环、隧道、软件网卡、
+vEthernet、VPN/TAP/WinTun 等不可靠出口。`SsdpSocket` 支持 `SO_REUSEADDR`
+非阻塞绑定、指定组播出口、加入/离开组播组，以及 16 KiB 有界 UDP 收发；
+超限包、UDP reset 和 would-block 作为可恢复状态返回。测试只使用临时端口，
+并覆盖实体网卡组播发收，生产入口尚未切换。
 
 ### 8. GENA
 

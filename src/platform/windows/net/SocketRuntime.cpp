@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <string_view>
+#include <unordered_map>
 
 namespace mcast::platform::net {
 namespace {
@@ -16,6 +17,20 @@ std::string socketError(std::string_view operation)
 {
     return std::string(operation) + " failed with WSA error "
         + std::to_string(WSAGetLastError());
+}
+
+std::string utf8FromWide(const wchar_t *value)
+{
+    if (!value)
+        return {};
+    const int size = WideCharToMultiByte(
+        CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1)
+        return {};
+    std::vector<char> buffer(static_cast<std::size_t>(size));
+    WideCharToMultiByte(
+        CP_UTF8, 0, value, -1, buffer.data(), size, nullptr, nullptr);
+    return std::string(buffer.data(), static_cast<std::size_t>(size - 1));
 }
 
 } // namespace
@@ -344,6 +359,25 @@ std::vector<Ipv4Interface> enumerateIpv4Interfaces(std::string &error)
         return {};
     }
 
+    struct InterfaceStatus {
+        bool hardware = true;
+        bool filter = false;
+    };
+    std::unordered_map<unsigned long, InterfaceStatus> statusByIndex;
+    MIB_IF_TABLE2 *table = nullptr;
+    if (GetIfTable2(&table) == NO_ERROR && table) {
+        for (ULONG index = 0; index < table->NumEntries; ++index) {
+            const MIB_IF_ROW2 &row = table->Table[index];
+            statusByIndex.emplace(
+                row.InterfaceIndex,
+                InterfaceStatus{
+                    row.InterfaceAndOperStatusFlags.HardwareInterface != 0,
+                    row.InterfaceAndOperStatusFlags.FilterInterface != 0,
+                });
+        }
+        FreeMibTable(table);
+    }
+
     std::vector<Ipv4Interface> interfaces;
     const auto *adapter = reinterpret_cast<const IP_ADAPTER_ADDRESSES *>(
         buffer.data());
@@ -359,20 +393,23 @@ std::vector<Ipv4Interface> enumerateIpv4Interfaces(std::string &error)
             if (!inet_ntop(
                     AF_INET, &ipv4->sin_addr, text, sizeof(text)))
                 continue;
-            char name[512]{};
-            WideCharToMultiByte(
-                CP_UTF8, 0, adapter->FriendlyName, -1,
-                name, sizeof(name) - 1, nullptr, nullptr);
             const std::uint32_t hostAddress =
                 ntohl(ipv4->sin_addr.s_addr);
+            const auto status = statusByIndex.find(adapter->IfIndex);
             interfaces.push_back(Ipv4Interface{
-                name,
+                utf8FromWide(adapter->FriendlyName),
+                utf8FromWide(adapter->Description),
                 text,
                 adapter->IfIndex,
                 adapter->IfType,
                 adapter->Flags,
+                adapter->Ipv4Metric,
                 address->OnLinkPrefixLength,
                 adapter->OperStatus == IfOperStatusUp,
+                status != statusByIndex.end()
+                    && status->second.hardware,
+                status != statusByIndex.end()
+                    && status->second.filter,
                 adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK,
                 (hostAddress & 0xFFFF0000u) == 0xA9FE0000u,
                 (adapter->Flags & IP_ADAPTER_NO_MULTICAST) == 0,
