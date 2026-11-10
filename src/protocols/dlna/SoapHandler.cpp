@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -137,7 +138,9 @@ QString actionFromBody(const QString &body)
  */
 bool looksLikePlaceholderInDidl(const QString &text)
 {
-    return looksLikePlaceholder(text) || looksLikePlaceholder(UpnpXml::unescapeText(text));
+    return looksLikePlaceholder(text)
+        || looksLikePlaceholder(QString::fromStdString(
+            UpnpXml::unescapeText(text.toStdString())));
 }
 
 } // namespace
@@ -381,8 +384,11 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
         // 再去里面找 dc:title。不解这一步的话，标签在原文里长这样：
         // &lt;dc:title&gt;，任何标签匹配都找不到东西。
         const QString rawMeta = tagValue(body, QStringLiteral("CurrentURIMetaData"));
-        const QString meta = rawMeta.isEmpty() ? QString() : UpnpXml::unescapeText(rawMeta);
-        const QString uri = UpnpXml::unescapeText(tagValue(body, QStringLiteral("CurrentURI")));
+        const QString meta = rawMeta.isEmpty() ? QString()
+            : QString::fromStdString(
+                UpnpXml::unescapeText(rawMeta.toStdString()));
+        const QString uri = QString::fromStdString(UpnpXml::unescapeText(
+            tagValue(body, QStringLiteral("CurrentURI")).toStdString()));
 
         if (uri.isEmpty()) {
             emit logMessage(QStringLiteral("SetAVTransportURI 没带地址，回 402"));
@@ -398,8 +404,11 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
     if (action == QLatin1String("SetNextAVTransportURI")) {
         // 和 SetAVTransportURI 一样，元数据也是转义后塞进来的，先解转义。
         const QString rawMeta = tagValue(body, QStringLiteral("NextURIMetaData"));
-        const QString meta = rawMeta.isEmpty() ? QString() : UpnpXml::unescapeText(rawMeta);
-        const QString uri = UpnpXml::unescapeText(tagValue(body, QStringLiteral("NextURI")));
+        const QString meta = rawMeta.isEmpty() ? QString()
+            : QString::fromStdString(
+                UpnpXml::unescapeText(rawMeta.toStdString()));
+        const QString uri = QString::fromStdString(UpnpXml::unescapeText(
+            tagValue(body, QStringLiteral("NextURI")).toStdString()));
 
         // 空地址是合法的，含义是"把队列清掉"——规范里就是这么规定的。
         // （清空时 mediaRequestFromSoap 收的是空地址，控制器那边 uri 空就是清空。）
@@ -556,8 +565,12 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
         const QString inner =
             QStringLiteral("<Track>1</Track>") +
             QStringLiteral("<TrackDuration>%1</TrackDuration>").arg(upnpTime(m_ctl->durationSeconds())) +
-            QStringLiteral("<TrackMetaData>%1</TrackMetaData>").arg(UpnpXml::escapeText(m_ctl->currentMetadata())) +
-            QStringLiteral("<TrackURI>%1</TrackURI>").arg(UpnpXml::escapeText(m_ctl->currentUri())) +
+            QStringLiteral("<TrackMetaData>%1</TrackMetaData>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->currentMetadata().toStdString()))) +
+            QStringLiteral("<TrackURI>%1</TrackURI>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->currentUri().toStdString()))) +
             QStringLiteral("<RelTime>%1</RelTime>").arg(pos) +
             QStringLiteral("<AbsTime>%1</AbsTime>").arg(pos) +
             // 2147483647 是 UPnP 里"这个值不适用"的约定写法。
@@ -572,12 +585,20 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
         const QString inner =
             QStringLiteral("<NrTracks>%1</NrTracks>").arg(hasMedia ? 1 : 0) +
             QStringLiteral("<MediaDuration>%1</MediaDuration>").arg(upnpTime(m_ctl->durationSeconds())) +
-            QStringLiteral("<CurrentURI>%1</CurrentURI>").arg(UpnpXml::escapeText(m_ctl->currentUri())) +
-            QStringLiteral("<CurrentURIMetaData>%1</CurrentURIMetaData>").arg(UpnpXml::escapeText(m_ctl->currentMetadata())) +
+            QStringLiteral("<CurrentURI>%1</CurrentURI>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->currentUri().toStdString()))) +
+            QStringLiteral("<CurrentURIMetaData>%1</CurrentURIMetaData>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->currentMetadata().toStdString()))) +
             // 队列里排的那条要如实报出去。以前这里是写死的空串 ——
             // 控制点排了歌单，回头问"下一条是什么"，我们答"没有"，它就以为排队失败了。
-            QStringLiteral("<NextURI>%1</NextURI>").arg(UpnpXml::escapeText(m_ctl->nextUri())) +
-            QStringLiteral("<NextURIMetaData>%1</NextURIMetaData>").arg(UpnpXml::escapeText(m_ctl->nextMetadata())) +
+            QStringLiteral("<NextURI>%1</NextURI>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->nextUri().toStdString()))) +
+            QStringLiteral("<NextURIMetaData>%1</NextURIMetaData>").arg(
+                QString::fromStdString(UpnpXml::escapeText(
+                    m_ctl->nextMetadata().toStdString()))) +
             QStringLiteral("<PlayMedium>NETWORK</PlayMedium>") +
             QStringLiteral("<RecordMedium>NOT_IMPLEMENTED</RecordMedium>") +
             QStringLiteral("<WriteStatus>NOT_IMPLEMENTED</WriteStatus>");
@@ -587,8 +608,9 @@ QString SoapHandler::handleAvTransport(const QString &action, const QString &bod
     if (action == QLatin1String("GetCurrentTransportActions")) {
         // 随状态变化：没有媒体时报空，控制点就知道这台设备现在没东西可操作。
         const QString inner = QStringLiteral("<Actions>%1</Actions>")
-                                  .arg(UpnpXml::transportActionsFor(transportState(),
-                                                                    m_ctl->hasNext(), m_ctl->hasPrevious()));
+            .arg(QString::fromStdString(UpnpXml::transportActionsFor(
+                transportState().toStdString(),
+                m_ctl->hasNext(), m_ctl->hasPrevious())));
         return soapOk(QStringLiteral("AVTransport"), action, inner);
     }
 
@@ -710,10 +732,13 @@ QString SoapHandler::handleConnectionManager(const QString &action, const QStrin
 {
     if (action == QLatin1String("GetProtocolInfo")) {
         // Source 留空：我们是渲染器，只接收不提供，没有"能拿出去的"东西。
+        const std::string sink = UpnpXml::sinkProtocolInfo();
         const QString inner =
-            QStringLiteral("<Source></Source><Sink>%1</Sink>").arg(UpnpXml::sinkProtocolInfo());
+            QStringLiteral("<Source></Source><Sink>%1</Sink>").arg(
+                QString::fromStdString(sink));
         emit logMessage(QStringLiteral("GetProtocolInfo —— 已报出 %1 种可接收格式")
-                            .arg(UpnpXml::sinkProtocolInfo().count(QLatin1Char(',')) + 1));
+                            .arg(static_cast<int>(
+                                std::count(sink.begin(), sink.end(), ',')) + 1));
         return soapOk(QStringLiteral("ConnectionManager"), action, inner);
     }
 

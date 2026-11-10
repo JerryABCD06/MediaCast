@@ -104,6 +104,16 @@ if(BUILD_TESTING)
     add_test(NAME mcast_shell_settings_tests COMMAND mcast_shell_settings_tests)
 
     add_executable(
+        mcast_upnp_xml_tests
+        tests/upnp_xml_tests.cpp
+        src/protocols/dlna/UpnpXml.cpp)
+    target_include_directories(
+        mcast_upnp_xml_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_upnp_xml_tests PRIVATE /utf-8)
+    add_test(NAME mcast_upnp_xml_tests COMMAND mcast_upnp_xml_tests)
+
+    add_executable(
         mcast_app_settings_tests
         tests/app_settings_tests.cpp
         src/core/AppSettings.cpp

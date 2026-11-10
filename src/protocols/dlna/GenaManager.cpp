@@ -53,7 +53,8 @@ QByteArray propertysetWithLastChange(const QString &lastChange)
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
         "<e:property><LastChange>%1</LastChange></e:property>"
-        "</e:propertyset>").arg(UpnpXml::escapeText(lastChange));
+        "</e:propertyset>").arg(QString::fromStdString(
+            UpnpXml::escapeText(lastChange.toStdString())));
     return xml.toUtf8();
 }
 
@@ -288,7 +289,8 @@ QByteArray GenaManager::eventBodyFor(const QString &service) const
             "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
             "<e:property><SourceProtocolInfo></SourceProtocolInfo></e:property>"
             "<e:property><SinkProtocolInfo>%1</SinkProtocolInfo></e:property>"
-            "</e:propertyset>").arg(UpnpXml::sinkProtocolInfo());
+            "</e:propertyset>").arg(QString::fromStdString(
+                UpnpXml::sinkProtocolInfo()));
         return xml.toUtf8();
     }
 
@@ -327,7 +329,9 @@ QByteArray GenaManager::eventBodyFor(const QString &service) const
              m_hasMedia ? QStringLiteral("1") : QStringLiteral("0"),
              m_hasMedia ? QStringLiteral("1") : QStringLiteral("0"),
              m_playMode,
-             UpnpXml::transportActionsFor(m_lastTransportState, m_hasNext, m_hasPrevious));
+             QString::fromStdString(UpnpXml::transportActionsFor(
+                 m_lastTransportState.toStdString(),
+                 m_hasNext, m_hasPrevious)));
     return propertysetWithLastChange(lastChange);
 }
 

@@ -250,16 +250,19 @@ void HttpServer::respond(QTcpSocket *socket, const QByteArray &request)
         payload = soapFault(501, QStringLiteral("Action Failed"));
         emit logMessage(QStringLiteral("HTTP %1 %2 —— 不支持的方法").arg(method, path));
     } else if (path == QLatin1String("/description.xml")) {
-        payload = UpnpXml::deviceDescription(m_friendlyName, m_udn).toUtf8();
+        payload = QByteArray::fromStdString(UpnpXml::deviceDescription(
+            m_friendlyName.toStdString(), m_udn.toStdString()));
         emit logMessage(QStringLiteral("HTTP GET %1 —— 已送出设备描述").arg(path));
     } else if (path == QLatin1String("/AVTransport/scpd")) {
-        payload = UpnpXml::avTransportScpd().toUtf8();
+        payload = QByteArray::fromStdString(UpnpXml::avTransportScpd());
         emit logMessage(QStringLiteral("HTTP GET %1").arg(path));
     } else if (path == QLatin1String("/RenderingControl/scpd")) {
-        payload = UpnpXml::renderingControlScpd().toUtf8();
+        payload = QByteArray::fromStdString(
+            UpnpXml::renderingControlScpd());
         emit logMessage(QStringLiteral("HTTP GET %1").arg(path));
     } else if (path == QLatin1String("/ConnectionManager/scpd")) {
-        payload = UpnpXml::connectionManagerScpd().toUtf8();
+        payload = QByteArray::fromStdString(
+            UpnpXml::connectionManagerScpd());
         emit logMessage(QStringLiteral("HTTP GET %1").arg(path));
     } else {
         status = 404;

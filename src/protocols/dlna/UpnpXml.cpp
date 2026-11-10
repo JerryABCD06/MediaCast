@@ -3,7 +3,9 @@
 
 #include "UpnpXml.h"
 
-#include <QStringList>
+#include <array>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -14,28 +16,42 @@ namespace {
  * 不会出问题。但这是纯粹的"早知道早省事"的防护：将来要是允许用户自己起名字，名字里
  * 带个 & 就会把整份 XML 弄成非法文档，而控制点的表现是"设备突然不见了"。
  */
-QString xmlEscape(const QString &text)
+std::string replaceAll(
+    std::string value, std::string_view from, std::string_view to)
 {
-    QString out = text;
-    out.replace(QLatin1Char('&'), QLatin1String("&amp;"));
-    out.replace(QLatin1Char('<'), QLatin1String("&lt;"));
-    out.replace(QLatin1Char('>'), QLatin1String("&gt;"));
-    out.replace(QLatin1Char('"'), QLatin1String("&quot;"));
-    return out;
+    std::size_t offset = 0;
+    while ((offset = value.find(from, offset)) != std::string::npos) {
+        value.replace(offset, from.size(), to);
+        offset += to.size();
+    }
+    return value;
 }
 
-QString xmlUnescape(const QString &text)
+std::string xmlEscape(const std::string &text)
 {
-    QString out = text;
-    out.replace(QLatin1String("&lt;"), QLatin1String("<"));
-    out.replace(QLatin1String("&gt;"), QLatin1String(">"));
-    out.replace(QLatin1String("&quot;"), QLatin1String("\""));
-    out.replace(QLatin1String("&apos;"), QLatin1String("'"));
-    out.replace(QLatin1String("&amp;"), QLatin1String("&"));
-    return out;
+    return replaceAll(
+        replaceAll(
+            replaceAll(
+                replaceAll(text, "&", "&amp;"),
+                "<", "&lt;"),
+            ">", "&gt;"),
+        "\"", "&quot;");
 }
 
-const char *kDeviceDescription = R"XML(<?xml version="1.0" encoding="UTF-8"?>
+std::string xmlUnescape(const std::string &text)
+{
+    return replaceAll(
+        replaceAll(
+            replaceAll(
+                replaceAll(
+                    replaceAll(text, "&lt;", "<"),
+                    "&gt;", ">"),
+                "&quot;", "\""),
+            "&apos;", "'"),
+        "&amp;", "&");
+}
+
+constexpr char kDeviceDescription[] = R"XML(<?xml version="1.0" encoding="UTF-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <device>
@@ -73,7 +89,31 @@ const char *kDeviceDescription = R"XML(<?xml version="1.0" encoding="UTF-8"?>
 </root>
 )XML";
 
-const char *kAvTransportScpd = R"XML(<?xml version="1.0" encoding="UTF-8"?>
+std::string formatDeviceDescription(
+    const std::string &name, const std::string &udn)
+{
+    std::string result;
+    result.reserve(sizeof(kDeviceDescription) + name.size() + udn.size());
+    for (std::size_t index = 0; index + 1 < sizeof(kDeviceDescription);
+         ++index) {
+        if (kDeviceDescription[index] == '%') {
+            if (kDeviceDescription[index + 1] == '1') {
+                result += name;
+                ++index;
+                continue;
+            }
+            if (kDeviceDescription[index + 1] == '2') {
+                result += udn;
+                ++index;
+                continue;
+            }
+        }
+        result.push_back(kDeviceDescription[index]);
+    }
+    return result;
+}
+
+constexpr char kAvTransportScpd[] = R"XML(<?xml version="1.0" encoding="UTF-8"?>
 <scpd xmlns="urn:schemas-upnp-org:service-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <actionList>
@@ -324,28 +364,29 @@ const char *kConnectionManagerScpd = R"XML(<?xml version="1.0" encoding="UTF-8"?
 
 } // namespace
 
-QString UpnpXml::deviceDescription(const QString &friendlyName, const QString &udn)
+std::string UpnpXml::deviceDescription(
+    const std::string &friendlyName, const std::string &udn)
 {
-    return QString::fromUtf8(kDeviceDescription)
-        .arg(xmlEscape(friendlyName), xmlEscape(udn));
+    return formatDeviceDescription(
+        xmlEscape(friendlyName), xmlEscape(udn));
 }
 
-QString UpnpXml::avTransportScpd()
+std::string UpnpXml::avTransportScpd()
 {
-    return QString::fromUtf8(kAvTransportScpd);
+    return kAvTransportScpd;
 }
 
-QString UpnpXml::renderingControlScpd()
+std::string UpnpXml::renderingControlScpd()
 {
-    return QString::fromUtf8(kRenderingControlScpd);
+    return kRenderingControlScpd;
 }
 
-QString UpnpXml::connectionManagerScpd()
+std::string UpnpXml::connectionManagerScpd()
 {
-    return QString::fromUtf8(kConnectionManagerScpd);
+    return kConnectionManagerScpd;
 }
 
-QString UpnpXml::sinkProtocolInfo()
+std::string UpnpXml::sinkProtocolInfo()
 {
     // 这份表是"谎报军情"最容易出问题的地方：列了播不了的格式，控制点就会送来那种文件，
     // 用户看到的是"投屏失败"。所以只列 mpv 确实能播的。
@@ -354,44 +395,49 @@ QString UpnpXml::sinkProtocolInfo()
     // 最初参考的那份实现里列了这一条，属于报了个做不到的能力。
     //
     // 末尾的 * 表示"附加信息不限"，是最宽松也最通行的写法。
-    static const QStringList formats = {
-        QStringLiteral("http-get:*:video/mp4:*"),
-        QStringLiteral("http-get:*:video/x-matroska:*"),
-        QStringLiteral("http-get:*:video/mpeg:*"),
-        QStringLiteral("http-get:*:video/x-msvideo:*"),
-        QStringLiteral("http-get:*:video/webm:*"),
-        QStringLiteral("http-get:*:video/quicktime:*"),
-        QStringLiteral("http-get:*:audio/mpeg:*"),
-        QStringLiteral("http-get:*:audio/mp4:*"),
-        QStringLiteral("http-get:*:audio/flac:*"),
-        QStringLiteral("http-get:*:audio/x-flac:*"),
-        QStringLiteral("http-get:*:audio/wav:*"),
-        QStringLiteral("http-get:*:audio/ogg:*"),
-        QStringLiteral("http-get:*:application/x-mpegURL:*"),
+    static constexpr std::array<std::string_view, 18> formats = {
+        "http-get:*:video/mp4:*",
+        "http-get:*:video/x-matroska:*",
+        "http-get:*:video/mpeg:*",
+        "http-get:*:video/x-msvideo:*",
+        "http-get:*:video/webm:*",
+        "http-get:*:video/quicktime:*",
+        "http-get:*:audio/mpeg:*",
+        "http-get:*:audio/mp4:*",
+        "http-get:*:audio/flac:*",
+        "http-get:*:audio/x-flac:*",
+        "http-get:*:audio/wav:*",
+        "http-get:*:audio/ogg:*",
+        "http-get:*:application/x-mpegURL:*",
         // 图片。mpv 能显示静态图，实测手机上切换图片也能正常投过来，所以如实报出去。
         // 报了做不到是个问题，能做到却不报同样会让控制点把"投图片"的入口灰掉。
-        QStringLiteral("http-get:*:image/jpeg:*"),
-        QStringLiteral("http-get:*:image/png:*"),
-        QStringLiteral("http-get:*:image/gif:*"),
-        QStringLiteral("http-get:*:image/bmp:*"),
-        QStringLiteral("http-get:*:image/webp:*"),
+        "http-get:*:image/jpeg:*",
+        "http-get:*:image/png:*",
+        "http-get:*:image/gif:*",
+        "http-get:*:image/bmp:*",
+        "http-get:*:image/webp:*",
     };
-    return formats.join(QLatin1Char(','));
+    std::string result;
+    for (std::size_t index = 0; index < formats.size(); ++index) {
+        if (index != 0)
+            result += ',';
+        result += formats[index];
+    }
+    return result;
 }
 
-QString UpnpXml::escapeText(const QString &text)
+std::string UpnpXml::escapeText(const std::string &text)
 {
     return xmlEscape(text);
 }
 
-QString UpnpXml::unescapeText(const QString &text)
+std::string UpnpXml::unescapeText(const std::string &text)
 {
     return xmlUnescape(text);
 }
 
-QString UpnpXml::transportActionsFor(const QString &transportState,
-                                     bool hasNext,
-                                     bool hasPrevious)
+std::string UpnpXml::transportActionsFor(
+    const std::string &transportState, bool hasNext, bool hasPrevious)
 {
     // ── 这个列表是"现在哪些按钮能用"，**必须跟着状态走** ────────────────────
     //
@@ -409,33 +455,40 @@ QString UpnpXml::transportActionsFor(const QString &transportState,
     // 暂停"，依据就是这个列表（这也是它唯一的用处）。
     //
     // 顺带一提：vivo 相册和 BubbleUPnP 都是这么做的，所以两个一起不灵。
-    QStringList actions;
+    std::vector<std::string_view> actions;
 
-    if (transportState == QLatin1String("NO_MEDIA_PRESENT")) {
-        return QString();
+    if (transportState == "NO_MEDIA_PRESENT") {
+        return {};
     }
-    else if (transportState == QLatin1String("PLAYING")) {
-        actions << QStringLiteral("Pause");
+    else if (transportState == "PLAYING") {
+        actions.push_back("Pause");
     }
-    else if (transportState == QLatin1String("TRANSITIONING")) {
-        actions << QStringLiteral("Stop");
-        return actions.join(QLatin1Char(','));   // 切换中就别报 Seek 了
+    else if (transportState == "TRANSITIONING") {
+        actions.push_back("Stop");
+        return "Stop";   // 切换中就别报 Seek 了
     }
     else {
         // PAUSED_PLAYBACK / STOPPED，以及任何没预料到的值。给 Play 是安全的。
-        actions << QStringLiteral("Play");
+        actions.push_back("Play");
     }
 
-    actions << QStringLiteral("Stop") << QStringLiteral("Seek");
+    actions.push_back("Stop");
+    actions.push_back("Seek");
 
     // Next / Previous 只在真的有地方可去的时候才报。
     //
     // 这不是抠门：控制点是照这个列表决定按钮亮不亮的，报了却按不动，用户点了没反应，
     // 跟桌面端界面里那两个按钮是同一个道理。
     if (hasNext)
-        actions << QStringLiteral("Next");
+        actions.push_back("Next");
     if (hasPrevious)
-        actions << QStringLiteral("Previous");
+        actions.push_back("Previous");
 
-    return actions.join(QLatin1Char(','));
+    std::string result;
+    for (std::size_t index = 0; index < actions.size(); ++index) {
+        if (index != 0)
+            result += ',';
+        result += actions[index];
+    }
+    return result;
 }
