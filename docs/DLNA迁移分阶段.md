@@ -112,13 +112,21 @@ current/next 请求和 playerLost/本地 endSession 均会同步到协议快照�
 当前进展：`mcast_net` 已提供 Winsock RAII、非阻塞 TCP/UDP、loopback
 绑定、可唤醒 socket 事件循环、保留 connect/close 错误码的激活结果、
 唯一 ID 定时器队列，以及带 ifType/multicast/prefix/scope 属性的 IPv4
-网卡枚举；IPv4 接口同时保留路由 metric。默认测试不占用 1900/8200。
+网卡枚举；IPv4 接口同时保留路由 metric。自动定时器 ID 不再永久累积，
+显式 ID 与自动/活跃/取消状态交叉去重。默认测试不占用 1900/8200。
 
 ### 6. HTTP + SOAP
 
 保留现有 `Connection: close` 行为，重写 QTcpServer/QTcpSocket 层；增加
 Content-Length 缺失、负数、溢出、超大 body、慢请求和连接数上限测试。
 SOAP 全部经 `DlnaSession -> PlaybackGateway`。
+
+当前进展：已加入无 Qt loopback `HttpServer`，使用非阻塞 TCP 与
+`WSAEventSelect`，支持分片请求、单请求 `Connection: close`、每连接
+输入/输出缓冲、连接数与请求/慢读超时、半关闭后继续排空响应，以及可重入
+`stop()` 的安全延迟收尾。请求体默认上限 1 MiB，超限 body 回 413、
+超限/过多 header 回 431；响应按完整序列化大小限制，禁止覆盖 framing
+header 或注入 CR/LF。handler 当前要求非阻塞，SOAP 路由和生产入口尚未接入。
 
 ### 7. SSDP
 

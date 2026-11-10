@@ -291,11 +291,14 @@ TimerQueue::TimerId TimerQueue::schedule(
     if (id == 0) {
         do {
             id = m_nextId++;
-        } while (id == 0 || m_used.contains(id));
-    } else if (m_used.contains(id)) {
+        } while (id == 0 || m_active.contains(id)
+                 || m_cancelled.contains(id) || m_used.contains(id));
+    } else if (id == 0 || m_used.contains(id)
+               || m_active.contains(id) || m_cancelled.contains(id)) {
         return 0;
+    } else {
+        m_used.insert(id);
     }
-    m_used.insert(id);
     m_active.insert(id);
     m_timers.push(Timer{deadline, id, m_nextSequence++});
     return id;

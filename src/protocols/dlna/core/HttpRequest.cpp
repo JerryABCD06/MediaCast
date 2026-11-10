@@ -58,20 +58,27 @@ bool headerValue(std::string_view value)
     });
 }
 
-bool parseContentLength(
+enum class ContentLengthStatus {
+    Valid,
+    Invalid,
+    TooLarge,
+};
+
+ContentLengthStatus parseContentLength(
     std::string_view value, std::size_t maximum, std::size_t &length)
 {
     if (value.empty())
-        return false;
+        return ContentLengthStatus::Invalid;
     std::uint64_t parsed = 0;
     const auto result = std::from_chars(
         value.data(), value.data() + value.size(), parsed, 10);
     if (result.ec != std::errc{}
-        || result.ptr != value.data() + value.size()
-        || parsed > maximum)
-        return false;
+        || result.ptr != value.data() + value.size())
+        return ContentLengthStatus::Invalid;
+    if (parsed > maximum)
+        return ContentLengthStatus::TooLarge;
     length = static_cast<std::size_t>(parsed);
-    return true;
+    return ContentLengthStatus::Valid;
 }
 
 } // namespace
@@ -167,8 +174,13 @@ HttpParseStatus parseHttpRequest(
                     return HttpParseStatus::Error;
                 }
                 if (name == "content-length") {
-                    if (!parseContentLength(
-                            value, limits.maxBodyBytes, contentLength)
+                    const auto lengthStatus = parseContentLength(
+                        value, limits.maxBodyBytes, contentLength);
+                    if (lengthStatus == ContentLengthStatus::TooLarge) {
+                        error = "HTTP body exceeds limit";
+                        return HttpParseStatus::Error;
+                    }
+                    if (lengthStatus == ContentLengthStatus::Invalid
                         || (parsedContentLength
                             && *parsedContentLength != contentLength)) {
                         error = "invalid HTTP Content-Length";

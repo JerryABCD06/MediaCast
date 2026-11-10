@@ -123,6 +123,12 @@ int main()
     check(!timers.nextDeadline().has_value(),
           "cancelled future timer is not returned");
 
+    TimerQueue collisionTimers;
+    const auto automatic = collisionTimers.schedule(now + 1s);
+    check(collisionTimers.schedule(now + 2s, automatic) == 0,
+          "explicit ID cannot collide with an automatic timer");
+    check(collisionTimers.cancel(automatic), "automatic ID remains cancellable");
+
     error.clear();
     const auto interfaces = enumerateIpv4Interfaces(error);
     check(error.empty(), "IPv4 adapter enumeration succeeds");
