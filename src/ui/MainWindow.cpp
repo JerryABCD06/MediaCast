@@ -127,6 +127,7 @@ bool MainWindow::load()
     connect(m_window, &QObject::destroyed, this, [this] {
         m_window = nullptr;
         emit logMessage(QStringLiteral("主窗口已关闭（需要时会重新打开）"));
+        emit windowClosed();
     });
 
     // FluentUI 建这个窗口的时候少设了两个样式位，补上。

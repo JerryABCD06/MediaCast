@@ -61,9 +61,9 @@ target_link_libraries(MCast.Shell PRIVATE mcast_ipc)
 add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
 target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
 
-add_executable(MCast.Ui src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
-target_link_libraries(MCast.Ui PRIVATE mcast_ipc)
-add_dependencies(MCast.Shell MCast.Protocol MCast.Ui)
+add_executable(MCast.UiSkeleton src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
+target_link_libraries(MCast.UiSkeleton PRIVATE mcast_ipc)
+add_dependencies(MCast.Shell MCast.Protocol MCast.UiSkeleton)
 
 if(BUILD_TESTING)
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
@@ -77,7 +77,7 @@ if(BUILD_TESTING)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_skeleton_smoke.ps1"
             -ShellExe "$<TARGET_FILE:MCast.Shell>"
             -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
-            -UiExe "$<TARGET_FILE:MCast.Ui>")
+            -UiExe "$<TARGET_FILE:MCast.UiSkeleton>")
     set_tests_properties(mcast_process_skeleton_smoke PROPERTIES TIMEOUT 20)
 endif()
 
@@ -269,6 +269,64 @@ target_compile_options(MCast PRIVATE /utf-8)
 set_target_properties(MCast PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
+
+# ── 真实 Qt/QML Ui 进程（离线抽取阶段）──────────────────────────────────
+#
+# 它先独立构建、独立运行，不接管现有 MCast 单体的正式启动路径。
+# 等 MainWindow 在独立进程中验证稳定后，再把 MCast.Ui 骨架替换成这个目标。
+qt_add_executable(MCast.Ui
+    src/ui_process/UiMain.cpp
+    src/core/AppSettings.h
+    src/core/AppSettings.cpp
+    src/core/LegalDocs.h
+    src/core/LegalDocs.cpp
+    src/core/MediaPlayer.h
+    src/core/NowPlaying.h
+    src/core/NowPlaying.cpp
+    src/core/MpvCore.h
+    src/core/MpvCore.cpp
+    src/core/MpvQmlItem.h
+    src/core/MpvQmlItem.cpp
+    src/core/PlaybackController.h
+    src/core/PlaybackController.cpp
+    src/core/Tr.h
+    src/core/Tr.cpp
+    src/ui/MainWindow.h
+    src/ui/MainWindow.cpp
+    src/ui/UiState.h
+    src/ui/UiState.cpp
+    src/ui/DeviceInfo.h
+    src/ui/DeviceInfo.cpp
+    src/platform/windows/WindowFrame.h
+    src/platform/windows/WindowFrame.cpp
+    src/platform/windows/SystemAccentColors.h
+    src/platform/windows/SystemAccentColors.cpp
+    src/platform/windows/SplashWindow.h
+    src/platform/windows/SplashWindow.cpp
+    res/MCast.rc
+    res/MCast.qrc
+    res/QmlUi.qrc
+    res/Lang.qrc
+)
+target_include_directories(
+    MCast.Ui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(
+    MCast.Ui PRIVATE "${MPV_DEV_DIR}/include")
+target_link_libraries(
+    MCast.Ui PRIVATE
+    Qt6::Widgets Qt6::Quick Qt6::QuickControls2
+    mcast_ipc windowsapp.lib dwmapi.lib
+    d2d1.lib d3d11.lib dxgi.lib dcomp.lib windowscodecs.lib advapi32.lib
+    "${MPV_DEV_DIR}/libmpv.lib")
+target_compile_options(MCast.Ui PRIVATE /utf-8)
+set_target_properties(MCast.Ui PROPERTIES WIN32_EXECUTABLE TRUE)
+add_dependencies(MCast.Ui fluentuiplugin)
+add_dependencies(MCast.Shell MCast.Ui)
+add_custom_command(TARGET MCast.Ui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MPV_DEV_DIR}/libmpv-2.dll"
+            "$<TARGET_FILE_DIR:MCast.Ui>"
+    COMMENT "复制 libmpv-2.dll 到 Ui 进程目录")
 
 # ── 语言 ─────────────────────────────────────────────────────────────────
 #

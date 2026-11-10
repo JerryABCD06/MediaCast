@@ -101,6 +101,9 @@ signals:
     /** 用户要求结束当前投送（不是退出程序，也不是挂断接收）。 */
     void castEndRequested();
 
+    /** 本次 QML 主窗口实例已经销毁。Ui 进程用它决定何时退出。 */
+    void windowClosed();
+
 private:
     bool load();
 
