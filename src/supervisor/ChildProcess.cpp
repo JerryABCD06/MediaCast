@@ -108,7 +108,7 @@ bool ChildProcess::start(
     const std::wstring directory = workingDirectory.wstring();
     if (!CreateProcessW(
             executable.c_str(), mutableCommand.data(), nullptr, nullptr,
-            FALSE, CREATE_UNICODE_ENVIRONMENT, nullptr,
+            FALSE, CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED, nullptr,
             directory.empty() ? nullptr : directory.c_str(),
             &startup, &process)) {
         error = windowsError("CreateProcessW", GetLastError());
@@ -138,6 +138,19 @@ bool ChildProcess::assignToJob(void *job, std::string &error)
     if (!AssignProcessToJobObject(
             static_cast<HANDLE>(job), static_cast<HANDLE>(m_process))) {
         error = windowsError("AssignProcessToJobObject", GetLastError());
+        return false;
+    }
+    return true;
+}
+
+bool ChildProcess::resume(std::string &error)
+{
+    if (!m_thread) {
+        error = "child thread handle is unavailable";
+        return false;
+    }
+    if (ResumeThread(static_cast<HANDLE>(m_thread)) == static_cast<DWORD>(-1)) {
+        error = windowsError("ResumeThread", GetLastError());
         return false;
     }
     return true;

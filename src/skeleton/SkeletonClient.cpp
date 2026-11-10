@@ -317,6 +317,7 @@ bool parseClientOptions(
         constexpr std::wstring_view instancePrefix = L"--instance=";
         constexpr std::wstring_view noncePrefix = L"--nonce=";
         constexpr std::wstring_view shellPidPrefix = L"--shell-pid=";
+        constexpr std::wstring_view activationPrefix = L"--activation-id=";
         if (argument.starts_with(instancePrefix)) {
             options.instance = narrow(
                 argument.substr(instancePrefix.size()).c_str());
@@ -336,6 +337,15 @@ bool parseClientOptions(
                 error = "invalid --shell-pid";
                 return false;
             }
+        } else if (argument.starts_with(activationPrefix)) {
+            const std::wstring value =
+                argument.substr(activationPrefix.size());
+            try {
+                options.activationId = std::stoull(value);
+            } catch (...) {
+                error = "invalid --activation-id";
+                return false;
+            }
         } else if (argument == L"--request-ui") {
             options.requestUi = true;
         } else {
@@ -353,6 +363,10 @@ bool parseClientOptions(
     }
     if (options.shellPid == 0) {
         error = "--shell-pid is required";
+        return false;
+    }
+    if (options.role == ProcessRole::Ui && options.activationId == 0) {
+        error = "--activation-id is required for Ui";
         return false;
     }
     return true;
@@ -400,6 +414,7 @@ int runClient(const ClientOptions &options)
         firstFrame.header.source = ProcessRole::Ui;
         firstFrame.header.destination = ProcessRole::Shell;
         firstFrame.header.messageId = 5;
+        firstFrame.header.correlationId = options.activationId;
         firstFrame.header.sessionId = 1;
         if (!control->writeMessage(firstFrame, 2000ms, error)) {
             std::cerr << "UiFirstFrame failed: " << error << '\n';

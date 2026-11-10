@@ -30,6 +30,7 @@ public:
         const std::filesystem::path &workingDirectory,
         std::string &error);
     bool assignToJob(void *job, std::string &error);
+    bool resume(std::string &error);
     bool running() const;
     std::optional<std::uint32_t>
     waitForExit(std::chrono::milliseconds timeout, std::string &error);
