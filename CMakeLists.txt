@@ -30,6 +30,8 @@ add_library(mcast_ipc STATIC
     src/ipc/Messages.cpp
     src/ipc/PlaybackCodec.h
     src/ipc/PlaybackCodec.cpp
+    src/ipc/PlaybackPipeGateway.h
+    src/ipc/PlaybackPipeGateway.cpp
     src/supervisor/RestartController.h
     src/supervisor/RestartController.cpp
     src/supervisor/ProcessIdentity.h
@@ -101,6 +103,15 @@ if(BUILD_TESTING)
     add_test(
         NAME mcast_playback_codec_tests
         COMMAND mcast_playback_codec_tests)
+
+    add_executable(
+        mcast_playback_pipe_gateway_tests
+        tests/playback_pipe_gateway_tests.cpp)
+    target_link_libraries(
+        mcast_playback_pipe_gateway_tests PRIVATE mcast_ipc)
+    add_test(
+        NAME mcast_playback_pipe_gateway_tests
+        COMMAND mcast_playback_pipe_gateway_tests)
 
     add_executable(
         mcast_shell_settings_tests

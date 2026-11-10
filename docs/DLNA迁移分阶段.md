@@ -89,6 +89,10 @@ picture controls。
 命令、结果、快照、状态增量、playerLost 和 reconnected，大 metadata 使用
 原始 Bytes，不重复 XML 转义。
 
+Protocol 侧 `PlaybackPipeGateway` 已支持首快照门控、pending 命令超时、
+重复/未知结果去重、generation/stateVersion 去重、断线拒绝 pending 命令，
+以及 listener 析构等待；Ui 侧 PlaybackController bridge 尚待接入。
+
 ### 5. Win32 网络运行层
 
 建立 `mcast_dlna_net`：
