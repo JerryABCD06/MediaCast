@@ -426,6 +426,141 @@ void testHelloSchema()
           "Hello rejects empty nonce");
 }
 
+void testCastConfirmationSchema()
+{
+    using namespace mcast::ipc;
+
+    const CastConfirmationRequestInfo request{
+        mcast::cast::ProtocolKind::AirPlay,
+        42,
+        "peer-42",
+        "Living Room Phone",
+        "192.0.2.42",
+        "Example Movie",
+        9000,
+    };
+    std::string error;
+    const auto requestMessage = makeCastConfirmationRequestMessage(
+        100, request, error);
+    check(requestMessage.has_value(),
+          "cast confirmation request created: " + error);
+    if (requestMessage) {
+        const auto frame = encodeFrame(*requestMessage);
+        check(!frame.empty(), "cast confirmation request frame encoded");
+        const auto decodedFrame = decodeFrame(frame);
+        check(decodedFrame.status == DecodeStatus::Ok,
+              "cast confirmation request survives frame decode");
+        check(decodedFrame.message.header.type
+                  == MessageType::CastConfirmationRequest,
+              "cast confirmation request keeps message type");
+        const auto decoded = decodeCastConfirmationRequestMessage(
+            decodedFrame.message, error);
+        check(decoded.has_value(),
+              "cast confirmation request decoded: " + error);
+        if (decoded) {
+            checkEqual(
+                static_cast<int>(decoded->protocol),
+                static_cast<int>(mcast::cast::ProtocolKind::AirPlay),
+                "cast confirmation protocol");
+            checkEqual(decoded->claimId, request.claimId,
+                       "cast confirmation claim id");
+            checkEqual(decoded->peerDisplayName, request.peerDisplayName,
+                       "cast confirmation peer name");
+            checkEqual(decoded->mediaTitle, request.mediaTitle,
+                       "cast confirmation media title");
+            checkEqual(decoded->remainingTimeoutMs,
+                       request.remainingTimeoutMs,
+                       "cast confirmation timeout");
+        }
+
+        Message wrongDirection = *requestMessage;
+        wrongDirection.header.source = ProcessRole::Shell;
+        check(!decodeCastConfirmationRequestMessage(
+                  wrongDirection, error).has_value(),
+              "cast confirmation request rejects Shell source");
+
+        Message oldVersion = *requestMessage;
+        oldVersion.header.versionMinor = 0;
+        check(!decodeCastConfirmationRequestMessage(
+                  oldVersion, error).has_value(),
+              "cast confirmation request requires IPC minor 1");
+        Message futureVersion = *requestMessage;
+        futureVersion.header.versionMinor = kProtocolVersionMinor + 1;
+        checkEqual(
+            decodeFrame(encodeFrame(futureVersion)).status,
+            DecodeStatus::UnsupportedVersion,
+            "frame decoder rejects unknown future minor");
+    }
+
+    const CastConfirmationDecisionInfo decision{
+        mcast::cast::ProtocolKind::AirPlay,
+        42,
+        true,
+    };
+    const auto decisionMessage = makeCastConfirmationDecisionMessage(
+        101, requestMessage ? requestMessage->header.messageId : 100,
+        decision, error);
+    check(decisionMessage.has_value(),
+          "cast confirmation decision created: " + error);
+    if (decisionMessage) {
+        const auto decodedFrame = decodeFrame(encodeFrame(*decisionMessage));
+        check(decodedFrame.status == DecodeStatus::Ok
+                  && decodedFrame.message.header.type
+                      == MessageType::CastConfirmationDecision,
+              "cast confirmation decision survives frame decode");
+        const auto decoded = decodeCastConfirmationDecisionMessage(
+            decodedFrame.message, 100, error);
+        check(decoded.has_value(),
+              "cast confirmation decision decoded: " + error);
+        if (decoded) {
+            check(decoded->accepted,
+                  "cast confirmation decision keeps accepted flag");
+            checkEqual(decoded->claimId, decision.claimId,
+                       "cast confirmation decision claim id");
+        }
+        check(!decodeCastConfirmationDecisionMessage(
+                  *decisionMessage, 99, error).has_value(),
+              "cast confirmation decision rejects wrong correlation");
+        check(!decodeCastConfirmationDecisionMessage(
+                  *decisionMessage, 0, error).has_value(),
+              "cast confirmation decision rejects zero expected correlation");
+    }
+
+    auto invalid = request;
+    invalid.protocol = mcast::cast::ProtocolKind::None;
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects None protocol");
+    invalid = request;
+    invalid.remainingTimeoutMs = 0;
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects zero timeout");
+    invalid = request;
+    invalid.peerId.clear();
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects empty peer id");
+    invalid = request;
+    invalid.peerDisplayName = "\xC0\xAF";
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects invalid UTF-8 text");
+
+    MessageHeader direction;
+    direction.type = MessageType::CastConfirmationRequest;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "cast confirmation request direction accepted");
+    check(!validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "cast confirmation request rejected on playback pipe");
+    direction.type = MessageType::CastConfirmationDecision;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "cast confirmation decision direction accepted");
+}
+
 void testPipeRoundTrip()
 {
     using namespace mcast::ipc;
@@ -730,6 +865,7 @@ int main()
     testFrameRoundTrip();
     testInvalidFrames();
     testHelloSchema();
+    testCastConfirmationSchema();
     testPipeRoundTrip();
     testClientWaitsForServer();
     testPipeTimeouts();

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "cast/CastTypes.h"
 #include "ipc/IpcProtocol.h"
 
 #include <cstdint>
@@ -42,6 +43,14 @@ enum class FieldId : std::uint16_t {
     PlaybackSubmissionStatus = 73,
     PlaybackOutcomeStatus = 74,
     PlaybackStateVersion = 75,
+    CastProtocol = 80,
+    CastClaimId = 81,
+    CastPeerId = 82,
+    CastPeerDisplayName = 83,
+    CastPeerAddress = 84,
+    CastMediaTitle = 85,
+    CastConfirmationTimeoutMs = 86,
+    CastConfirmationAccepted = 87,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -89,6 +98,22 @@ struct PeerIdentityGrant {
 struct UiActivateDecisionInfo {
     bool started = false;
     std::uint64_t activationId = 0;
+};
+
+struct CastConfirmationRequestInfo {
+    cast::ProtocolKind protocol = cast::ProtocolKind::None;
+    std::uint64_t claimId = 0;
+    std::string peerId;
+    std::string peerDisplayName;
+    std::string peerAddress;
+    std::string mediaTitle;
+    std::uint64_t remainingTimeoutMs = 0;
+};
+
+struct CastConfirmationDecisionInfo {
+    cast::ProtocolKind protocol = cast::ProtocolKind::None;
+    std::uint64_t claimId = 0;
+    bool accepted = false;
 };
 
 std::optional<std::vector<std::uint8_t>>
@@ -144,6 +169,25 @@ std::optional<Message> makeUiActivateDecisionMessage(
 
 std::optional<UiActivateDecisionInfo>
 decodeUiActivateDecisionMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error);
+
+std::optional<Message> makeCastConfirmationRequestMessage(
+    std::uint64_t messageId,
+    const CastConfirmationRequestInfo &request,
+    std::string &error);
+
+std::optional<CastConfirmationRequestInfo>
+decodeCastConfirmationRequestMessage(
+    const Message &message, std::string &error);
+
+std::optional<Message> makeCastConfirmationDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationDecisionInfo &decision,
+    std::string &error);
+
+std::optional<CastConfirmationDecisionInfo>
+decodeCastConfirmationDecisionMessage(
     const Message &message, std::uint64_t expectedCorrelationId,
     std::string &error);
 

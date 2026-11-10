@@ -252,7 +252,8 @@ HeaderDecodeResult decodeHeader(std::span<const std::uint8_t> bytes)
 
     result.header.versionMajor = readU16(bytes, 4);
     result.header.versionMinor = readU16(bytes, 6);
-    if (result.header.versionMajor != kProtocolVersionMajor) {
+    if (result.header.versionMajor != kProtocolVersionMajor
+        || result.header.versionMinor > kProtocolVersionMinor) {
         result.status = DecodeStatus::UnsupportedVersion;
         return result;
     }
@@ -268,7 +269,8 @@ HeaderDecodeResult decodeHeader(std::span<const std::uint8_t> bytes)
     const auto flags = static_cast<std::uint16_t>(result.header.flags);
     if (messageType < static_cast<std::uint16_t>(MessageType::Hello)
         || messageType
-            > static_cast<std::uint16_t>(MessageType::PlaybackReconnected)
+            > static_cast<std::uint16_t>(
+                MessageType::CastConfirmationDecision)
         || sourceRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || destinationRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || (flags & ~0x7u) != 0) {

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <utility>
 
 namespace mcast::ipc {
 namespace {
@@ -27,6 +28,73 @@ bool validHash(const std::string &value)
         return std::isxdigit(ch) != 0;
     });
 }
+
+bool validCastProtocol(cast::ProtocolKind protocol)
+{
+    return protocol != cast::ProtocolKind::None
+        && protocol <= cast::ProtocolKind::Vendor;
+}
+
+bool validUtf8(std::string_view value)
+{
+    std::size_t index = 0;
+    while (index < value.size()) {
+        const auto lead = static_cast<unsigned char>(value[index]);
+        if (lead <= 0x7f) {
+            ++index;
+            continue;
+        }
+
+        std::size_t continuationCount = 0;
+        std::uint32_t codePoint = 0;
+        std::uint32_t minimum = 0;
+        if ((lead & 0xe0) == 0xc0) {
+            continuationCount = 1;
+            codePoint = lead & 0x1f;
+            minimum = 0x80;
+        } else if ((lead & 0xf0) == 0xe0) {
+            continuationCount = 2;
+            codePoint = lead & 0x0f;
+            minimum = 0x800;
+        } else if ((lead & 0xf8) == 0xf0) {
+            continuationCount = 3;
+            codePoint = lead & 0x07;
+            minimum = 0x10000;
+        } else {
+            return false;
+        }
+        if (index + continuationCount >= value.size())
+            return false;
+        for (std::size_t offset = 1;
+             offset <= continuationCount; ++offset) {
+            const auto next =
+                static_cast<unsigned char>(value[index + offset]);
+            if ((next & 0xc0) != 0x80)
+                return false;
+            codePoint = (codePoint << 6) | (next & 0x3f);
+        }
+        if (codePoint < minimum || codePoint > 0x10ffff
+            || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+            return false;
+        }
+        index += continuationCount + 1;
+    }
+    return true;
+}
+
+bool validCastText(const std::string &value, std::size_t maxSize)
+{
+    return value.size() <= maxSize
+        && value.find('\0') == std::string::npos
+        && validUtf8(value);
+}
+
+bool validCastPeerId(const std::string &value)
+{
+    return !value.empty() && validCastText(value, 256);
+}
+
+constexpr std::uint64_t kMaxCastConfirmationTimeoutMs = 300000;
 
 } // namespace
 
@@ -393,6 +461,18 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Shell)
             return true;
         break;
+    case MessageType::CastConfirmationRequest:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::CastConfirmationDecision:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
     case MessageType::UiOpenReady:
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Protocol
@@ -691,6 +771,204 @@ decodeUiActivateDecisionMessage(
         return std::nullopt;
     }
     return UiActivateDecisionInfo{*started, *activationId};
+}
+
+std::optional<Message> makeCastConfirmationRequestMessage(
+    std::uint64_t messageId,
+    const CastConfirmationRequestInfo &request,
+    std::string &error)
+{
+    if (messageId == 0 || !validCastProtocol(request.protocol)
+        || request.claimId == 0
+        || request.remainingTimeoutMs == 0
+        || request.remainingTimeoutMs > kMaxCastConfirmationTimeoutMs
+        || !validCastPeerId(request.peerId)
+        || !validCastText(request.peerDisplayName, 512)
+        || !validCastText(request.peerAddress, 256)
+        || !validCastText(request.mediaTitle, 1024)) {
+        error = "cast confirmation request contains invalid fields";
+        return std::nullopt;
+    }
+
+    PayloadBuilder builder;
+    if (!builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::CastProtocol),
+            static_cast<std::uint8_t>(request.protocol))
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::CastClaimId),
+            request.claimId)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::CastPeerId),
+            request.peerId)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::CastPeerDisplayName),
+            request.peerDisplayName)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::CastPeerAddress),
+            request.peerAddress)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::CastMediaTitle),
+            request.mediaTitle)
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::CastConfirmationTimeoutMs),
+            request.remainingTimeoutMs)) {
+        error = "cast confirmation request exceeds protocol limits";
+        return std::nullopt;
+    }
+
+    Message message;
+    message.header.type = MessageType::CastConfirmationRequest;
+    message.header.source = ProcessRole::Protocol;
+    message.header.destination = ProcessRole::Shell;
+    message.header.messageId = messageId;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (message.payload.empty()) {
+        error = "cast confirmation request payload is empty";
+        return std::nullopt;
+    }
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<CastConfirmationRequestInfo>
+decodeCastConfirmationRequestMessage(
+    const Message &message, std::string &error)
+{
+    if (message.header.type != MessageType::CastConfirmationRequest
+        || message.header.messageId == 0
+        || message.header.versionMinor < 1
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid cast confirmation request";
+        return std::nullopt;
+    }
+
+    PayloadReader reader(message.payload);
+    const auto protocol = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::CastProtocol));
+    const auto claimId = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::CastClaimId));
+    const auto peerId = reader.getString(
+        static_cast<std::uint16_t>(FieldId::CastPeerId));
+    const auto peerDisplayName = reader.getString(
+        static_cast<std::uint16_t>(FieldId::CastPeerDisplayName));
+    const auto peerAddress = reader.getString(
+        static_cast<std::uint16_t>(FieldId::CastPeerAddress));
+    const auto mediaTitle = reader.getString(
+        static_cast<std::uint16_t>(FieldId::CastMediaTitle));
+    const auto timeout = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::CastConfirmationTimeoutMs));
+    if (!reader.valid() || !protocol || !claimId || !peerId
+        || !peerDisplayName || !peerAddress || !mediaTitle || !timeout
+        || *protocol > static_cast<std::uint8_t>(cast::ProtocolKind::Vendor)
+        || *protocol == static_cast<std::uint8_t>(cast::ProtocolKind::None)
+        || *claimId == 0 || *timeout == 0
+        || *timeout > kMaxCastConfirmationTimeoutMs
+        || !validCastPeerId(*peerId)
+        || !validCastText(*peerDisplayName, 512)
+        || !validCastText(*peerAddress, 256)
+        || !validCastText(*mediaTitle, 1024)) {
+        error = "cast confirmation request has invalid fields";
+        return std::nullopt;
+    }
+
+    return CastConfirmationRequestInfo{
+        static_cast<cast::ProtocolKind>(*protocol),
+        *claimId,
+        *peerId,
+        *peerDisplayName,
+        *peerAddress,
+        *mediaTitle,
+        *timeout,
+    };
+}
+
+std::optional<Message> makeCastConfirmationDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationDecisionInfo &decision,
+    std::string &error)
+{
+    if (messageId == 0 || correlationId == 0
+        || !validCastProtocol(decision.protocol)
+        || decision.claimId == 0) {
+        error = "cast confirmation decision contains invalid fields";
+        return std::nullopt;
+    }
+
+    PayloadBuilder builder;
+    if (!builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::CastProtocol),
+            static_cast<std::uint8_t>(decision.protocol))
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::CastClaimId),
+            decision.claimId)
+        || !builder.addBool(
+            static_cast<std::uint16_t>(FieldId::CastConfirmationAccepted),
+            decision.accepted)) {
+        error = "cast confirmation decision exceeds protocol limits";
+        return std::nullopt;
+    }
+
+    Message message;
+    message.header.type = MessageType::CastConfirmationDecision;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Protocol;
+    message.header.flags = MessageFlags::Response;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (message.payload.empty()) {
+        error = "cast confirmation decision payload is empty";
+        return std::nullopt;
+    }
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<CastConfirmationDecisionInfo>
+decodeCastConfirmationDecisionMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error)
+{
+    if (message.header.type != MessageType::CastConfirmationDecision
+        || message.header.messageId == 0
+        || message.header.versionMinor < 1
+        || message.header.correlationId != expectedCorrelationId
+        || expectedCorrelationId == 0
+        || (static_cast<std::uint16_t>(message.header.flags)
+            & static_cast<std::uint16_t>(MessageFlags::Response))
+            == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid cast confirmation decision";
+        return std::nullopt;
+    }
+
+    PayloadReader reader(message.payload);
+    const auto protocol = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::CastProtocol));
+    const auto claimId = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::CastClaimId));
+    const auto accepted = reader.getBool(
+        static_cast<std::uint16_t>(FieldId::CastConfirmationAccepted));
+    if (!reader.valid() || !protocol || !claimId || !accepted
+        || *protocol > static_cast<std::uint8_t>(cast::ProtocolKind::Vendor)
+        || *protocol == static_cast<std::uint8_t>(cast::ProtocolKind::None)
+        || *claimId == 0) {
+        error = "cast confirmation decision has invalid fields";
+        return std::nullopt;
+    }
+    return CastConfirmationDecisionInfo{
+        static_cast<cast::ProtocolKind>(*protocol),
+        *claimId,
+        *accepted,
+    };
 }
 
 } // namespace mcast::ipc

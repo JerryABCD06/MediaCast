@@ -53,6 +53,7 @@ target_include_directories(mcast_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mcast_net PUBLIC ws2_32.lib iphlpapi.lib)
 
 add_library(mcast_cast STATIC
+    src/cast/CastTypes.h
     src/cast/CastArbiter.h
     src/cast/CastArbiter.cpp)
 target_compile_features(mcast_cast PUBLIC cxx_std_20)
