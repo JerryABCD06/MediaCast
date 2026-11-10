@@ -44,6 +44,9 @@ if ($null -eq $exitCode -or $exitCode -ne 0) {
     throw "Shell exited with $exitCode`nSTDOUT:`n$out`nSTDERR:`n$err"
 }
 if ($out -notmatch 'SHELL_READY' -or
+    $out -notmatch 'SHELL_SPLASH_SHOWN' -or
+    $out -notmatch 'SHELL_SPLASH_HIDDEN' -or
+    $out -notmatch 'SHELL_UI_FIRST_FRAME' -or
     $out -notmatch 'PLAYBACK_SNAPSHOT_SERVED' -or
     $out -notmatch 'PLAYBACK_SNAPSHOT_OK' -or
     $out -notmatch 'SHELL_FIRST_FRAME_OK' -or
@@ -65,6 +68,33 @@ if ($uniqueUiProcessIds.Count -ne $UiRounds) {
 $uniqueActivationIds = @($activationIds | Select-Object -Unique)
 if ($uniqueActivationIds.Count -ne $UiRounds) {
     throw "Ui rounds did not use distinct activation ids`nSTDOUT:`n$out`nSTDERR:`n$err"
+}
+$splashShowMatches = @([regex]::Matches(
+    $out, 'SHELL_SPLASH_SHOWN activation=(\d+)'))
+$splashHideMatches = @([regex]::Matches(
+    $out, 'SHELL_SPLASH_HIDDEN activation=(\d+)'))
+$uiFrameMatches = @([regex]::Matches(
+    $out, 'SHELL_UI_FIRST_FRAME activation=(\d+)'))
+$splashActivations = @(
+    $splashShowMatches | ForEach-Object { [uint64]$_.Groups[1].Value })
+$splashHides = @(
+    $splashHideMatches | ForEach-Object { [uint64]$_.Groups[1].Value })
+if ($splashActivations.Count -ne $UiRounds -or
+    $splashHides.Count -lt 1 -or
+    $uiFrameMatches.Count -ne $UiRounds) {
+    throw "Splash lifecycle did not match Ui rounds`nSTDOUT:`n$out`nSTDERR:`n$err"
+}
+for ($index = 0; $index -lt $UiRounds; ++$index) {
+    if ($splashActivations[$index] -ne $activationIds[$index]) {
+        throw "Splash activation ids did not match Ui activation ids`nSTDOUT:`n$out`nSTDERR:`n$err"
+    }
+    if ($splashShowMatches[$index].Index -ge $uiFrameMatches[$index].Index) {
+        throw "Splash was not shown before the matching first frame`nSTDOUT:`n$out`nSTDERR:`n$err"
+    }
+}
+if ($splashHides[-1] -ne $activationIds[-1] -or
+    $splashHideMatches[-1].Index -le $uiFrameMatches[-1].Index) {
+    throw "Final splash hide did not follow the final first frame`nSTDOUT:`n$out`nSTDERR:`n$err"
 }
 
 $childIds = [regex]::Matches($out, 'role=\d+ pid=(\d+)') |

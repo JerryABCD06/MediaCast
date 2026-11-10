@@ -28,7 +28,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <thread>
 
 using Microsoft::WRL::ComPtr;
@@ -267,20 +270,28 @@ void DestroyGfx(Gfx &gfx)
 class SplashUi
 {
 public:
+    explicit SplashUi(SplashWindow::StateCallback callback)
+        : m_callback(std::move(callback))
+    {
+    }
+
+    ~SplashUi();
+
     bool initialize();
-    void requestShow();
+    void requestShow(std::uint64_t token);
     void setTheme(bool followSystem, bool dark);
     void setAccent(unsigned int lightRgb, unsigned int darkRgb);
-    void bringToFront();
-    void requestDismiss();
-    void hideNow();
+    void bringToFront(std::uint64_t token);
+    void requestDismiss(std::uint64_t token);
+    void hideNow(std::uint64_t token);
     void tick();
     bool isVisible() const { return m_visible; }
 
 private:
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message,
                                        WPARAM wParam, LPARAM lParam);
-    LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    LRESULT handleMessage(
+        HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     bool createNativeWindow();
     bool loadLogo();
@@ -291,6 +302,7 @@ private:
     void drawFrame();
     void beginFade();
     void finishFade();
+    void notify(SplashWindow::State state) const;
 
     HWND m_hwnd = nullptr;
     Gfx m_gfx;
@@ -304,9 +316,28 @@ private:
     bool m_visible = false;
     bool m_dismissRequested = false;
     bool m_fading = false;
+    std::uint64_t m_token = 0;
+    SplashWindow::StateCallback m_callback;
     std::chrono::steady_clock::time_point m_shownAt{};
     std::chrono::steady_clock::time_point m_fadeAt{};
 };
+
+SplashUi::~SplashUi()
+{
+    if (m_hwnd && IsWindow(m_hwnd))
+        DestroyWindow(m_hwnd);
+    m_hwnd = nullptr;
+    DestroyGfx(m_gfx);
+    m_logo.Reset();
+    m_wic.Reset();
+    UnregisterClassW(kWindowClass, GetModuleHandleW(nullptr));
+}
+
+void SplashUi::notify(SplashWindow::State state) const
+{
+    if (m_callback)
+        m_callback(m_token, state);
+}
 
 bool SplashUi::initialize()
 {
@@ -327,7 +358,9 @@ bool SplashUi::createNativeWindow()
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
     windowClass.lpfnWndProc = &SplashUi::windowProc;
     windowClass.hInstance = instance;
-    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    // Explicit wide resources so this file also builds in the Qt-free Shell,
+    // where the Win32 UNICODE define is not supplied by Qt.
+    windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     windowClass.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return false;
@@ -408,7 +441,7 @@ bool SplashUi::loadLogo()
 {
     HRSRC resource = FindResourceW(GetModuleHandleW(nullptr),
                                    MAKEINTRESOURCEW(kSplashLogoResource),
-                                   RT_RCDATA);
+                                   MAKEINTRESOURCEW(10));
     if (!resource)
         return false;
 
@@ -451,10 +484,27 @@ bool SplashUi::loadLogo()
         converter.Get(), nullptr, m_logo.GetAddressOf()));
 }
 
-void SplashUi::requestShow()
+void SplashUi::requestShow(std::uint64_t token)
 {
-    if (m_visible || !m_hwnd || !m_gfx.dc)
+    if (!m_hwnd || !m_gfx.dc)
         return;
+
+    m_token = token;
+    if (m_visible) {
+        m_dismissRequested = false;
+        m_fading = false;
+        m_shownAt = std::chrono::steady_clock::now();
+        m_gfx.compositionEffect->SetOpacity(1.0f);
+        m_gfx.composition->Commit();
+        refreshSystemTheme();
+        applyTheme();
+        render();
+        SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                         | SWP_SHOWWINDOW);
+        notify(SplashWindow::State::Shown);
+        return;
+    }
 
     // Read the system theme once more immediately before the first visible
     // frame. This closes the race while the Qt event loop has not started yet.
@@ -469,6 +519,7 @@ void SplashUi::requestShow()
     SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     SetForegroundWindow(m_hwnd);
+    notify(SplashWindow::State::Shown);
 }
 
 void SplashUi::refreshSystemTheme()
@@ -512,18 +563,19 @@ void SplashUi::setAccent(unsigned int lightRgb, unsigned int darkRgb)
         render();
 }
 
-void SplashUi::bringToFront()
+void SplashUi::bringToFront(std::uint64_t token)
 {
-    if (!m_hwnd || !m_visible)
+    if (!m_hwnd || !m_visible || (token != 0 && token != m_token))
         return;
     SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     SetForegroundWindow(m_hwnd);
 }
 
-void SplashUi::requestDismiss()
+void SplashUi::requestDismiss(std::uint64_t token)
 {
-    if (!m_visible || m_dismissRequested)
+    if (!m_visible || m_dismissRequested
+        || (token != 0 && token != m_token))
         return;
 
     m_dismissRequested = true;
@@ -531,10 +583,11 @@ void SplashUi::requestDismiss()
                         m_shownAt + kMinimumVisible);
 }
 
-void SplashUi::hideNow()
+void SplashUi::hideNow(std::uint64_t token)
 {
-    if (!m_hwnd)
+    if (!m_hwnd || (token != 0 && token != m_token))
         return;
+    const bool wasVisible = m_visible;
     ShowWindow(m_hwnd, SW_HIDE);
     m_visible = false;
     m_dismissRequested = false;
@@ -546,6 +599,8 @@ void SplashUi::hideNow()
     applyTheme();
     m_shownAt = {};
     m_fadeAt = {};
+    if (wasVisible)
+        notify(SplashWindow::State::Hidden);
 }
 
 void SplashUi::tick()
@@ -605,6 +660,7 @@ void SplashUi::finishFade()
     m_dismissRequested = false;
     m_fading = false;
     applyTheme();
+    notify(SplashWindow::State::Hidden);
 }
 
 void SplashUi::render()
@@ -703,10 +759,11 @@ LRESULT CALLBACK SplashUi::windowProc(HWND hwnd, UINT message,
 
     if (!self)
         return DefWindowProcW(hwnd, message, wParam, lParam);
-    return self->handleMessage(message, wParam, lParam);
+    return self->handleMessage(hwnd, message, wParam, lParam);
 }
 
-LRESULT SplashUi::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT SplashUi::handleMessage(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
     case WM_ERASEBKGND:
@@ -761,23 +818,32 @@ LRESULT SplashUi::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     }
     case WM_DESTROY:
+        {
+        const bool wasVisible = m_visible;
         DestroyGfx(m_gfx);
         m_logo.Reset();
         m_wic.Reset();
-        m_hwnd = nullptr;
         m_visible = false;
+        if (wasVisible)
+            notify(SplashWindow::State::Hidden);
         return 0;
+        }
+    case WM_NCDESTROY:
+        if (m_hwnd == hwnd)
+            m_hwnd = nullptr;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     default:
         break;
     }
-    return DefWindowProcW(m_hwnd, message, wParam, lParam);
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 } // namespace
 
 struct SplashWindow::Impl
 {
-    Impl()
+    explicit Impl(SplashWindow::StateCallback callback)
+        : m_callback(std::move(callback))
     {
         // Do this before Qt creates its first native window. Otherwise Windows
         // initially virtualises the splash at 125% and Qt later changes the
@@ -801,10 +867,48 @@ struct SplashWindow::Impl
             CloseHandle(m_ready);
     }
 
-    void post(UINT message, WPARAM wParam = 0, LPARAM lParam = 0)
+    bool post(UINT message, WPARAM wParam = 0, LPARAM lParam = 0)
     {
-        if (m_threadId)
-            PostThreadMessageW(m_threadId, message, wParam, lParam);
+        const DWORD threadId = m_threadId.load();
+        return threadId
+            && PostThreadMessageW(threadId, message, wParam, lParam);
+    }
+
+    void report(std::uint64_t token, SplashWindow::State state)
+    {
+        if (m_callback)
+            m_callback(token, state);
+
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (state == SplashWindow::State::Failed)
+                m_failed = true;
+            if (token == m_waitToken)
+                m_observed = state;
+        }
+        m_stateChanged.notify_all();
+    }
+
+    bool showAndWait(std::uint64_t token)
+    {
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (m_failed)
+                return false;
+            m_waitToken = token;
+            m_observed.reset();
+        }
+        if (!post(WM_MCAST_SPLASH_SHOW, static_cast<WPARAM>(token)))
+            return false;
+
+        std::unique_lock lock(m_stateMutex);
+        return m_stateChanged.wait_for(
+            lock, std::chrono::milliseconds(2000), [this, token] {
+                return m_failed
+                    || (m_waitToken == token && m_observed
+                        && *m_observed == SplashWindow::State::Shown);
+            })
+            && !m_failed;
     }
 
     void threadMain()
@@ -816,12 +920,17 @@ struct SplashWindow::Impl
         m_threadId = GetCurrentThreadId();
         SetEvent(m_ready);
 
-        SplashUi ui;
-        if (ui.initialize()) {
+        {
+            SplashUi ui([this](
+                std::uint64_t token, SplashWindow::State state) {
+                report(token, state);
+            });
+            if (ui.initialize()) {
             auto handleMessage = [&](MSG &message) {
                 switch (message.message) {
                 case WM_MCAST_SPLASH_SHOW:
-                    ui.requestShow();
+                    ui.requestShow(
+                        static_cast<std::uint64_t>(message.wParam));
                     break;
                 case WM_MCAST_SPLASH_THEME:
                     ui.setTheme(message.wParam != 0, message.lParam != 0);
@@ -831,13 +940,16 @@ struct SplashWindow::Impl
                                  static_cast<unsigned int>(message.lParam));
                     break;
                 case WM_MCAST_SPLASH_FRONT:
-                    ui.bringToFront();
+                    ui.bringToFront(
+                        static_cast<std::uint64_t>(message.wParam));
                     break;
                 case WM_MCAST_SPLASH_DISMISS:
-                    ui.requestDismiss();
+                    ui.requestDismiss(
+                        static_cast<std::uint64_t>(message.wParam));
                     break;
                 case WM_MCAST_SPLASH_HIDE:
-                    ui.hideNow();
+                    ui.hideNow(
+                        static_cast<std::uint64_t>(message.wParam));
                     break;
                 default:
                     TranslateMessage(&message);
@@ -866,8 +978,13 @@ struct SplashWindow::Impl
                     break;
                 ui.tick();
             }
+            }
+            else {
+                report(0, SplashWindow::State::Failed);
+            }
         }
 
+        m_threadId.store(0);
         if (SUCCEEDED(comResult))
             CoUninitialize();
     }
@@ -875,18 +992,24 @@ struct SplashWindow::Impl
     std::thread m_thread;
     HANDLE m_ready = nullptr;
     std::atomic<DWORD> m_threadId{0};
+    SplashWindow::StateCallback m_callback;
+    std::mutex m_stateMutex;
+    std::condition_variable m_stateChanged;
+    std::uint64_t m_waitToken = 0;
+    std::optional<SplashWindow::State> m_observed;
+    bool m_failed = false;
 };
 
-SplashWindow::SplashWindow()
-    : m_impl(std::make_unique<Impl>())
+SplashWindow::SplashWindow(StateCallback callback)
+    : m_impl(std::make_unique<Impl>(std::move(callback)))
 {
 }
 
 SplashWindow::~SplashWindow() = default;
 
-void SplashWindow::show()
+bool SplashWindow::show(std::uint64_t token)
 {
-    m_impl->post(WM_MCAST_SPLASH_SHOW);
+    return m_impl->showAndWait(token);
 }
 
 void SplashWindow::setTheme(bool followSystem, bool dark)
@@ -902,17 +1025,20 @@ void SplashWindow::setAccent(unsigned int lightRgb, unsigned int darkRgb)
                  static_cast<LPARAM>(darkRgb));
 }
 
-void SplashWindow::bringToFront()
+void SplashWindow::bringToFront(std::uint64_t token)
 {
-    m_impl->post(WM_MCAST_SPLASH_FRONT);
+    m_impl->post(
+        WM_MCAST_SPLASH_FRONT, static_cast<WPARAM>(token));
 }
 
-void SplashWindow::dismiss()
+void SplashWindow::dismiss(std::uint64_t token)
 {
-    m_impl->post(WM_MCAST_SPLASH_DISMISS);
+    m_impl->post(
+        WM_MCAST_SPLASH_DISMISS, static_cast<WPARAM>(token));
 }
 
-void SplashWindow::hideImmediately()
+void SplashWindow::hideImmediately(std::uint64_t token)
 {
-    m_impl->post(WM_MCAST_SPLASH_HIDE);
+    m_impl->post(
+        WM_MCAST_SPLASH_HIDE, static_cast<WPARAM>(token));
 }

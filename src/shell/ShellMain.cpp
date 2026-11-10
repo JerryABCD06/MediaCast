@@ -10,6 +10,7 @@
 
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
+#include "platform/windows/SplashWindow.h"
 #include "supervisor/ChildProcess.h"
 #include "supervisor/ProcessIdentity.h"
 
@@ -158,6 +159,10 @@ class ShellRuntime
 public:
     explicit ShellRuntime(Options options)
         : m_options(std::move(options))
+        , m_splash([this](
+              std::uint64_t token, SplashWindow::State state) {
+            onSplashState(token, state);
+        })
     {
     }
 
@@ -252,8 +257,16 @@ public:
             }
             reapConnections();
 
+            if (m_splashFailed.load()) {
+                std::cerr << "Shell cannot continue without splash\n";
+                return 8;
+            }
+
             if (m_options.testExitAfterFirstFrame
                 && m_firstFrameRounds.load() >= m_options.testUiRounds
+                && m_splashShownRounds.load() >= m_options.testUiRounds
+                && m_splashHiddenRounds.load() > 0
+                && !m_splashVisible.load()
                 && WaitForSingleObject(m_firstFrame, 0) == WAIT_OBJECT_0) {
                 std::cout << "SHELL_FIRST_FRAME_OK\n";
                 std::cout << "SHELL_UI_ROUNDS_OK rounds="
@@ -271,6 +284,7 @@ public:
                         std::string terminateError;
                         ui->process.terminate(0, 1000ms, terminateError);
                         m_uiState = UiState::None;
+                        m_splash.hideImmediately(m_activationId);
                         m_records.erase(std::remove_if(
                             m_records.begin(), m_records.end(),
                             [](const std::unique_ptr<ChildRecord> &record) {
@@ -283,8 +297,22 @@ public:
                     && WaitForSingleObject(m_firstFrame, 0) != WAIT_OBJECT_0
                     && std::chrono::steady_clock::now() - m_uiStartedAt
                         > 15000ms) {
-                    std::cerr << "UI FirstFrame timed out\n";
-                    return 7;
+                    std::cerr
+                        << "UI FirstFrame timed out; retiring Ui "
+                           "without stopping Shell\n";
+                    m_splash.hideImmediately(m_activationId);
+                    ChildRecord *ui = findRecord(ProcessRole::Ui);
+                    if (ui) {
+                        std::string terminateError;
+                        ui->process.terminate(0, 1000ms, terminateError);
+                    }
+                    m_records.erase(std::remove_if(
+                        m_records.begin(), m_records.end(),
+                        [](const std::unique_ptr<ChildRecord> &record) {
+                            return record->role == ProcessRole::Ui;
+                        }),
+                        m_records.end());
+                    m_uiState = UiState::None;
                 }
             }
 
@@ -359,6 +387,7 @@ private:
                 }
             }
             if (alive) {
+                m_splash.bringToFront(m_activationId);
                 effectiveId = m_activationId;
                 started = false;
                 return true;
@@ -370,7 +399,14 @@ private:
         m_uiState = UiState::Starting;
         m_activationId = effectiveId;
         ResetEvent(m_firstFrame);
+        if (!m_splash.show(effectiveId)) {
+            error = "cannot show splash window";
+            m_splash.hideImmediately(effectiveId);
+            m_uiState = UiState::Failed;
+            return false;
+        }
         if (!launchUi(effectiveId, error)) {
+            m_splash.hideImmediately(effectiveId);
             m_uiState = UiState::Failed;
             return false;
         }
@@ -610,6 +646,9 @@ private:
                     std::cerr << "stale UiFirstFrame generation\n";
                     return;
                 }
+                std::cout << "SHELL_UI_FIRST_FRAME activation="
+                          << message.header.correlationId << '\n';
+                m_splash.dismiss(message.header.correlationId);
                 return;
             }
         }
@@ -617,6 +656,7 @@ private:
 
     void cleanup()
     {
+        m_splash.hideImmediately();
         if (m_listener)
             m_listener->stop();
         for (const auto &slot : m_connections) {
@@ -642,6 +682,29 @@ private:
         m_job = nullptr;
     }
 
+    void onSplashState(
+        std::uint64_t token, SplashWindow::State state)
+    {
+        switch (state) {
+        case SplashWindow::State::Shown:
+            m_splashVisible.store(true);
+            m_splashShownRounds.fetch_add(1);
+            std::cout << "SHELL_SPLASH_SHOWN activation=" << token
+                      << '\n';
+            break;
+        case SplashWindow::State::Hidden:
+            m_splashVisible.store(false);
+            m_splashHiddenRounds.fetch_add(1);
+            std::cout << "SHELL_SPLASH_HIDDEN activation=" << token
+                      << '\n';
+            break;
+        case SplashWindow::State::Failed:
+            m_splashFailed.store(true);
+            std::cerr << "Splash initialization failed\n";
+            break;
+        }
+    }
+
     Options m_options;
     std::optional<std::string> m_nonce;
     HANDLE m_mutex = nullptr;
@@ -661,8 +724,16 @@ private:
     std::uint64_t m_activationId = 0;
     std::uint64_t m_nextActivationId = 0;
     std::atomic_uint32_t m_firstFrameRounds = 0;
+    std::atomic_uint32_t m_splashShownRounds = 0;
+    std::atomic_uint32_t m_splashHiddenRounds = 0;
+    std::atomic_bool m_splashVisible = false;
+    std::atomic_bool m_splashFailed = false;
     std::chrono::steady_clock::time_point m_uiStartedAt{};
     std::mutex m_uiMutex;
+
+    // Declared last so its worker thread is stopped and joined before the
+    // counters and mutex used by its state callback are destroyed.
+    SplashWindow m_splash;
 };
 
 } // namespace

@@ -55,8 +55,19 @@ target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
 # 三个进程骨架。现在只验证身份、握手、Shell 拉起 UI 和控制管道；
 # 当前骨架已经覆盖 ControlPipe、PlaybackPipe、身份授权和 SessionSnapshot；
 # 真正的协议、QML 和托盘会在后续阶段替换这些 skeleton 入口。
-add_executable(MCast.Shell src/shell/ShellMain.cpp)
-target_link_libraries(MCast.Shell PRIVATE mcast_ipc)
+add_executable(
+    MCast.Shell
+    src/shell/ShellMain.cpp
+    src/platform/windows/SplashWindow.h
+    src/platform/windows/SplashWindow.cpp
+    res/MCast.Shell.rc)
+target_include_directories(
+    MCast.Shell PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(MCast.Shell PRIVATE /utf-8)
+target_link_libraries(
+    MCast.Shell PRIVATE
+    mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib
+    windowscodecs.lib advapi32.lib ole32.lib)
 
 add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
 target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
@@ -319,7 +330,7 @@ qt_add_executable(MCast.Ui
     src/platform/windows/SystemAccentColors.cpp
     src/platform/windows/SplashWindow.h
     src/platform/windows/SplashWindow.cpp
-    res/MCast.rc
+    res/MCast.Ui.rc
     res/MCast.qrc
     res/QmlUi.qrc
     res/Lang.qrc
