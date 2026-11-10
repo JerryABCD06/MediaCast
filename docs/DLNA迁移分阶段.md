@@ -93,6 +93,10 @@ Protocol 侧 `PlaybackPipeGateway` 已支持首快照门控、pending 命令超�
 重复/未知结果去重、generation/stateVersion 去重、断线拒绝 pending 命令，
 以及 listener 析构等待；Ui 侧 PlaybackController bridge 尚待接入。
 
+Ui 侧 `PlaybackBridge` 已接入真实 `PlaybackController`：activation ID 作为
+generation，命令在 Qt 主线程执行，Pipe 写入由独立 writer 线程完成；完整
+current/next 请求和 playerLost/本地 endSession 均会同步到协议快照。
+
 ### 5. Win32 网络运行层
 
 建立 `mcast_dlna_net`：

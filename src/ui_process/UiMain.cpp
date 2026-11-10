@@ -12,6 +12,7 @@
 #include "ui/DeviceInfo.h"
 #include "ui/MainWindow.h"
 #include "ui/UiState.h"
+#include "ui_process/PlaybackBridge.h"
 #include "ui_process/UiSession.h"
 
 #include <QApplication>
@@ -107,6 +108,19 @@ int main(int argc, char *argv[])
         writeLog(QStringLiteral("IPC 连接失败：%1")
                      .arg(QString::fromStdString(uiSessionError)));
         return 4;
+    }
+    std::unique_ptr<mcast::ui_process::PlaybackBridge> playbackBridge;
+    if (auto playbackConnection = uiSession.takePlaybackConnection()) {
+        playbackBridge = std::make_unique<mcast::ui_process::PlaybackBridge>(
+            std::shared_ptr<mcast::ipc::PipeConnection>(
+                std::move(playbackConnection)),
+            playback, uiSessionOptions.activationId);
+        QObject::connect(
+            playbackBridge.get(),
+            &mcast::ui_process::PlaybackBridge::logMessage,
+            &mainWindow, [&writeLog](const QString &text) {
+                writeLog(QStringLiteral("Playback IPC  %1").arg(text));
+            });
     }
     QObject::connect(
         &mainWindow, &MainWindow::firstFrameReady, &app, [&] {

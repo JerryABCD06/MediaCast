@@ -407,6 +407,14 @@ bool protocolPlaybackServer(
         return false;
 
     std::cout << "PLAYBACK_SNAPSHOT_SERVED\n";
+    // Keep the PlaybackPipe alive for the Ui lifetime. The current skeleton
+    // does not consume the new playback command/state stream yet, but must not
+    // tear the connection down immediately after the legacy snapshot.
+    while (true) {
+        Message trailing;
+        if (!connection->readMessage(trailing, 24h, error))
+            break;
+    }
     return true;
 }
 

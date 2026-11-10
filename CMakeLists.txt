@@ -114,6 +114,31 @@ if(BUILD_TESTING)
         COMMAND mcast_playback_pipe_gateway_tests)
 
     add_executable(
+        mcast_playback_bridge_tests
+        tests/playback_bridge_tests.cpp
+        src/ui_process/PlaybackBridge.cpp
+        src/ui_process/PlaybackBridge.h
+        src/core/PlaybackController.cpp
+        src/core/PlaybackController.h
+        src/core/MediaPlayer.h
+        src/core/NowPlaying.cpp
+        src/core/NowPlaying.h)
+    target_include_directories(
+        mcast_playback_bridge_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_playback_bridge_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_playback_bridge_tests PRIVATE mcast_ipc Qt6::Core)
+    set_target_properties(
+        mcast_playback_bridge_tests PROPERTIES AUTOMOC TRUE)
+    add_test(
+        NAME mcast_playback_bridge_tests
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
+            -Executable "$<TARGET_FILE:mcast_playback_bridge_tests>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(
         mcast_shell_settings_tests
         tests/shell_settings_tests.cpp
         src/shell/ShellSettings.cpp)
@@ -432,6 +457,8 @@ set_target_properties(MCast PROPERTIES
 # 它由生产 Shell 启动；无 Qt 的 MCast.UiSkeleton 只用于进程监督自动测试。
 qt_add_executable(MCast.Ui
     src/ui_process/UiMain.cpp
+    src/ui_process/PlaybackBridge.h
+    src/ui_process/PlaybackBridge.cpp
     src/ui_process/UiSession.h
     src/ui_process/UiSession.cpp
     src/core/AppSettings.h

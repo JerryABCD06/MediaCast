@@ -30,8 +30,10 @@ public:
 
     bool connectToPeers(const Options &options, std::string &error);
     bool sendFirstFrame(std::string &error);
+    std::unique_ptr<mcast::ipc::PipeConnection> takePlaybackConnection();
 
 private:
     Options m_options;
     std::unique_ptr<mcast::ipc::PipeConnection> m_control;
+    std::unique_ptr<mcast::ipc::PipeConnection> m_playback;
 };

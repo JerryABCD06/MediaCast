@@ -108,6 +108,7 @@ std::optional<std::uint64_t> parseUnsignedDecimal(const std::string &value)
 
 bool connectPlayback(
     const UiSession::Options &options, const PeerIdentityGrant &protocol,
+    std::unique_ptr<PipeConnection> &playback,
     std::string &error)
 {
     auto connection = PipeClient::connect(
@@ -156,6 +157,7 @@ bool connectPlayback(
             error = "invalid SessionSnapshot";
         return false;
     }
+    playback = std::move(connection);
     return true;
 }
 
@@ -263,7 +265,14 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
         error = "invalid Protocol identity grant";
         return false;
     }
-    return connectPlayback(options, *protocolGrant, error);
+    return connectPlayback(
+        options, *protocolGrant, m_playback, error);
+}
+
+std::unique_ptr<mcast::ipc::PipeConnection>
+UiSession::takePlaybackConnection()
+{
+    return std::move(m_playback);
 }
 
 bool UiSession::sendFirstFrame(std::string &error)
