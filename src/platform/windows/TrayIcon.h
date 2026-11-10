@@ -25,6 +25,7 @@ public:
     void setChinese(bool chinese);
     void setReceivingEnabled(bool enabled);
     void pumpMessages();
+    HWND window() const noexcept { return m_window; }
 
 private:
     static LRESULT CALLBACK windowProcedure(

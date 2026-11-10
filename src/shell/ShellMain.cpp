@@ -10,6 +10,7 @@
 
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
+#include "platform/windows/CastConfirmationDialog.h"
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/TrayIcon.h"
 #include "shell/ShellSettings.h"
@@ -25,6 +26,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -108,6 +110,28 @@ std::wstring widen(const std::string &value)
     MultiByteToWideChar(
         CP_UTF8, 0, value.c_str(), -1, result.data(), size);
     return result;
+}
+
+std::wstring protocolDisplayName(
+    mcast::cast::ProtocolKind protocol, bool chinese)
+{
+    switch (protocol) {
+    case mcast::cast::ProtocolKind::Dlna:
+        return L"DLNA";
+    case mcast::cast::ProtocolKind::GoogleCast:
+        return L"Google Cast";
+    case mcast::cast::ProtocolKind::AirPlay:
+        return L"AirPlay";
+    case mcast::cast::ProtocolKind::Miracast:
+        return L"Miracast";
+    case mcast::cast::ProtocolKind::LeLink:
+        return L"LeLink";
+    case mcast::cast::ProtocolKind::Vendor:
+        return chinese ? L"厂商协议" : L"Vendor protocol";
+    case mcast::cast::ProtocolKind::None:
+        break;
+    }
+    return chinese ? L"未知协议" : L"Unknown protocol";
 }
 
 bool safeInstanceId(const std::string &value)
@@ -510,6 +534,7 @@ public:
             std::cerr << "Settings load failed: " << settingsError << '\n';
         }
         m_receivingEnabled = m_settings->acceptNewCast();
+        m_chineseUi = m_settings->chineseUi();
 
         m_nonce = mcast::supervisor::randomHexToken(16);
         if (!m_nonce) {
@@ -537,6 +562,11 @@ public:
         m_firstFrame = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!m_firstFrame) {
             error = "CreateEventW failed";
+            return false;
+        }
+        m_confirmationCancel = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!m_confirmationCancel) {
+            error = "CreateEventW(confirmation) failed";
             return false;
         }
 
@@ -568,7 +598,7 @@ public:
                                   << error << '\n';
                 },
                 [this] { toggleReceiving(); },
-                [this] { m_quitRequested.store(true); });
+                [this] { requestQuit(); });
             m_tray->setChinese(m_settings->chineseUi());
             m_tray->setReceivingEnabled(m_receivingEnabled);
             if (!m_tray->initialize(error))
@@ -593,6 +623,7 @@ public:
                 m_tray->pumpMessages();
             if (m_quitRequested.load())
                 return 0;
+            processCastConfirmations();
             const auto now = std::chrono::steady_clock::now();
             if (!receivingStateSynchronized
                 && now - startedAt > 250ms
@@ -727,6 +758,38 @@ private:
         std::shared_ptr<std::atomic_bool> done;
     };
 
+    struct ConfirmationWaiter {
+        std::mutex mutex;
+        std::condition_variable readyCondition;
+        std::chrono::steady_clock::time_point deadline{};
+        std::uint64_t generation = 0;
+        bool ready = false;
+        bool accepted = false;
+        bool abandoned = false;
+    };
+
+    struct ConfirmationJob {
+        std::shared_ptr<ConfirmationWaiter> waiter;
+        mcast::ipc::CastConfirmationRequestInfo request;
+        std::uint64_t requestMessageId = 0;
+        std::uint64_t generation = 0;
+        std::chrono::steady_clock::time_point deadline{};
+    };
+
+    struct ConfirmationCacheEntry {
+        std::uint64_t requestMessageId = 0;
+        std::uint64_t generation = 0;
+        mcast::cast::ProtocolKind protocol = mcast::cast::ProtocolKind::None;
+        std::uint64_t claimId = 0;
+        bool accepted = false;
+    };
+
+    struct ConfirmationCacheLookup {
+        bool found = false;
+        bool conflict = false;
+        bool accepted = false;
+    };
+
     struct ProtocolConnectionGuard {
         ProtocolConnectionGuard(
             ShellRuntime *runtime,
@@ -781,7 +844,7 @@ private:
         }
     }
 
-    void registerProtocolConnection(
+    std::uint64_t registerProtocolConnection(
         const std::shared_ptr<mcast::ipc::PipeConnection> &connection)
     {
         {
@@ -789,20 +852,61 @@ private:
             m_protocolConnection = connection;
             m_protocolAcceptsUiOpen = false;
         }
+        const std::uint64_t generation =
+            invalidateCastConfirmations(true);
         m_protocolReady.notify_all();
+        return generation;
     }
 
     void clearProtocolConnection(
         const std::shared_ptr<mcast::ipc::PipeConnection> &connection)
     {
+        bool wasCurrent = false;
         {
             std::scoped_lock lock(m_protocolMutex);
             if (m_protocolConnection == connection) {
                 m_protocolConnection.reset();
                 m_protocolAcceptsUiOpen = false;
+                wasCurrent = true;
             }
         }
+        if (wasCurrent)
+            (void)invalidateCastConfirmations(true);
         m_protocolReady.notify_all();
+    }
+
+    std::uint64_t invalidateCastConfirmations(bool cancelActive)
+    {
+        std::uint64_t generation = 0;
+        {
+            std::scoped_lock lock(m_confirmationMutex);
+            generation = ++m_confirmationGeneration;
+            for (const auto &job : m_confirmationQueue) {
+                {
+                    std::scoped_lock waiterLock(job.waiter->mutex);
+                    job.waiter->accepted = false;
+                    job.waiter->ready = true;
+                }
+                job.waiter->readyCondition.notify_all();
+            }
+            m_confirmationQueue.clear();
+            if (m_currentConfirmationWaiter) {
+                {
+                    std::scoped_lock waiterLock(
+                        m_currentConfirmationWaiter->mutex);
+                    m_currentConfirmationWaiter->accepted = false;
+                    m_currentConfirmationWaiter->ready = true;
+                }
+                m_currentConfirmationWaiter->readyCondition.notify_all();
+                m_currentConfirmationWaiter.reset();
+            }
+            m_recentConfirmationDecisions.clear();
+        }
+        if (cancelActive && m_confirmationActive.load()
+            && m_confirmationCancel) {
+            SetEvent(m_confirmationCancel);
+        }
+        return generation;
     }
 
     void markProtocolReadyForUiOpen()
@@ -847,6 +951,199 @@ private:
         return true;
     }
 
+    std::optional<bool> requestCastConfirmation(
+        mcast::ipc::CastConfirmationRequestInfo request,
+        std::uint64_t requestMessageId, std::uint64_t generation)
+    {
+        if (m_shuttingDown.load())
+            return std::nullopt;
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(request.remainingTimeoutMs);
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        auto waiter = std::make_shared<ConfirmationWaiter>();
+        waiter->deadline = deadline;
+        waiter->generation = generation;
+        {
+            std::scoped_lock lock(m_confirmationMutex);
+            if (generation != m_confirmationGeneration)
+                return std::nullopt;
+            m_confirmationQueue.push_back(
+                {waiter, std::move(request), requestMessageId,
+                 generation, deadline});
+        }
+
+        std::unique_lock lock(waiter->mutex);
+        if (!waiter->readyCondition.wait_until(
+                lock, deadline, [&] {
+                    return waiter->ready || m_shuttingDown.load();
+                })) {
+            waiter->abandoned = true;
+            return false;
+        }
+        if (!waiter->ready)
+            return std::nullopt;
+        const bool accepted = waiter->accepted;
+        lock.unlock();
+        {
+            std::scoped_lock confirmationLock(m_confirmationMutex);
+            if (generation != m_confirmationGeneration)
+                return std::nullopt;
+        }
+        return accepted;
+    }
+
+    void processCastConfirmations()
+    {
+        while (!m_shuttingDown.load()) {
+            std::optional<ConfirmationJob> job;
+            {
+                std::scoped_lock lock(m_confirmationMutex);
+                if (m_confirmationQueue.empty())
+                    return;
+                job = std::move(m_confirmationQueue.front());
+                m_confirmationQueue.pop_front();
+                if (job->generation != m_confirmationGeneration) {
+                    {
+                        std::scoped_lock waiterLock(job->waiter->mutex);
+                        job->waiter->accepted = false;
+                        job->waiter->ready = true;
+                    }
+                    job->waiter->readyCondition.notify_all();
+                    continue;
+                }
+                m_currentConfirmationWaiter = job->waiter;
+            }
+
+            bool abandoned = false;
+            {
+                std::scoped_lock lock(job->waiter->mutex);
+                abandoned = job->waiter->abandoned;
+            }
+            if (abandoned) {
+                std::scoped_lock confirmationLock(m_confirmationMutex);
+                if (m_currentConfirmationWaiter == job->waiter)
+                    m_currentConfirmationWaiter.reset();
+                continue;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= job->deadline) {
+                {
+                    std::scoped_lock lock(job->waiter->mutex);
+                    job->waiter->accepted = false;
+                    job->waiter->ready = true;
+                }
+                job->waiter->readyCondition.notify_all();
+                std::scoped_lock confirmationLock(m_confirmationMutex);
+                if (m_currentConfirmationWaiter == job->waiter)
+                    m_currentConfirmationWaiter.reset();
+                continue;
+            }
+
+            mcast::platform::CastConfirmationPrompt prompt;
+            prompt.protocolName = protocolDisplayName(
+                job->request.protocol, m_chineseUi);
+            prompt.peerName = widen(
+                job->request.peerDisplayName.empty()
+                    ? job->request.peerId
+                    : job->request.peerDisplayName);
+            prompt.mediaTitle = widen(job->request.mediaTitle);
+            prompt.timeout = std::chrono::duration_cast<
+                std::chrono::milliseconds>(job->deadline - now);
+            prompt.cancelEvent = m_confirmationCancel;
+            prompt.chinese = m_chineseUi;
+            ResetEvent(m_confirmationCancel);
+            m_confirmationActive.store(true);
+            {
+                std::scoped_lock confirmationLock(m_confirmationMutex);
+                if (job->generation != m_confirmationGeneration
+                    || m_currentConfirmationWaiter != job->waiter) {
+                    m_confirmationActive.store(false);
+                    std::scoped_lock waiterLock(job->waiter->mutex);
+                    job->waiter->accepted = false;
+                    job->waiter->ready = true;
+                    job->waiter->readyCondition.notify_all();
+                    continue;
+                }
+                if (m_quitRequested.load())
+                    SetEvent(m_confirmationCancel);
+            }
+            const auto choice =
+                mcast::platform::showCastConfirmationDialog(
+                    m_tray ? m_tray->window() : nullptr, prompt);
+            m_confirmationActive.store(false);
+            if (choice
+                == mcast::platform::CastConfirmationChoice::Failed) {
+                std::cerr
+                    << "cast confirmation dialog failed; rejecting request\n";
+            }
+            {
+                std::scoped_lock lock(job->waiter->mutex);
+                job->waiter->accepted =
+                    choice
+                    == mcast::platform::CastConfirmationChoice::Accepted;
+                job->waiter->ready = true;
+            }
+            {
+                std::scoped_lock confirmationLock(m_confirmationMutex);
+                if (m_currentConfirmationWaiter == job->waiter)
+                    m_currentConfirmationWaiter.reset();
+            }
+            job->waiter->readyCondition.notify_all();
+        }
+    }
+
+    void cancelCastConfirmations()
+    {
+        m_shuttingDown.store(true);
+        std::scoped_lock lock(m_confirmationMutex);
+        for (const auto &job : m_confirmationQueue)
+            job.waiter->readyCondition.notify_all();
+    }
+
+    ConfirmationCacheLookup lookupConfirmationDecision(
+        std::uint64_t requestMessageId,
+        mcast::cast::ProtocolKind protocol, std::uint64_t claimId,
+        std::uint64_t generation)
+    {
+        std::scoped_lock lock(m_confirmationMutex);
+        const auto it = std::find_if(
+            m_recentConfirmationDecisions.begin(),
+            m_recentConfirmationDecisions.end(),
+            [&](const auto &entry) {
+                return entry.requestMessageId == requestMessageId
+                    && entry.generation == generation;
+            });
+        if (it == m_recentConfirmationDecisions.end())
+            return {};
+        if (it->protocol != protocol || it->claimId != claimId)
+            return {false, true, false};
+        return {true, false, it->accepted};
+    }
+
+    bool rememberConfirmationDecision(
+        std::uint64_t requestMessageId, mcast::cast::ProtocolKind protocol,
+        std::uint64_t claimId, bool accepted, std::uint64_t generation)
+    {
+        std::scoped_lock lock(m_confirmationMutex);
+        if (generation != m_confirmationGeneration)
+            return false;
+        constexpr std::size_t maxRecent = 32;
+        if (m_recentConfirmationDecisions.size() >= maxRecent)
+            m_recentConfirmationDecisions.pop_front();
+        m_recentConfirmationDecisions.push_back(
+            {requestMessageId, generation, protocol, claimId, accepted});
+        return true;
+    }
+
+    std::uint64_t nextMessageId() noexcept
+    {
+        std::uint64_t id = m_nextMessageId.fetch_add(1);
+        if (id == 0)
+            id = m_nextMessageId.fetch_add(1);
+        return id;
+    }
+
     std::optional<std::uint32_t> liveUiProcessId()
     {
         std::scoped_lock lock(m_uiMutex);
@@ -875,6 +1172,13 @@ private:
         bringProcessWindowToFront(*startedUi);
         error.clear();
         return true;
+    }
+
+    void requestQuit()
+    {
+        m_quitRequested.store(true);
+        if (m_confirmationCancel)
+            SetEvent(m_confirmationCancel);
     }
 
     void toggleReceiving()
@@ -1321,8 +1625,10 @@ private:
         }
 
         std::unique_ptr<ProtocolConnectionGuard> protocolGuard;
+        std::uint64_t confirmationGeneration = 0;
         if (helloMessage.header.source == ProcessRole::Protocol) {
-            registerProtocolConnection(connection);
+            confirmationGeneration =
+                registerProtocolConnection(connection);
             protocolGuard = std::make_unique<ProtocolConnectionGuard>(
                 this, connection);
         }
@@ -1405,6 +1711,64 @@ private:
                     std::cerr << "UI grant send: " << error << '\n';
                     return;
                 }
+            } else if (message.header.type
+                           == MessageType::CastConfirmationRequest
+                       && helloMessage.header.source
+                           == ProcessRole::Protocol) {
+                const auto request =
+                    mcast::ipc::decodeCastConfirmationRequestMessage(
+                        message, error);
+                if (!request) {
+                    std::cerr << "cast confirmation request: "
+                              << error << '\n';
+                    return;
+                }
+
+                const auto cached = lookupConfirmationDecision(
+                    message.header.messageId, request->protocol,
+                    request->claimId, confirmationGeneration);
+                if (cached.conflict) {
+                    std::cerr << "cast confirmation message ID reused "
+                                 "with a different claim\n";
+                    return;
+                }
+                bool accepted = false;
+                if (cached.found) {
+                    accepted = cached.accepted;
+                } else {
+                    const auto decisionResult = requestCastConfirmation(
+                        *request, message.header.messageId,
+                        confirmationGeneration);
+                    if (!decisionResult)
+                        return;
+                    accepted = *decisionResult;
+                    rememberConfirmationDecision(
+                        message.header.messageId, request->protocol,
+                        request->claimId, accepted,
+                        confirmationGeneration);
+                }
+                const mcast::ipc::CastConfirmationDecisionInfo decision{
+                    request->protocol,
+                    request->claimId,
+                    accepted,
+                };
+                const auto decisionMessage =
+                    mcast::ipc::makeCastConfirmationDecisionMessage(
+                        nextMessageId(), message.header.messageId,
+                        decision, error);
+                if (!decisionMessage
+                    || !connection->writeMessage(
+                        *decisionMessage, 2000ms, error)) {
+                    std::cerr << "cast confirmation decision: "
+                              << error << '\n';
+                    return;
+                }
+                std::cout << "SHELL_CAST_CONFIRMATION claim="
+                          << request->claimId
+                          << " protocol="
+                          << static_cast<int>(request->protocol)
+                          << " accepted=" << accepted
+                          << '\n';
             } else if (message.header.type == MessageType::UiFirstFrame
                        && helloMessage.header.source == ProcessRole::Ui) {
                 bool accepted = false;
@@ -1431,9 +1795,10 @@ private:
 
     void cleanup()
     {
-        m_tray.reset();
-        m_settings.reset();
         m_splash.hideImmediately();
+        if (m_listener)
+            m_listener->stop();
+        cancelCastConfirmations();
         if (m_commandThread.joinable()) {
             m_commandThread.request_stop();
             if (m_commandListener)
@@ -1441,8 +1806,6 @@ private:
             m_commandThread.join();
         }
         m_commandListener.reset();
-        if (m_listener)
-            m_listener->stop();
         {
             std::scoped_lock lock(m_recordsMutex);
             for (const auto &record : m_records) {
@@ -1457,13 +1820,18 @@ private:
         }
         m_connections.clear();
         m_listener.reset();
+        m_tray.reset();
+        m_settings.reset();
         if (m_firstFrame)
             CloseHandle(m_firstFrame);
+        if (m_confirmationCancel)
+            CloseHandle(m_confirmationCancel);
         if (m_mutex)
             CloseHandle(m_mutex);
         if (m_job)
             CloseHandle(m_job);
         m_firstFrame = nullptr;
+        m_confirmationCancel = nullptr;
         m_mutex = nullptr;
         m_job = nullptr;
     }
@@ -1496,6 +1864,7 @@ private:
     HANDLE m_mutex = nullptr;
     HANDLE m_job = nullptr;
     HANDLE m_firstFrame = nullptr;
+    HANDLE m_confirmationCancel = nullptr;
     std::unique_ptr<mcast::ipc::PipeListener> m_listener;
     std::unique_ptr<mcast::ipc::PipeListener> m_commandListener;
     std::jthread m_commandThread;
@@ -1506,6 +1875,12 @@ private:
     bool m_protocolAcceptsUiOpen = false;
     std::mutex m_protocolMutex;
     std::condition_variable m_protocolReady;
+    std::deque<ConfirmationJob> m_confirmationQueue;
+    std::deque<ConfirmationCacheEntry>
+        m_recentConfirmationDecisions;
+    std::shared_ptr<ConfirmationWaiter> m_currentConfirmationWaiter;
+    std::uint64_t m_confirmationGeneration = 0;
+    std::mutex m_confirmationMutex;
     enum class UiState {
         None,
         Starting,
@@ -1527,6 +1902,10 @@ private:
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
     std::unique_ptr<mcast::shell::ShellSettings> m_settings;
     bool m_receivingEnabled = true;
+    bool m_chineseUi = false;
+    std::atomic_uint64_t m_nextMessageId{100};
+    std::atomic_bool m_confirmationActive = false;
+    std::atomic_bool m_shuttingDown = false;
     std::atomic_bool m_quitRequested = false;
 
     // Declared last so its worker thread is stopped and joined before the

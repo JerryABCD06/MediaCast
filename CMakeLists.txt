@@ -124,15 +124,22 @@ add_executable(
     src/shell/ShellMain.cpp
     src/platform/windows/TrayIcon.h
     src/platform/windows/TrayIcon.cpp
+    src/platform/windows/CastConfirmationDialog.h
+    src/platform/windows/CastConfirmationDialog.cpp
     src/platform/windows/SplashWindow.h
     src/platform/windows/SplashWindow.cpp
     res/MCast.Shell.rc)
 target_include_directories(
     MCast.Shell PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(MCast.Shell PRIVATE /utf-8)
+set(MCAST_COMMON_CONTROLS_MANIFEST
+    "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'")
+target_link_options(
+    MCast.Shell PRIVATE
+    ${MCAST_COMMON_CONTROLS_MANIFEST})
 target_link_libraries(
     MCast.Shell PRIVATE
-    mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib
+    mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib comctl32.lib
     windowscodecs.lib advapi32.lib ole32.lib shell32.lib windowsapp.lib)
 set_target_properties(MCast.Shell PROPERTIES WIN32_EXECUTABLE TRUE)
 
@@ -168,6 +175,22 @@ if(BUILD_TESTING)
         NAME mcast_cast_arbiter_tests
         COMMAND mcast_cast_arbiter_tests)
     set_tests_properties(mcast_cast_arbiter_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_cast_confirmation_dialog_smoke
+        tests/cast_confirmation_dialog_smoke.cpp
+        src/platform/windows/CastConfirmationDialog.h
+        src/platform/windows/CastConfirmationDialog.cpp)
+    target_include_directories(
+        mcast_cast_confirmation_dialog_smoke PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(
+        mcast_cast_confirmation_dialog_smoke PRIVATE /utf-8)
+    target_link_options(
+        mcast_cast_confirmation_dialog_smoke PRIVATE
+        ${MCAST_COMMON_CONTROLS_MANIFEST})
+    target_link_libraries(
+        mcast_cast_confirmation_dialog_smoke PRIVATE comctl32.lib)
 
     add_executable(
         mcast_playback_codec_tests
