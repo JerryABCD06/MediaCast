@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
+
+#pragma once
+
+#include "ipc/IpcProtocol.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace mcast::ipc {
+
+enum class FieldId : std::uint16_t {
+    HelloProcessId = 1,
+    HelloBuildId = 2,
+    HelloInstanceNonce = 3,
+    HelloExecutableHash = 4,
+    HelloCapabilities = 5,
+    HelloAckAccepted = 32,
+    HelloAckVersionMajor = 33,
+    HelloAckVersionMinor = 34,
+    HelloAckInstanceNonce = 35,
+    HelloAckCapabilities = 36,
+    HelloAckReason = 37,
+    ErrorCode = 16,
+    ErrorText = 17,
+};
+
+struct HelloInfo {
+    std::uint32_t processId = 0;
+    std::string buildId;
+    std::string instanceNonce;
+    std::string executableHash;
+    std::uint64_t capabilities = 0;
+};
+
+struct HelloAckInfo {
+    bool accepted = false;
+    std::uint16_t versionMajor = kProtocolVersionMajor;
+    std::uint16_t versionMinor = kProtocolVersionMinor;
+    std::string instanceNonce;
+    std::uint64_t capabilities = 0;
+    std::string reason;
+};
+
+enum class ConnectionChannel {
+    Control,
+    Playback,
+};
+
+struct HelloExpectation {
+    std::uint32_t peerProcessId = 0;
+    std::string buildId;
+    std::string instanceNonce;
+    std::string executableHash;
+    std::uint64_t allowedCapabilities = 0;
+};
+
+std::optional<std::vector<std::uint8_t>>
+encodeHelloPayload(const HelloInfo &hello, std::string &error);
+
+std::optional<HelloInfo>
+decodeHelloPayload(std::span<const std::uint8_t> payload, std::string &error);
+
+std::optional<Message> makeHelloMessage(
+    ConnectionChannel channel, ProcessRole source, ProcessRole destination,
+    std::uint64_t messageId, const HelloInfo &hello, std::string &error);
+
+std::optional<HelloInfo>
+decodeHelloMessage(
+    const Message &message, ConnectionChannel channel, std::string &error);
+
+bool validateHello(
+    const HelloInfo &hello, const HelloExpectation &expectation,
+    std::string &error);
+
+std::optional<std::vector<std::uint8_t>>
+encodeHelloAckPayload(const HelloAckInfo &ack, std::string &error);
+
+std::optional<HelloAckInfo>
+decodeHelloAckPayload(std::span<const std::uint8_t> payload, std::string &error);
+
+std::optional<Message> makeHelloAckMessage(
+    ConnectionChannel channel, ProcessRole source, ProcessRole destination,
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const HelloAckInfo &ack, std::string &error);
+
+std::optional<HelloAckInfo>
+decodeHelloAckMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    ConnectionChannel channel, std::string &error);
+
+bool validateMessageDirection(
+    ConnectionChannel channel, const MessageHeader &header,
+    std::string &error);
+
+} // namespace mcast::ipc

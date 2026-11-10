@@ -8,12 +8,40 @@ cmake_minimum_required(VERSION 3.21)
 # 缺了它，媒体面板只能显示可执行文件的路径。
 project(MediaCastReceiver LANGUAGES CXX RC)
 
+include(CTest)
+
 # 用 C++20 而不是 C++17，是被 C++/WinRT 逼的：它的 base.h 在 C++17 模式下会去
 # 包含 <experimental/coroutine>，而 MSVC 14.51 已经把那个实验性的头文件判成编译
 # 错误了（提示"即将移除"）。我们自己的代码没有任何必须留在 C++17 的写法，
 # 整体提上去不影响别的文件 —— 整个工程已经用 C++20 完整编过一遍。
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── 跨进程基础设施 ──────────────────────────────────────────────────────
+#
+# A（协议）/ B（前端）/ C（Shell）后续会共用这一层。它刻意不链接 Qt：
+# 消息布局、长度约束和管道行为都必须能脱离 Qt/QML 单独测试。
+add_library(mcast_ipc STATIC
+    src/ipc/IpcProtocol.h
+    src/ipc/IpcProtocol.cpp
+    src/ipc/NamedPipe.h
+    src/ipc/NamedPipe.cpp
+    src/ipc/Messages.h
+    src/ipc/Messages.cpp
+    src/supervisor/RestartController.h
+    src/supervisor/RestartController.cpp
+)
+target_compile_features(mcast_ipc PUBLIC cxx_std_20)
+target_compile_options(mcast_ipc PUBLIC /utf-8)
+target_include_directories(mcast_ipc PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(mcast_ipc PUBLIC advapi32.lib)
+
+if(BUILD_TESTING)
+    add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
+    target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
+    add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
+    set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+endif()
 
 # Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。
 # Quick + QuickControls2 是给新界面（QML）用的，和旧的 Widgets 界面并存。
