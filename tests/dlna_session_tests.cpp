@@ -4,9 +4,12 @@
 #include "playback/FakePlaybackGateway.h"
 #include "protocols/dlna/session/DlnaSession.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <thread>
 
 using namespace mcast::dlna;
 using namespace mcast::playback;
@@ -21,10 +24,387 @@ void check(bool condition, const char *message)
     }
 }
 
+class SnapshotBlockingGateway final : public PlaybackGateway
+{
+public:
+    explicit SnapshotBlockingGateway(FakePlaybackGateway &inner)
+        : m_inner(inner)
+    {
+    }
+
+    PlaybackSnapshot snapshot() const override
+    {
+        if (m_blockNextSnapshot.exchange(false)) {
+            m_snapshotEntered = true;
+            while (!m_releaseSnapshot.load())
+                std::this_thread::yield();
+        }
+        return m_inner.snapshot();
+    }
+
+    PlaybackCommandSubmission submit(
+        const PlaybackCommand &command) override
+    {
+        if (command.type == PlaybackCommandType::EndSession
+            && m_failNextEnd.exchange(false)) {
+            const auto snapshot = m_inner.snapshot();
+            return {false, PlaybackSubmissionStatus::InvalidCommand, 0,
+                    snapshot.generation, "injected EndSession failure",
+                    snapshot.stateVersion};
+        }
+        return m_inner.submit(command);
+    }
+
+    std::uint64_t addEventListener(
+        std::function<void(const PlaybackEvent &)> listener) override
+    {
+        return m_inner.addEventListener(std::move(listener));
+    }
+
+    void removeEventListener(std::uint64_t listenerId) override
+    {
+        m_inner.removeEventListener(listenerId);
+    }
+
+    void blockNextSnapshot()
+    {
+        m_snapshotEntered = false;
+        m_releaseSnapshot = false;
+        m_blockNextSnapshot = true;
+    }
+
+    bool snapshotEntered() const { return m_snapshotEntered.load(); }
+    void releaseSnapshot() { m_releaseSnapshot = true; }
+    void failNextEndSubmission() { m_failNextEnd = true; }
+
+private:
+    FakePlaybackGateway &m_inner;
+    mutable std::atomic_bool m_blockNextSnapshot{false};
+    mutable std::atomic_bool m_snapshotEntered{false};
+    mutable std::atomic_bool m_releaseSnapshot{false};
+    mutable std::atomic_bool m_failNextEnd{false};
+};
+
+void testConcurrentSessionAccess()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    PlaybackEvent event;
+    event.kind = PlaybackEventKind::SnapshotChanged;
+    event.snapshot = playback.snapshot();
+
+    std::atomic_bool done{false};
+    std::jthread events([&] {
+        for (int index = 0; index < 10000; ++index)
+            session.handlePlaybackEvent(event);
+        done = true;
+    });
+    while (!done.load()) {
+        static_cast<void>(session.snapshot());
+        static_cast<void>(session.transportTransitionPending());
+        session.peerActivity(SessionTime{1});
+    }
+    events.join();
+    check(session.snapshot().playback.state == PlaybackState::NoMedia,
+          "concurrent session access remains consistent");
+}
+
+void testRejectedQueuedCommand()
+{
+    FakePlaybackGateway playback;
+    int failures = 0;
+    DlnaSession session(playback, {
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        [&](const std::string &) { ++failures; },
+        {},
+    });
+    MediaRequest media;
+    media.uri = "http://example.test/rejected.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "rejection test open queued");
+    playback.processAll();
+    playback.markReady();
+    PlaybackCommand play;
+    play.type = PlaybackCommandType::Play;
+    check(session.submit(play).queued, "rejection test command queued");
+    playback.simulatePlayerLost();
+    playback.processAll();
+    check(failures != 0,
+          "queued command rejection is reported after acceptance");
+}
+
+void testQueuedOpenPause()
+{
+    FakePlaybackGateway playback;
+    bool accepting = false;
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        {},
+        [&](bool enabled) { accepting = enabled; },
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start() && accepting, "queued pause test starts");
+    MediaRequest media;
+    media.uri = "http://example.test/pause-open.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "queued pause test open queued");
+    session.pauseAccepting(SessionTime{1});
+    playback.processAll();
+    check(!accepting && !session.snapshot().accepting
+              && playback.snapshot().state == PlaybackState::NoMedia,
+          "pause waits for a queued Open before closing receiving");
+}
+
+void testCallbacksRunOutsideLock()
+{
+    FakePlaybackGateway playback;
+    std::atomic_bool callbackStarted{false};
+    std::atomic_bool snapshotFinished{false};
+    std::atomic_bool callbackTimedOut{false};
+    DlnaSession session(playback, {
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        [&] {
+            callbackStarted = true;
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!snapshotFinished.load()
+                   && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            if (!snapshotFinished.load())
+                callbackTimedOut = true;
+        },
+        {},
+        {},
+    });
+    std::jthread snapshotThread([&] {
+        while (!callbackStarted.load())
+            std::this_thread::yield();
+        static_cast<void>(session.snapshot());
+        snapshotFinished = true;
+    });
+    PlaybackEvent event;
+    event.kind = PlaybackEventKind::SnapshotChanged;
+    event.snapshot = playback.snapshot();
+    session.handlePlaybackEvent(event);
+    snapshotThread.join();
+    check(!callbackTimedOut.load() && snapshotFinished.load(),
+          "external callback does not run while the session lock is held");
+}
+
+void testOpenDeadlineClearsAfterSuccess()
+{
+    FakePlaybackGateway playback;
+    int failures = 0;
+    DlnaSession session(playback, {
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        [&](const std::string &) { ++failures; },
+        {},
+    });
+    MediaRequest media;
+    media.uri = "http://example.test/deadline.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "deadline test open queued");
+    playback.processAll();
+    playback.markReady();
+    session.tick(SessionTime{20000});
+    check(failures == 0
+              && playback.snapshot().state == PlaybackState::Playing,
+          "successful open clears its deadline");
+}
+
+void testOpenDeadlineClearsOnProgressSnapshot()
+{
+    FakePlaybackGateway playback;
+    int failures = 0;
+    DlnaSession session(playback, {
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        [&](const std::string &) { ++failures; },
+        {},
+    });
+    MediaRequest media;
+    media.uri = "http://example.test/snapshot-first.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "snapshot deadline test open queued");
+    PlaybackEvent event;
+    event.kind = PlaybackEventKind::SnapshotChanged;
+    event.snapshot = playback.snapshot();
+    event.snapshot.state = PlaybackState::Preparing;
+    event.snapshot.playerAvailable = true;
+    ++event.snapshot.stateVersion;
+    session.handlePlaybackEvent(event);
+    session.tick(SessionTime{20000});
+    check(failures == 0,
+          "a progress snapshot clears the open deadline before command ack");
+}
+
+void testPauseCancelsOpenBeforeSubmission()
+{
+    FakePlaybackGateway playback;
+    std::atomic_bool uiEntered{false};
+    std::atomic_bool releaseUi{false};
+    DlnaSession session(playback, {
+        [&] {
+            uiEntered = true;
+            while (!releaseUi.load())
+                std::this_thread::yield();
+        },
+        [] { return true; },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "open submission cancellation test starts");
+    MediaRequest media;
+    media.uri = "http://example.test/cancelled-before-submit.mp4";
+    PlaybackCommandSubmission submission;
+    std::jthread opener([&] {
+        submission = session.openMedia(media, SessionTime{1});
+    });
+    while (!uiEntered.load())
+        std::this_thread::yield();
+    session.pauseAccepting(SessionTime{2});
+    check(session.snapshot().accepting,
+          "pause waits while an open intent is awaiting submission");
+    releaseUi = true;
+    opener.join();
+    check(!submission.queued
+              && submission.status
+                  == PlaybackSubmissionStatus::SessionEnding,
+          "cancelled open intent is rejected after UI activation");
+    playback.processAll();
+    check(playback.snapshot().state == PlaybackState::NoMedia
+              && !session.snapshot().accepting,
+          "cancelled open cannot revive after pause completes");
+}
+
+void testPauseCancelsOpenDuringGatewaySnapshot()
+{
+    FakePlaybackGateway inner;
+    SnapshotBlockingGateway playback(inner);
+    std::atomic_bool pauseDisconnected{false};
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        {},
+        {},
+        [&](bool connected) {
+            if (!connected)
+                pauseDisconnected = true;
+        },
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "gateway snapshot cancellation test starts");
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{0});
+    inner.processAll();
+    check(session.snapshot().peerConnected,
+          "gateway snapshot cancellation test connects peer");
+
+    playback.blockNextSnapshot();
+    MediaRequest media;
+    media.uri = "http://example.test/cancelled-during-snapshot.mp4";
+    PlaybackCommandSubmission opening;
+    std::jthread opener([&] {
+        opening = session.openMedia(media, SessionTime{1});
+    });
+    while (!playback.snapshotEntered())
+        std::this_thread::yield();
+
+    std::jthread pauser([&] {
+        session.pauseAccepting(SessionTime{2});
+    });
+    while (!pauseDisconnected.load())
+        std::this_thread::yield();
+    playback.releaseSnapshot();
+    opener.join();
+    pauser.join();
+    check(!opening.queued
+              && opening.status
+                  == PlaybackSubmissionStatus::SessionEnding,
+          "open is rejected after Pause cancels it around a gateway snapshot");
+    inner.processAll();
+    check(inner.snapshot().state == PlaybackState::NoMedia
+              && !session.snapshot().accepting,
+          "open cannot be submitted after Pause invalidates its token");
+}
+
+void testPauseRetriesRejectedEndAfterQueuedOpen()
+{
+    FakePlaybackGateway inner;
+    SnapshotBlockingGateway playback(inner);
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "EndSession retry test starts");
+    MediaRequest media;
+    media.uri = "http://example.test/end-retry.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "EndSession retry test queues Open");
+    playback.failNextEndSubmission();
+    session.pauseAccepting(SessionTime{1});
+    inner.processAll();
+    check(inner.snapshot().state == PlaybackState::NoMedia
+              && !session.snapshot().accepting,
+          "Pause waits for in-flight Open and retries a rejected EndSession");
+}
+
 } // namespace
 
 int main()
 {
+    testConcurrentSessionAccess();
+    testRejectedQueuedCommand();
+    testQueuedOpenPause();
+    testCallbacksRunOutsideLock();
+    testOpenDeadlineClearsAfterSuccess();
+    testOpenDeadlineClearsOnProgressSnapshot();
+    testPauseCancelsOpenBeforeSubmission();
+    testPauseCancelsOpenDuringGatewaySnapshot();
+    testPauseRetriesRejectedEndAfterQueuedOpen();
     FakePlaybackGateway playback;
     int uiRequests = 0;
     int startCalls = 0;
@@ -64,7 +444,6 @@ int main()
         [&](const std::string &) { ++failedRequests; },
         [](const std::string &) {},
     });
-
     DlnaSessionSnapshot snapshot = session.snapshot();
     check(!snapshot.accepting && !snapshot.running, "initial network state");
     check(!snapshot.peerConnected, "initial peer state");

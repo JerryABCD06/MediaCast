@@ -126,7 +126,19 @@ SOAP 全部经 `DlnaSession -> PlaybackGateway`。
 输入/输出缓冲、连接数与请求/慢读超时、半关闭后继续排空响应，以及可重入
 `stop()` 的安全延迟收尾。请求体默认上限 1 MiB，超限 body 回 413、
 超限/过多 header 回 431；响应按完整序列化大小限制，禁止覆盖 framing
-header 或注入 CR/LF。handler 当前要求非阻塞，SOAP 路由和生产入口尚未接入。
+header 或注入 CR/LF。handler 当前要求非阻塞。
+
+已加入无 Qt `SoapRouter`，覆盖 AVTransport、RenderingControl、
+ConnectionManager 三份 SCPD 的全部动作，并严格校验 service 路径、
+SOAPAction 与 body namespace/action 的一致性、`InstanceID`、枚举和必填
+metadata。XML 使用 Windows XmlLite 解析，禁用 DTD，并限制文档深度和节点数；
+DIDL-Lite 元数据已提取为与 DLNA 协议层绑定的播放项描述。
+
+`DlnaSession` 已用互斥锁保护状态，播放、UI、网络和状态回调全部在解锁态执行；
+普通命令与 `EndSession` 的提交顺序串行化，并通过 command ID、deadline、
+pending Open 和 generation 跟踪处理排队、超时、取消与重连。排队 Open 后的
+Play/Pause，以及 `WaitingForPlayer` 期间的 deferred 调优命令均有回归测试。
+HTTP 到 SOAP router 的生产接线和真实入口切换仍未完成。
 
 ### 7. SSDP
 

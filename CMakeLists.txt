@@ -77,6 +77,22 @@ target_include_directories(
     mcast_dlna_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mcast_dlna_net PUBLIC mcast_net mcast_dlna_core)
 
+add_library(mcast_dlna_protocol STATIC
+    src/protocols/dlna/session/DlnaSession.h
+    src/protocols/dlna/session/DlnaSession.cpp
+    src/protocols/dlna/soap/SoapRouter.h
+    src/protocols/dlna/soap/SoapRouter.cpp
+    src/protocols/dlna/soap/SoapXml.h
+    src/protocols/dlna/soap/SoapXml.cpp)
+target_compile_features(mcast_dlna_protocol PUBLIC cxx_std_20)
+target_compile_options(mcast_dlna_protocol PUBLIC /utf-8)
+target_include_directories(
+    mcast_dlna_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(
+    mcast_dlna_protocol
+    PUBLIC mcast_dlna_net
+    PRIVATE xmllite.lib shlwapi.lib ole32.lib)
+
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -227,15 +243,23 @@ if(BUILD_TESTING)
 
     add_executable(
         mcast_dlna_session_tests
-        tests/dlna_session_tests.cpp
-        src/protocols/dlna/session/DlnaSession.cpp)
+        tests/dlna_session_tests.cpp)
     target_include_directories(
         mcast_dlna_session_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_options(mcast_dlna_session_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_dlna_session_tests PRIVATE mcast_dlna_protocol)
     add_test(
         NAME mcast_dlna_session_tests
         COMMAND mcast_dlna_session_tests)
+    set_tests_properties(mcast_dlna_session_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(mcast_soap_router_tests tests/soap_router_tests.cpp)
+    target_link_libraries(
+        mcast_soap_router_tests PRIVATE mcast_dlna_protocol)
+    add_test(NAME mcast_soap_router_tests COMMAND mcast_soap_router_tests)
+    set_tests_properties(mcast_soap_router_tests PROPERTIES TIMEOUT 20)
 
     add_executable(
         mcast_app_settings_tests
