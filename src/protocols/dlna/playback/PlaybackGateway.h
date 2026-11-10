@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
+
+#pragma once
+
+#include "protocols/dlna/playback/PlaybackTypes.h"
+
+#include <cstdint>
+#include <functional>
+
+namespace mcast::dlna {
+
+class PlaybackGateway
+{
+public:
+    virtual ~PlaybackGateway() = default;
+
+    virtual PlaybackSnapshot snapshot() const = 0;
+    virtual PlaybackCommandSubmission submit(
+        const PlaybackCommand &command) = 0;
+    virtual std::uint64_t addEventListener(
+        std::function<void(const PlaybackEvent &)> listener) = 0;
+    virtual void removeEventListener(std::uint64_t listenerId) = 0;
+};
+
+} // namespace mcast::dlna

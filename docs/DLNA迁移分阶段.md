@@ -51,6 +51,10 @@ volume/mute、picture controls、generation/version 和 playerLost。
 
 先用 fake gateway 测试，不接真实 Ui。
 
+当前进展：已建立异步 `PlaybackGateway` 合同与 `FakePlaybackGateway`；
+命令带 ID/generation，完成事件和状态事件分离，fake 支持重新连接、
+playerLost、队列清理和上一首/下一首切换测试。
+
 ### 3. 无 Qt DLNA 会话状态机
 
 从 `DlnaRenderer` 提取 `DlnaSession`：

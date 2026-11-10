@@ -114,6 +114,17 @@ if(BUILD_TESTING)
     add_test(NAME mcast_upnp_xml_tests COMMAND mcast_upnp_xml_tests)
 
     add_executable(
+        mcast_playback_gateway_tests
+        tests/playback_gateway_tests.cpp)
+    target_include_directories(
+        mcast_playback_gateway_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_playback_gateway_tests PRIVATE /utf-8)
+    add_test(
+        NAME mcast_playback_gateway_tests
+        COMMAND mcast_playback_gateway_tests)
+
+    add_executable(
         mcast_app_settings_tests
         tests/app_settings_tests.cpp
         src/core/AppSettings.cpp
