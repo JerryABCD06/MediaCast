@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -63,6 +64,15 @@ std::wstring widen(const std::string &value)
     MultiByteToWideChar(
         CP_UTF8, 0, value.c_str(), -1, result.data(), size);
     return result;
+}
+
+void protocolLog(const std::string &text)
+{
+    const auto path = mcast::supervisor::currentExecutablePath()
+        .parent_path() / L"MCast.Protocol.log";
+    std::ofstream log(path, std::ios::app);
+    if (log)
+        log << text << '\n';
 }
 
 std::optional<HelloInfo> makeSelfHello(const ClientOptions &options)
@@ -206,6 +216,122 @@ bool waitForUiOpenCommand(PipeConnection &control, std::string &error)
     }
     return true;
 }
+
+void protocolCommandServer(
+    const ClientOptions &options, std::atomic_bool &receivingEnabled,
+    mcast::ipc::PipeListener &listener, std::stop_token stop)
+{
+    while (!stop.stop_requested()) {
+        std::string error;
+        auto connection = listener.accept(24h, error);
+        if (!connection) {
+            if (!error.empty() && error != "pipe accept timed out"
+                && !stop.stop_requested())
+                std::cerr << "Protocol command accept: " << error << '\n';
+            continue;
+        }
+        if (connection->peerProcessId() != options.shellPid) {
+            const std::string reason = "peer PID "
+                + std::to_string(connection->peerProcessId())
+                + " is not Shell PID " + std::to_string(options.shellPid);
+            protocolLog("Protocol command rejected: " + reason);
+            std::cerr << "Protocol command rejected: " << reason << '\n';
+            continue;
+        }
+
+        Message request;
+        if (!connection->readMessage(request, 2000ms, error)
+            || request.header.type != MessageType::SetReceivingEnabled
+            || !mcast::ipc::validateMessageDirection(
+                ConnectionChannel::Command, request.header, error)) {
+            protocolLog("Protocol command invalid: " + error);
+            std::cerr << "Protocol command rejected: " << error << '\n';
+            continue;
+        }
+        const mcast::ipc::PayloadReader reader(request.payload);
+        const auto enabled = reader.getBool(
+            static_cast<std::uint16_t>(mcast::ipc::FieldId::ReceivingEnabled));
+        if (!reader.valid() || !enabled) {
+            protocolLog("Protocol command payload is invalid");
+            std::cerr << "Protocol command payload is invalid\n";
+            continue;
+        }
+        receivingEnabled = *enabled;
+        protocolLog(
+            std::string("Protocol receiving enabled=")
+            + (*enabled ? "true" : "false"));
+
+        mcast::ipc::PayloadBuilder builder;
+        builder.addBool(
+            static_cast<std::uint16_t>(mcast::ipc::FieldId::ReceivingEnabled),
+            *enabled);
+        Message state;
+        state.header.type = MessageType::ReceivingState;
+        state.header.source = ProcessRole::Protocol;
+        state.header.destination = ProcessRole::Shell;
+        state.header.flags = mcast::ipc::MessageFlags::Response;
+        state.header.messageId = 1;
+        state.header.correlationId = request.header.messageId;
+        state.header.sessionId = request.header.sessionId;
+        state.payload = std::move(builder).finish().value_or(
+            std::vector<std::uint8_t>{});
+        if (!connection->writeMessage(state, 2000ms, error)) {
+            protocolLog("Protocol command acknowledgement failed: " + error);
+            std::cerr << "Protocol command acknowledgement failed: "
+                      << error << '\n';
+        } else {
+            protocolLog("Protocol command acknowledgement queued");
+            // DisconnectNamedPipe discards data that the client has not read.
+            // Keep this server handle alive until the client reads the
+            // acknowledgement and closes its side.
+            Message closeNotice;
+            std::string closeError;
+            const bool peerClosed = connection->readMessage(
+                closeNotice, 1000ms, closeError);
+            protocolLog(
+                peerClosed
+                    ? "Protocol command peer sent trailing data"
+                    : "Protocol command close wait: " + closeError);
+        }
+    }
+}
+
+class ProtocolCommandServer
+{
+public:
+    ProtocolCommandServer(
+        const ClientOptions &options,
+        std::atomic_bool &receivingEnabled)
+        : m_listener(
+            mcast::ipc::makeProtocolCommandPipeName(
+                widen(options.instance)), 2)
+        , m_options(options)
+        , m_receivingEnabled(receivingEnabled)
+    {
+        if (!m_listener.valid()) {
+            std::cerr << "Protocol command listener failed\n";
+            return;
+        }
+        m_thread = std::jthread([this](std::stop_token stop) {
+            protocolCommandServer(
+                m_options, m_receivingEnabled, m_listener, stop);
+        });
+    }
+
+    ~ProtocolCommandServer()
+    {
+        m_thread.request_stop();
+        m_listener.stop();
+        if (m_thread.joinable())
+            m_thread.join();
+    }
+
+private:
+    mcast::ipc::PipeListener m_listener;
+    const ClientOptions &m_options;
+    std::atomic_bool &m_receivingEnabled;
+    std::jthread m_thread;
+};
 
 bool protocolPlaybackServer(
     const ClientOptions &options,
@@ -404,6 +530,8 @@ bool parseClientOptions(
             }
         } else if (argument == L"--request-ui") {
             options.requestUi = true;
+        } else if (argument == L"--persistent") {
+            options.persistent = true;
         } else if (argument.starts_with(requestRoundsPrefix)) {
             const std::wstring value =
                 argument.substr(requestRoundsPrefix.size());
@@ -455,6 +583,8 @@ int runClient(const ClientOptions &options)
     }
 
     if (options.role == ProcessRole::Protocol) {
+        std::atomic_bool receivingEnabled = true;
+        ProtocolCommandServer commandServer(options, receivingEnabled);
         std::atomic_bool heartbeatFailed = false;
         std::string heartbeatError;
         std::jthread heartbeat([&](std::stop_token stop) {
@@ -477,10 +607,11 @@ int runClient(const ClientOptions &options)
             }
         });
 
-        const bool persistent = !options.requestUi;
+        const bool persistent = options.persistent;
+        bool waitForUiOpenBeforeRound = !options.requestUi;
         std::uint32_t round = 0;
         while (true) {
-            if (persistent
+            if (waitForUiOpenBeforeRound
                 && (!sendUiOpenReady(
                         *control, 1000 + round, error)
                     || !waitForUiOpenCommand(*control, error))) {
@@ -515,6 +646,7 @@ int runClient(const ClientOptions &options)
                               << error << '\n';
                     return 5;
                 }
+                waitForUiOpenBeforeRound = true;
                 ++round;
                 continue;
             }

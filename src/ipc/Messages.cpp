@@ -354,6 +354,18 @@ bool validateMessageDirection(
     }
 
     switch (header.type) {
+    case MessageType::SetReceivingEnabled:
+        if (channel == ConnectionChannel::Command
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
+    case MessageType::ReceivingState:
+        if (channel == ConnectionChannel::Command
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
     case MessageType::UiOpenReady:
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Protocol

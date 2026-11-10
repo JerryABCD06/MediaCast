@@ -339,6 +339,11 @@ std::wstring makeShellCommandPipeName(std::wstring_view instance)
     return pipeName(L"ShellCommands", instance);
 }
 
+std::wstring makeProtocolCommandPipeName(std::wstring_view instance)
+{
+    return pipeName(L"ProtocolCommands", instance);
+}
+
 PipeConnection::PipeConnection(
     void *handle, Kind kind, std::uint32_t peerProcessId)
     : m_handle(handle)

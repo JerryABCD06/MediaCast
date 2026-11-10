@@ -11,6 +11,7 @@
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
 #include "platform/windows/SplashWindow.h"
+#include "platform/windows/TrayIcon.h"
 #include "supervisor/ChildProcess.h"
 #include "supervisor/ProcessIdentity.h"
 
@@ -51,6 +52,9 @@ struct Options {
     bool testExitAfterFirstFrame = false;
     bool testMode = false;
     bool testHold = false;
+    bool testToggleReceiving = false;
+    bool testToggleReceivingAfterFirstFrame = false;
+    bool testPersistent = false;
     bool background = false;
     std::uint32_t testUiRounds = 1;
 };
@@ -181,6 +185,14 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
             options.testMode = true;
         } else if (argument == L"--test-hold") {
             options.testHold = true;
+        } else if (argument == L"--test-toggle-receiving") {
+            options.testToggleReceiving = true;
+        } else if (argument ==
+                   L"--test-toggle-receiving-after-first-frame") {
+            options.testToggleReceiving = true;
+            options.testToggleReceivingAfterFirstFrame = true;
+        } else if (argument == L"--test-persistent") {
+            options.testPersistent = true;
         } else if (argument == L"--background") {
             options.background = true;
         } else if (argument.starts_with(testUiRoundsPrefix)) {
@@ -218,6 +230,14 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
     }
     if (options.testHold && !options.testMode) {
         error = "--test-hold requires --test";
+        return false;
+    }
+    if (options.testToggleReceiving && !options.testMode) {
+        error = "--test-toggle-receiving requires --test";
+        return false;
+    }
+    if (options.testPersistent && !options.testMode) {
+        error = "--test-persistent requires --test";
         return false;
     }
     return true;
@@ -507,6 +527,20 @@ public:
         m_commandThread = std::jthread([this](std::stop_token stop) {
             commandLoop(stop);
         });
+        if (!m_options.testMode) {
+            m_tray = std::make_unique<mcast::platform::NativeTrayIcon>(
+                [this] {
+                    std::string error;
+                    if (!requestOpenUiFromHost(error))
+                        std::cerr << "Tray open UI failed: "
+                                  << error << '\n';
+                },
+                [this] { toggleReceiving(); },
+                [this] { m_quitRequested.store(true); });
+            if (!m_tray->initialize(error))
+                std::cerr << "Tray initialization failed: "
+                          << error << '\n';
+        }
         return true;
     }
 
@@ -516,7 +550,36 @@ public:
                   << " pid=" << GetCurrentProcessId()
                   << std::endl;
 
+        const auto startedAt = std::chrono::steady_clock::now();
+        auto lastReceivingAttempt = startedAt - 1s;
         while (true) {
+            if (m_tray)
+                m_tray->pumpMessages();
+            if (m_quitRequested.load())
+                return 0;
+            const auto now = std::chrono::steady_clock::now();
+            if (m_options.testToggleReceiving
+                && now - startedAt > 10s) {
+                std::cerr << "Receiving command test timed out\n";
+                return 9;
+            }
+            const bool toggleReady =
+                !m_options.testToggleReceivingAfterFirstFrame
+                || m_firstFrameRounds.load() > 0;
+            if (m_options.testToggleReceiving && toggleReady
+                && now - startedAt > 250ms
+                && now - lastReceivingAttempt > 500ms) {
+                lastReceivingAttempt = now;
+                bool effective = true;
+                std::string toggleError;
+                if (sendReceivingEnabled(false, effective, toggleError)) {
+                    std::cout << "SHELL_RECEIVING_TOGGLE_OK enabled="
+                              << (effective ? "true" : "false") << '\n';
+                    return 0;
+                }
+                std::cerr << "Receiving command retry: "
+                          << toggleError << '\n';
+            }
             std::string acceptError;
             auto accepted = m_listener->accept(200ms, acceptError);
             if (accepted) {
@@ -744,6 +807,113 @@ private:
         return ui->process.processId();
     }
 
+    bool requestOpenUiFromHost(std::string &error)
+    {
+        const auto uiProcessId = liveUiProcessId();
+        if (uiProcessId) {
+            bringProcessWindowToFront(*uiProcessId);
+            return true;
+        }
+        if (requestProtocolOpenUi(error))
+            return true;
+        const auto startedUi = liveUiProcessId();
+        if (!startedUi)
+            return false;
+        bringProcessWindowToFront(*startedUi);
+        error.clear();
+        return true;
+    }
+
+    void toggleReceiving()
+    {
+        const bool desired = !m_receivingEnabled;
+        bool effective = m_receivingEnabled;
+        std::string error;
+        if (sendReceivingEnabled(desired, effective, error)) {
+            m_receivingEnabled = effective;
+            if (m_tray)
+                m_tray->setReceivingEnabled(effective);
+        } else {
+            std::cerr << "Receiving state command failed: "
+                      << error << '\n';
+        }
+    }
+
+    bool sendReceivingEnabled(
+        bool enabled, bool &effective, std::string &error)
+    {
+        std::uint32_t protocolProcessId = 0;
+        std::string protocolHash;
+        {
+            std::scoped_lock lock(m_recordsMutex);
+            ChildRecord *protocol = findRecord(ProcessRole::Protocol);
+            if (!protocol || !protocol->process.running()) {
+                error = "Protocol is not running";
+                return false;
+            }
+            protocolProcessId = protocol->expectation.peerProcessId;
+            protocolHash = protocol->expectation.executableHash;
+        }
+
+        auto connection = mcast::ipc::PipeClient::connect(
+            mcast::ipc::makeProtocolCommandPipeName(
+                widen(m_options.instance)),
+            1000ms, error);
+        if (!connection)
+            return false;
+        if (connection->peerProcessId() != protocolProcessId) {
+            error = "Protocol command server PID mismatch";
+            return false;
+        }
+        const auto path =
+            mcast::supervisor::queryProcessPath(protocolProcessId);
+        const auto hash = path
+            ? mcast::supervisor::sha256File(*path) : std::nullopt;
+        if (!hash || *hash != protocolHash) {
+            error = "Protocol command server executable mismatch";
+            return false;
+        }
+
+        mcast::ipc::PayloadBuilder builder;
+        builder.addBool(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::ReceivingEnabled),
+            enabled);
+        Message request;
+        request.header.type = MessageType::SetReceivingEnabled;
+        request.header.source = ProcessRole::Shell;
+        request.header.destination = ProcessRole::Protocol;
+        request.header.messageId = GetTickCount64();
+        if (request.header.messageId == 0)
+            request.header.messageId = 1;
+        request.header.sessionId = 1;
+        request.payload = std::move(builder).finish().value_or(
+            std::vector<std::uint8_t>{});
+        if (!connection->writeMessage(request, 1500ms, error))
+            return false;
+
+        Message state;
+        if (!connection->readMessage(state, 2000ms, error)
+            || state.header.type != MessageType::ReceivingState
+            || state.header.correlationId != request.header.messageId
+            || !mcast::ipc::validateMessageDirection(
+                ConnectionChannel::Command, state.header, error)) {
+            if (error.empty())
+                error = "invalid receiving state response";
+            return false;
+        }
+        const mcast::ipc::PayloadReader reader(state.payload);
+        const auto value = reader.getBool(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::ReceivingEnabled));
+        if (!reader.valid() || !value) {
+            error = "receiving state response has no value";
+            return false;
+        }
+        effective = *value;
+        return true;
+    }
+
     void handleHandoffConnection(
         std::unique_ptr<mcast::ipc::PipeConnection> connection)
     {
@@ -796,17 +966,8 @@ private:
         bool accepted = true;
         std::string rejection;
         if (!duplicate && !background) {
-            const auto uiProcessId = liveUiProcessId();
-            if (uiProcessId) {
-                bringProcessWindowToFront(*uiProcessId);
-            } else if (!requestProtocolOpenUi(rejection)) {
-                const auto startedUi = liveUiProcessId();
-                if (startedUi) {
-                    bringProcessWindowToFront(*startedUi);
-                } else {
-                    accepted = false;
-                }
-            }
+            if (!requestOpenUiFromHost(rejection))
+                accepted = false;
         }
         if (!duplicate && accepted) {
             std::scoped_lock lock(m_handoffMutex);
@@ -882,6 +1043,8 @@ private:
             + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId());
         if (!m_options.background)
             arguments += L" --request-ui";
+        if (!m_options.testMode || m_options.testPersistent)
+            arguments += L" --persistent";
         if (m_options.testMode && !m_options.background) {
             arguments += L" --request-ui-rounds="
                 + std::to_wstring(m_options.testUiRounds);
@@ -1208,6 +1371,7 @@ private:
 
     void cleanup()
     {
+        m_tray.reset();
         m_splash.hideImmediately();
         if (m_commandThread.joinable()) {
             m_commandThread.request_stop();
@@ -1218,19 +1382,20 @@ private:
         m_commandListener.reset();
         if (m_listener)
             m_listener->stop();
+        {
+            std::scoped_lock lock(m_recordsMutex);
+            for (const auto &record : m_records) {
+                std::string error;
+                record->process.terminate(0, 1000ms, error);
+            }
+            m_records.clear();
+        }
         for (const auto &slot : m_connections) {
             if (slot->thread.joinable())
                 slot->thread.join();
         }
         m_connections.clear();
         m_listener.reset();
-
-        std::scoped_lock lock(m_recordsMutex);
-        for (const auto &record : m_records) {
-            std::string error;
-            record->process.terminate(0, 1000ms, error);
-        }
-        m_records.clear();
         if (m_firstFrame)
             CloseHandle(m_firstFrame);
         if (m_mutex)
@@ -1298,6 +1463,9 @@ private:
     std::mutex m_uiMutex;
     std::mutex m_handoffMutex;
     std::unordered_set<std::uint64_t> m_completedHandoffs;
+    std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
+    bool m_receivingEnabled = true;
+    std::atomic_bool m_quitRequested = false;
 
     // Declared last so its worker thread is stopped and joined before the
     // counters and mutex used by its state callback are destroyed.

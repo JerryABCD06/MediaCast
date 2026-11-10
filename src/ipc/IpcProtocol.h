@@ -52,6 +52,8 @@ enum class MessageType : std::uint16_t {
     ShellHandoffFinalAck = 17,
     UiOpenRequest = 18,
     UiOpenReady = 19,
+    SetReceivingEnabled = 20,
+    ReceivingState = 21,
 };
 
 enum class FieldType : std::uint8_t {

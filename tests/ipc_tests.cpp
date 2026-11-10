@@ -332,6 +332,21 @@ void testHelloSchema()
     check(!validateMessageDirection(
               ConnectionChannel::Playback, direction, error),
           "Protocol UiOpenReady rejected on playback pipe");
+    direction.type = MessageType::SetReceivingEnabled;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Command, direction, error),
+          "SetReceivingEnabled accepted on command pipe");
+    check(!validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "SetReceivingEnabled rejected on control pipe");
+    direction.type = MessageType::ReceivingState;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Command, direction, error),
+          "ReceivingState accepted on command pipe");
 
     const mcast::ipc::PeerIdentityGrant identityGrant{
         ProcessRole::Ui,

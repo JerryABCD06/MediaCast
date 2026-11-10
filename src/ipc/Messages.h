@@ -35,6 +35,7 @@ enum class FieldId : std::uint16_t {
     ShellHandoffArguments = 66,
     ShellHandoffWorkingDirectory = 67,
     ShellHandoffAccepted = 68,
+    ReceivingEnabled = 69,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -59,6 +60,7 @@ struct HelloAckInfo {
 enum class ConnectionChannel {
     Control,
     Playback,
+    Command,
 };
 
 struct HelloExpectation {

@@ -19,6 +19,7 @@ std::wstring currentUserSid();
 std::wstring makeControlPipeName(std::wstring_view instance);
 std::wstring makePlaybackPipeName(std::wstring_view instance);
 std::wstring makeShellCommandPipeName(std::wstring_view instance);
+std::wstring makeProtocolCommandPipeName(std::wstring_view instance);
 
 class PipeConnection
 {

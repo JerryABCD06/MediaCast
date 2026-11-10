@@ -12,6 +12,7 @@ function Start-Shell([string[]]$extraArguments) {
         "--instance=$instance",
         '--test',
         '--test-hold',
+        '--test-persistent',
         "--protocol=$ProtocolExe",
         "--ui=$UiExe"
     ) + $extraArguments
