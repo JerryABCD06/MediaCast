@@ -355,6 +355,13 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Protocol)
             return true;
         break;
+    case MessageType::PeerIdentityGrant:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && (header.destination == ProcessRole::Protocol
+                || header.destination == ProcessRole::Ui))
+            return true;
+        break;
     case MessageType::UiFirstFrame:
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Ui
@@ -444,6 +451,109 @@ bool validateMessageDirection(
 
     error = "message direction is not allowed on this channel";
     return false;
+}
+
+std::optional<Message> makePeerIdentityGrantMessage(
+    ProcessRole destination, std::uint64_t messageId,
+    std::uint64_t activationId, const PeerIdentityGrant &grant,
+    std::string &error)
+{
+    if (destination == ProcessRole::Unknown
+        || grant.role == ProcessRole::Unknown
+        || destination == grant.role
+        || grant.processId == 0 || activationId == 0
+        || !validToken(grant.buildId, 128)
+        || !validToken(grant.instanceNonce, 128)
+        || !validHash(grant.executableHash)) {
+        error = "peer identity grant contains invalid fields";
+        return std::nullopt;
+    }
+
+    PayloadBuilder builder;
+    if (!builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::PeerRole),
+            static_cast<std::uint8_t>(grant.role))
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::PeerProcessId),
+            grant.processId)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::PeerBuildId),
+            grant.buildId)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::PeerInstanceNonce),
+            grant.instanceNonce)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::PeerExecutableHash),
+            grant.executableHash)
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::PeerActivationId),
+            activationId)) {
+        error = "peer identity grant exceeds protocol limits";
+        return std::nullopt;
+    }
+
+    Message message;
+    message.header.type = MessageType::PeerIdentityGrant;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = destination;
+    message.header.messageId = messageId;
+    message.header.sessionId = 1;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (message.payload.empty()) {
+        error = "peer identity grant payload is empty";
+        return std::nullopt;
+    }
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<PeerIdentityGrant>
+decodePeerIdentityGrantMessage(const Message &message, std::string &error)
+{
+    if (message.header.type != MessageType::PeerIdentityGrant
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid peer identity grant";
+        return std::nullopt;
+    }
+    PayloadReader reader(message.payload);
+    const auto role = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::PeerRole));
+    const auto processId = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::PeerProcessId));
+    const auto buildId = reader.getString(
+        static_cast<std::uint16_t>(FieldId::PeerBuildId));
+    const auto nonce = reader.getString(
+        static_cast<std::uint16_t>(FieldId::PeerInstanceNonce));
+    const auto hash = reader.getString(
+        static_cast<std::uint16_t>(FieldId::PeerExecutableHash));
+    const auto activationId = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::PeerActivationId));
+    if (!reader.valid() || !role || !processId || !buildId || !nonce
+        || !hash || !activationId
+        || (*role != static_cast<std::uint8_t>(ProcessRole::Protocol)
+            && *role != static_cast<std::uint8_t>(ProcessRole::Ui))
+        || static_cast<ProcessRole>(*role) == message.header.destination
+        || *processId == 0
+        || *processId > std::numeric_limits<std::uint32_t>::max()
+        || !validToken(*buildId, 128)
+        || !validToken(*nonce, 128)
+        || !validHash(*hash)
+        || *activationId == 0) {
+        error = "peer identity grant has invalid fields";
+        return std::nullopt;
+    }
+    return PeerIdentityGrant{
+        static_cast<ProcessRole>(*role),
+        static_cast<std::uint32_t>(*processId),
+        *buildId,
+        *nonce,
+        *hash,
+        *activationId,
+    };
 }
 
 } // namespace mcast::ipc

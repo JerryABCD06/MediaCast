@@ -13,6 +13,7 @@ struct ClientOptions {
     ipc::ProcessRole role = ipc::ProcessRole::Unknown;
     std::string instance;
     std::string nonce;
+    std::uint32_t shellPid = 0;
     bool requestUi = false;
 };
 

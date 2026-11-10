@@ -24,6 +24,12 @@ enum class FieldId : std::uint16_t {
     HelloAckInstanceNonce = 35,
     HelloAckCapabilities = 36,
     HelloAckReason = 37,
+    PeerRole = 48,
+    PeerProcessId = 49,
+    PeerBuildId = 50,
+    PeerInstanceNonce = 51,
+    PeerExecutableHash = 52,
+    PeerActivationId = 53,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -56,6 +62,15 @@ struct HelloExpectation {
     std::string instanceNonce;
     std::string executableHash;
     std::uint64_t allowedCapabilities = 0;
+};
+
+struct PeerIdentityGrant {
+    ProcessRole role = ProcessRole::Unknown;
+    std::uint32_t processId = 0;
+    std::string buildId;
+    std::string instanceNonce;
+    std::string executableHash;
+    std::uint64_t activationId = 0;
 };
 
 std::optional<std::vector<std::uint8_t>>
@@ -95,5 +110,13 @@ decodeHelloAckMessage(
 bool validateMessageDirection(
     ConnectionChannel channel, const MessageHeader &header,
     std::string &error);
+
+std::optional<Message> makePeerIdentityGrantMessage(
+    ProcessRole destination, std::uint64_t messageId,
+    std::uint64_t activationId, const PeerIdentityGrant &grant,
+    std::string &error);
+
+std::optional<PeerIdentityGrant>
+decodePeerIdentityGrantMessage(const Message &message, std::string &error);
 
 } // namespace mcast::ipc

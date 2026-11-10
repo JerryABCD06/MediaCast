@@ -45,6 +45,7 @@ enum class MessageType : std::uint16_t {
     SessionSnapshot = 10,
     Error = 11,
     Shutdown = 12,
+    PeerIdentityGrant = 13,
 };
 
 enum class FieldType : std::uint8_t {

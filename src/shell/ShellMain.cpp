@@ -276,6 +276,7 @@ private:
         std::wstring arguments =
             L"--instance=" + widen(m_options.instance)
             + L" --nonce=" + widen(*m_nonce)
+            + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
             + L" --request-ui";
         return launch(
             ProcessRole::Protocol, m_options.protocol, arguments, error);
@@ -285,7 +286,8 @@ private:
     {
         std::wstring arguments =
             L"--instance=" + widen(m_options.instance)
-            + L" --nonce=" + widen(*m_nonce);
+            + L" --nonce=" + widen(*m_nonce)
+            + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId());
         return launch(ProcessRole::Ui, m_options.ui, arguments, error);
     }
 
@@ -353,6 +355,25 @@ private:
         return nullptr;
     }
 
+    std::optional<mcast::ipc::PeerIdentityGrant> makeGrant(
+        ProcessRole role, std::uint64_t activationId, std::string &error)
+    {
+        std::scoped_lock lock(m_recordsMutex);
+        ChildRecord *record = findRecord(role);
+        if (!record) {
+            error = "child record is missing";
+            return std::nullopt;
+        }
+        return mcast::ipc::PeerIdentityGrant{
+            role,
+            record->expectation.peerProcessId,
+            record->expectation.buildId,
+            record->expectation.instanceNonce,
+            record->expectation.executableHash,
+            activationId,
+        };
+    }
+
     void handleConnection(std::unique_ptr<mcast::ipc::PipeConnection> connection)
     {
         std::string error;
@@ -409,6 +430,22 @@ private:
             return;
         }
 
+        if (helloMessage.header.source == ProcessRole::Ui) {
+            auto protocolGrant = makeGrant(
+                ProcessRole::Protocol, 1, error);
+            if (!protocolGrant) {
+                std::cerr << "protocol grant: " << error << '\n';
+                return;
+            }
+            auto grantMessage = mcast::ipc::makePeerIdentityGrantMessage(
+                ProcessRole::Ui, 4, 1, *protocolGrant, error);
+            if (!grantMessage
+                || !connection->writeMessage(*grantMessage, 2000ms, error)) {
+                std::cerr << "protocol grant send: " << error << '\n';
+                return;
+            }
+        }
+
         while (true) {
             Message message;
             if (!connection->readMessage(message, 3000ms, error))
@@ -436,6 +473,21 @@ private:
                 decision.header.sessionId = message.header.sessionId;
                 if (!connection->writeMessage(decision, 2000ms, error)) {
                     std::cerr << "activation decision: " << error << '\n';
+                    return;
+                }
+                auto uiGrant = makeGrant(
+                    ProcessRole::Ui, message.header.messageId, error);
+                if (!uiGrant) {
+                    std::cerr << "UI grant: " << error << '\n';
+                    return;
+                }
+                auto grantMessage = mcast::ipc::makePeerIdentityGrantMessage(
+                    ProcessRole::Protocol, 4, message.header.messageId,
+                    *uiGrant, error);
+                if (!grantMessage
+                    || !connection->writeMessage(
+                        *grantMessage, 2000ms, error)) {
+                    std::cerr << "UI grant send: " << error << '\n';
                     return;
                 }
             } else if (message.header.type == MessageType::UiFirstFrame

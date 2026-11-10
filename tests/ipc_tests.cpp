@@ -297,6 +297,31 @@ void testHelloSchema()
               ConnectionChannel::Playback, direction, error),
           "Shell rejected on playback pipe");
 
+    const mcast::ipc::PeerIdentityGrant identityGrant{
+        ProcessRole::Ui,
+        GetCurrentProcessId(),
+        hello.buildId,
+        hello.instanceNonce,
+        hello.executableHash,
+        2,
+    };
+    const auto grantMessage = mcast::ipc::makePeerIdentityGrantMessage(
+        ProcessRole::Protocol, 4, 2, identityGrant, error);
+    check(grantMessage.has_value(), "peer identity grant created: " + error);
+    if (grantMessage) {
+        const auto decodedGrant =
+            mcast::ipc::decodePeerIdentityGrantMessage(
+                *grantMessage, error);
+        check(decodedGrant.has_value(),
+              "peer identity grant decoded: " + error);
+        if (decodedGrant) {
+            checkEqual(decodedGrant->processId, identityGrant.processId,
+                       "grant PID");
+            checkEqual(decodedGrant->activationId,
+                       identityGrant.activationId, "grant activation id");
+        }
+    }
+
     HelloInfo invalid = hello;
     invalid.instanceNonce.clear();
     check(!encodeHelloPayload(invalid, error).has_value(),

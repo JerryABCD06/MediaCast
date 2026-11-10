@@ -53,6 +53,7 @@ endif()
 target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
 
 # 三个进程骨架。现在只验证身份、握手、Shell 拉起 UI 和控制管道；
+# 当前骨架已经覆盖 ControlPipe、PlaybackPipe、身份授权和 SessionSnapshot；
 # 真正的协议、QML 和托盘会在后续阶段替换这些 skeleton 入口。
 add_executable(MCast.Shell src/shell/ShellMain.cpp)
 target_link_libraries(MCast.Shell PRIVATE mcast_ipc)

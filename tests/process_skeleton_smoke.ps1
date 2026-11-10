@@ -6,8 +6,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $instance = 'smoke-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('mcast-smoke-' + [guid]::NewGuid().ToString('N'))
-[System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
 $arguments = @(
     "--instance=$instance",
     '--test',
@@ -21,7 +19,8 @@ $startInfo.FileName = $ShellExe
 $startInfo.Arguments = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $startInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($ShellExe)
 $startInfo.UseShellExecute = $false
-$startInfo.CreateNoWindow = $true
+$startInfo.CreateNoWindow = $false
+$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
 $process = [System.Diagnostics.Process]::Start($startInfo)
@@ -39,9 +38,21 @@ $err = $errTask.Result
 if ($null -eq $exitCode -or $exitCode -ne 0) {
     throw "Shell exited with $exitCode`nSTDOUT:`n$out`nSTDERR:`n$err"
 }
-if ($out -notmatch 'SHELL_READY' -or $out -notmatch 'SHELL_FIRST_FRAME_OK') {
+if ($out -notmatch 'SHELL_READY' -or
+    $out -notmatch 'PLAYBACK_SNAPSHOT_SERVED' -or
+    $out -notmatch 'PLAYBACK_SNAPSHOT_OK' -or
+    $out -notmatch 'SHELL_FIRST_FRAME_OK') {
     throw "Shell did not complete expected handshake`nSTDOUT:`n$out`nSTDERR:`n$err"
 }
 
-[System.IO.Directory]::Delete($tempRoot, $true)
+$childIds = [regex]::Matches($out, 'role=\d+ pid=(\d+)') |
+    ForEach-Object { [int]$_.Groups[1].Value }
+foreach ($childId in $childIds) {
+    $remaining = Get-Process -Id $childId -ErrorAction SilentlyContinue
+    if ($remaining) {
+        Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
+        throw "orphan child process remained after Shell exit: $childId"
+    }
+}
+
 Write-Output 'Process skeleton smoke test passed'

@@ -267,7 +267,8 @@ HeaderDecodeResult decodeHeader(std::span<const std::uint8_t> bytes)
         static_cast<std::uint8_t>(result.header.destination);
     const auto flags = static_cast<std::uint16_t>(result.header.flags);
     if (messageType < static_cast<std::uint16_t>(MessageType::Hello)
-        || messageType > static_cast<std::uint16_t>(MessageType::Shutdown)
+        || messageType
+            > static_cast<std::uint16_t>(MessageType::PeerIdentityGrant)
         || sourceRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || destinationRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || (flags & ~0x7u) != 0) {
