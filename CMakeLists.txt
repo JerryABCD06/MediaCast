@@ -30,17 +30,54 @@ add_library(mcast_ipc STATIC
     src/ipc/Messages.cpp
     src/supervisor/RestartController.h
     src/supervisor/RestartController.cpp
+    src/supervisor/ProcessIdentity.h
+    src/supervisor/ProcessIdentity.cpp
+    src/supervisor/ChildProcess.h
+    src/supervisor/ChildProcess.cpp
 )
 target_compile_features(mcast_ipc PUBLIC cxx_std_20)
 target_compile_options(mcast_ipc PUBLIC /utf-8)
 target_include_directories(mcast_ipc PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(mcast_ipc PUBLIC advapi32.lib)
+target_link_libraries(mcast_ipc PUBLIC advapi32.lib bcrypt.lib)
+
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE MCAST_BUILD_ID
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT MCAST_BUILD_ID)
+    set(MCAST_BUILD_ID "unknown")
+endif()
+target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
+
+# 三个进程骨架。现在只验证身份、握手、Shell 拉起 UI 和控制管道；
+# 真正的协议、QML 和托盘会在后续阶段替换这些 skeleton 入口。
+add_executable(MCast.Shell src/shell/ShellMain.cpp)
+target_link_libraries(MCast.Shell PRIVATE mcast_ipc)
+
+add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
+target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
+
+add_executable(MCast.Ui src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
+target_link_libraries(MCast.Ui PRIVATE mcast_ipc)
+add_dependencies(MCast.Shell MCast.Protocol MCast.Ui)
 
 if(BUILD_TESTING)
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+
+    add_test(
+        NAME mcast_process_skeleton_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_skeleton_smoke.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.Ui>")
+    set_tests_properties(mcast_process_skeleton_smoke PROPERTIES TIMEOUT 20)
 endif()
 
 # Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。

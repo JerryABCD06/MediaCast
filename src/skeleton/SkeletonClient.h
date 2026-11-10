@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
+
+#pragma once
+
+#include "ipc/IpcProtocol.h"
+
+#include <string>
+
+namespace mcast::skeleton {
+
+struct ClientOptions {
+    ipc::ProcessRole role = ipc::ProcessRole::Unknown;
+    std::string instance;
+    std::string nonce;
+    bool requestUi = false;
+};
+
+bool parseClientOptions(
+    int argc, wchar_t **argv, ipc::ProcessRole role,
+    ClientOptions &options, std::string &error);
+
+int runClient(const ClientOptions &options);
+
+} // namespace mcast::skeleton
