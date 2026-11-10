@@ -3,9 +3,12 @@
 
 #include "skeleton/SkeletonClient.h"
 
+#include <windows.h>
+
+#include <cstdlib>
 #include <iostream>
 
-int wmain(int argc, wchar_t **argv)
+int runProtocolMain(int argc, wchar_t **argv)
 {
     mcast::skeleton::ClientOptions options;
     std::string error;
@@ -16,4 +19,14 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
     return mcast::skeleton::runClient(options);
+}
+
+int wmain(int argc, wchar_t **argv)
+{
+    return runProtocolMain(argc, argv);
+}
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
+{
+    return runProtocolMain(__argc, __wargv);
 }

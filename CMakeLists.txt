@@ -68,9 +68,11 @@ target_link_libraries(
     MCast.Shell PRIVATE
     mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib
     windowscodecs.lib advapi32.lib ole32.lib)
+set_target_properties(MCast.Shell PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
 target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
+set_target_properties(MCast.Protocol PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_dependencies(MCast.Shell MCast.Protocol)
 
@@ -105,6 +107,37 @@ if(BUILD_TESTING)
             -UiRounds 2)
     set_tests_properties(
         mcast_process_same_shell_two_ui_rounds PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME mcast_shell_single_instance_handoff
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/shell_single_instance.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.UiSkeleton>")
+    set_tests_properties(
+        mcast_shell_single_instance_handoff PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME mcast_shell_foreground_handoff_race
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/shell_foreground_handoff_race.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.UiSkeleton>")
+    set_tests_properties(
+        mcast_shell_foreground_handoff_race PROPERTIES TIMEOUT 30)
+
+    add_test(
+        NAME mcast_direct_internal_entry_guards
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/entry_guards.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.Ui>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(
+        mcast_direct_internal_entry_guards PROPERTIES TIMEOUT 20)
 endif()
 
 # Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。

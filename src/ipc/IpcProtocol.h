@@ -46,6 +46,12 @@ enum class MessageType : std::uint16_t {
     Error = 11,
     Shutdown = 12,
     PeerIdentityGrant = 13,
+    ShellHandoffRequest = 14,
+    ShellHandoffAck = 15,
+    ShellHandoffComplete = 16,
+    ShellHandoffFinalAck = 17,
+    UiOpenRequest = 18,
+    UiOpenReady = 19,
 };
 
 enum class FieldType : std::uint8_t {

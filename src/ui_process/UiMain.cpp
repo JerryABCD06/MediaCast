@@ -28,6 +28,12 @@
 
 int main(int argc, char *argv[])
 {
+    std::string uiSessionError;
+    const UiSession::Options uiSessionOptions =
+        UiSession::parseArguments(argc, argv, uiSessionError);
+    if (!uiSessionError.empty())
+        return 3;
+
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("MCast"));
@@ -47,13 +53,6 @@ int main(int argc, char *argv[])
         log.flush();
     };
 
-    std::string uiSessionError;
-    const UiSession::Options uiSessionOptions =
-        UiSession::parseArguments(argc, argv, uiSessionError);
-    if (!uiSessionError.empty()) {
-        writeLog(QString::fromStdString(uiSessionError));
-        return 3;
-    }
     UiSession uiSession;
 
     SystemAccentColors systemColors;

@@ -32,6 +32,9 @@ enum class FieldId : std::uint16_t {
     PeerActivationId = 53,
     UiActivationStarted = 64,
     UiActivationId = 65,
+    ShellHandoffArguments = 66,
+    ShellHandoffWorkingDirectory = 67,
+    ShellHandoffAccepted = 68,
     ErrorCode = 16,
     ErrorText = 17,
 };

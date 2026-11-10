@@ -330,6 +330,15 @@ bool validateMessageDirection(
     ConnectionChannel channel, const MessageHeader &header,
     std::string &error)
 {
+    if (channel == ConnectionChannel::Control
+        && header.source == ProcessRole::Shell
+        && header.destination == ProcessRole::Shell
+        && (header.type == MessageType::ShellHandoffRequest
+            || header.type == MessageType::ShellHandoffAck
+            || header.type == MessageType::ShellHandoffComplete
+            || header.type == MessageType::ShellHandoffFinalAck))
+        return true;
+
     if (header.source == ProcessRole::Unknown
         || header.destination == ProcessRole::Unknown
         || header.source == header.destination) {
@@ -345,6 +354,18 @@ bool validateMessageDirection(
     }
 
     switch (header.type) {
+    case MessageType::UiOpenReady:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::UiOpenRequest:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
     case MessageType::UiActivateRequest:
         if (header.source == ProcessRole::Protocol
             && header.destination == ProcessRole::Shell)
@@ -377,6 +398,11 @@ bool validateMessageDirection(
         if (header.source == ProcessRole::Protocol
             && header.destination == ProcessRole::Ui)
             return true;
+        break;
+    case MessageType::ShellHandoffRequest:
+    case MessageType::ShellHandoffAck:
+    case MessageType::ShellHandoffComplete:
+    case MessageType::ShellHandoffFinalAck:
         break;
     case MessageType::Hello:
         if (channel == ConnectionChannel::Control

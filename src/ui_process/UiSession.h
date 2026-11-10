@@ -16,6 +16,7 @@ class UiSession
 public:
     struct Options {
         bool enabled = false;
+        bool standalone = false;
         std::string instance;
         std::string nonce;
         std::uint32_t shellPid = 0;

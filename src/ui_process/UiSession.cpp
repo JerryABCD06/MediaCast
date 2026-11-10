@@ -173,7 +173,9 @@ UiSession::parseArguments(int argc, char **argv, std::string &error)
         constexpr std::string_view noncePrefix = "--nonce=";
         constexpr std::string_view shellPidPrefix = "--shell-pid=";
         constexpr std::string_view activationPrefix = "--activation-id=";
-        if (argument.starts_with(instancePrefix)) {
+        if (argument == "--standalone") {
+            options.standalone = true;
+        } else if (argument.starts_with(instancePrefix)) {
             instanceArgumentSeen = true;
             ipcArgumentSeen = true;
             options.instance = argument.substr(instancePrefix.size());
@@ -211,6 +213,10 @@ UiSession::parseArguments(int argc, char **argv, std::string &error)
         return {};
     }
     options.enabled = !options.instance.empty();
+    if (!options.enabled && !options.standalone) {
+        error = "MCast.Ui.exe requires a Shell launch context";
+        return {};
+    }
     if (options.enabled
         && (options.nonce.empty() || options.shellPid == 0
             || options.activationId == 0)) {

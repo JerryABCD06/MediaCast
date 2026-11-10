@@ -297,6 +297,42 @@ void testHelloSchema()
               ConnectionChannel::Playback, direction, error),
           "Shell rejected on playback pipe");
 
+    direction.type = MessageType::ShellHandoffRequest;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "Shell handoff direction accepted");
+    check(!validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "Shell handoff rejected on playback pipe");
+    direction.type = MessageType::ShellHandoffComplete;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "Shell handoff completion accepted");
+    direction.type = MessageType::ShellHandoffFinalAck;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "Shell handoff final acknowledgement accepted");
+    direction.type = MessageType::UiOpenRequest;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "Shell UiOpenRequest accepted");
+    check(!validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "Shell UiOpenRequest rejected on playback pipe");
+    direction.type = MessageType::UiOpenReady;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "Protocol UiOpenReady accepted");
+    check(!validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "Protocol UiOpenReady rejected on playback pipe");
+
     const mcast::ipc::PeerIdentityGrant identityGrant{
         ProcessRole::Ui,
         GetCurrentProcessId(),

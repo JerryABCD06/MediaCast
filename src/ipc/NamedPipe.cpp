@@ -334,6 +334,11 @@ std::wstring makePlaybackPipeName(std::wstring_view instance)
     return pipeName(L"Playback", instance);
 }
 
+std::wstring makeShellCommandPipeName(std::wstring_view instance)
+{
+    return pipeName(L"ShellCommands", instance);
+}
+
 PipeConnection::PipeConnection(
     void *handle, Kind kind, std::uint32_t peerProcessId)
     : m_handle(handle)
@@ -645,8 +650,11 @@ std::unique_ptr<PipeConnection> PipeClient::connect(
     const auto deadline = std::chrono::steady_clock::now() + bounded;
     while (true) {
         HANDLE handle = CreateFileW(
-            ownedName.c_str(), GENERIC_READ | GENERIC_WRITE,
-            0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        ownedName.c_str(), GENERIC_READ | GENERIC_WRITE,
+        0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT
+            | SECURITY_IDENTIFICATION,
+        nullptr);
         if (handle != INVALID_HANDLE_VALUE) {
             DWORD peerPid = 0;
             if (!GetNamedPipeServerProcessId(handle, &peerPid)

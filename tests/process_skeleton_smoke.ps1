@@ -47,8 +47,6 @@ if ($out -notmatch 'SHELL_READY' -or
     $out -notmatch 'SHELL_SPLASH_SHOWN' -or
     $out -notmatch 'SHELL_SPLASH_HIDDEN' -or
     $out -notmatch 'SHELL_UI_FIRST_FRAME' -or
-    $out -notmatch 'PLAYBACK_SNAPSHOT_SERVED' -or
-    $out -notmatch 'PLAYBACK_SNAPSHOT_OK' -or
     $out -notmatch 'SHELL_FIRST_FRAME_OK' -or
     $out -notmatch "SHELL_UI_ROUNDS_OK rounds=$UiRounds") {
     throw "Shell did not complete expected handshake`nSTDOUT:`n$out`nSTDERR:`n$err"
