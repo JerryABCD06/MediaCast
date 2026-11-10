@@ -52,6 +52,18 @@ target_compile_options(mcast_net PUBLIC /utf-8)
 target_include_directories(mcast_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mcast_net PUBLIC ws2_32.lib iphlpapi.lib)
 
+add_library(mcast_dlna_core STATIC
+    src/protocols/dlna/UpnpXml.h
+    src/protocols/dlna/UpnpXml.cpp
+    src/protocols/dlna/core/HttpRequest.h
+    src/protocols/dlna/core/HttpRequest.cpp
+    src/protocols/dlna/core/SsdpMessages.h
+    src/protocols/dlna/core/SsdpMessages.cpp)
+target_compile_features(mcast_dlna_core PUBLIC cxx_std_20)
+target_compile_options(mcast_dlna_core PUBLIC /utf-8)
+target_include_directories(
+    mcast_dlna_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -165,13 +177,19 @@ if(BUILD_TESTING)
 
     add_executable(
         mcast_upnp_xml_tests
-        tests/upnp_xml_tests.cpp
-        src/protocols/dlna/UpnpXml.cpp)
+        tests/upnp_xml_tests.cpp)
     target_include_directories(
         mcast_upnp_xml_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_options(mcast_upnp_xml_tests PRIVATE /utf-8)
+    target_link_libraries(mcast_upnp_xml_tests PRIVATE mcast_dlna_core)
     add_test(NAME mcast_upnp_xml_tests COMMAND mcast_upnp_xml_tests)
+
+    add_executable(
+        mcast_dlna_core_tests
+        tests/dlna_core_tests.cpp)
+    target_link_libraries(mcast_dlna_core_tests PRIVATE mcast_dlna_core)
+    add_test(NAME mcast_dlna_core_tests COMMAND mcast_dlna_core_tests)
 
     add_executable(
         mcast_playback_gateway_tests
@@ -345,8 +363,6 @@ qt_add_executable(MCast
     src/protocols/dlna/SsdpService.cpp
     src/protocols/dlna/HttpServer.h
     src/protocols/dlna/HttpServer.cpp
-    src/protocols/dlna/UpnpXml.h
-    src/protocols/dlna/UpnpXml.cpp
     src/protocols/dlna/SoapHandler.h
     src/protocols/dlna/SoapHandler.cpp
     src/protocols/dlna/GenaManager.h
@@ -427,6 +443,7 @@ target_link_libraries(MCast PRIVATE dwmapi.lib)
 # SplashWindow 的原生图形栈：D3D11 + Direct2D + DirectComposition + WIC；
 # advapi32 只用来读系统深浅色和主题强调色。
 target_link_libraries(MCast PRIVATE
+    mcast_dlna_core
     d2d1.lib d3d11.lib dxgi.lib dcomp.lib windowscodecs.lib advapi32.lib)
 
 # ── libmpv（内嵌播放后端）──────────────────────────────────────────────────
