@@ -85,6 +85,10 @@ picture controls。
 
 验收：真实 Ui 首帧和空快照继续通过。
 
+当前进展：中性 Playback 类型已迁到 `mcast::playback`；IPC codec 已支持
+命令、结果、快照、状态增量、playerLost 和 reconnected，大 metadata 使用
+原始 Bytes，不重复 XML 转义。
+
 ### 5. Win32 网络运行层
 
 建立 `mcast_dlna_net`：

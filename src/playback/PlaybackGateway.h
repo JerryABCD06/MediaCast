@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include "protocols/dlna/playback/PlaybackTypes.h"
+#include "playback/PlaybackTypes.h"
 
 #include <cstdint>
 #include <functional>
 
-namespace mcast::dlna {
+namespace mcast::playback {
 
 class PlaybackGateway
 {
@@ -23,4 +23,4 @@ public:
     virtual void removeEventListener(std::uint64_t listenerId) = 0;
 };
 
-} // namespace mcast::dlna
+} // namespace mcast::playback

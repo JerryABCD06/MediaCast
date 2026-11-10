@@ -36,6 +36,12 @@ enum class FieldId : std::uint16_t {
     ShellHandoffWorkingDirectory = 67,
     ShellHandoffAccepted = 68,
     ReceivingEnabled = 69,
+    PlaybackGeneration = 70,
+    PlaybackCommandBlob = 71,
+    PlaybackSnapshotBlob = 72,
+    PlaybackSubmissionStatus = 73,
+    PlaybackOutcomeStatus = 74,
+    PlaybackStateVersion = 75,
     ErrorCode = 16,
     ErrorText = 17,
 };

@@ -347,6 +347,33 @@ void testHelloSchema()
     check(validateMessageDirection(
               ConnectionChannel::Command, direction, error),
           "ReceivingState accepted on command pipe");
+    direction.type = MessageType::PlaybackCommand;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "PlaybackCommand accepted on playback pipe");
+    check(!validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "PlaybackCommand rejected on control pipe");
+    direction.type = MessageType::PlaybackCommandResult;
+    direction.source = ProcessRole::Ui;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "PlaybackCommandResult accepted on playback pipe");
+    direction.type = MessageType::PlaybackSnapshotRequest;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "PlaybackSnapshotRequest accepted on playback pipe");
+    direction.type = MessageType::PlaybackSnapshotResponse;
+    direction.source = ProcessRole::Ui;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "PlaybackSnapshotResponse accepted on playback pipe");
 
     const mcast::ipc::PeerIdentityGrant identityGrant{
         ProcessRole::Ui,

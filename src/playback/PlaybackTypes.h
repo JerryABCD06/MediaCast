@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace mcast::dlna {
+namespace mcast::playback {
 
 enum class PlaybackState {
     NoMedia,
@@ -152,4 +152,4 @@ struct PlaybackEvent {
     PlaybackSnapshot snapshot;
 };
 
-} // namespace mcast::dlna
+} // namespace mcast::playback

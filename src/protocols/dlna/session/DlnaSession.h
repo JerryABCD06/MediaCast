@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "protocols/dlna/playback/PlaybackGateway.h"
+#include "playback/PlaybackGateway.h"
 
 #include <chrono>
 #include <cstddef>
@@ -11,6 +11,17 @@
 #include <optional>
 
 namespace mcast::dlna {
+
+using playback::MediaRequest;
+using playback::PlaybackCommand;
+using playback::PlaybackCommandType;
+using playback::PlaybackCommandSubmission;
+using playback::PlaybackEvent;
+using playback::PlaybackEventKind;
+using playback::PlaybackGateway;
+using playback::PlaybackSnapshot;
+using playback::PlaybackState;
+using playback::PlaybackSubmissionStatus;
 
 using SessionTime = std::chrono::milliseconds;
 

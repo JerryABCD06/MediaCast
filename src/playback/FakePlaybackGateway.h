@@ -3,14 +3,14 @@
 
 #pragma once
 
-#include "protocols/dlna/playback/PlaybackGateway.h"
+#include "playback/PlaybackGateway.h"
 
 #include <algorithm>
 #include <map>
 #include <utility>
 #include <vector>
 
-namespace mcast::dlna {
+namespace mcast::playback {
 
 class FakePlaybackGateway final : public PlaybackGateway
 {
@@ -365,4 +365,4 @@ private:
     std::uint64_t m_nextListenerId = 0;
 };
 
-} // namespace mcast::dlna
+} // namespace mcast::playback

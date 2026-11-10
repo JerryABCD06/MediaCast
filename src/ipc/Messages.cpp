@@ -354,6 +354,33 @@ bool validateMessageDirection(
     }
 
     switch (header.type) {
+    case MessageType::PlaybackCommand:
+        if (channel == ConnectionChannel::Playback
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Ui)
+            return true;
+        break;
+    case MessageType::PlaybackCommandResult:
+    case MessageType::PlaybackStateDelta:
+    case MessageType::PlaybackPlayerLost:
+    case MessageType::PlaybackReconnected:
+        if (channel == ConnectionChannel::Playback
+            && header.source == ProcessRole::Ui
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
+    case MessageType::PlaybackSnapshotRequest:
+        if (channel == ConnectionChannel::Playback
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Ui)
+            return true;
+        break;
+    case MessageType::PlaybackSnapshotResponse:
+        if (channel == ConnectionChannel::Playback
+            && header.source == ProcessRole::Ui
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
     case MessageType::SetReceivingEnabled:
         if (channel == ConnectionChannel::Command
             && header.source == ProcessRole::Shell

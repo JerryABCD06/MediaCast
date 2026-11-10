@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
 
-#include "protocols/dlna/playback/FakePlaybackGateway.h"
+#include "playback/FakePlaybackGateway.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
 
-using namespace mcast::dlna;
+using namespace mcast::playback;
 
 namespace {
 

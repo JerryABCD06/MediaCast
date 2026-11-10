@@ -54,6 +54,13 @@ enum class MessageType : std::uint16_t {
     UiOpenReady = 19,
     SetReceivingEnabled = 20,
     ReceivingState = 21,
+    PlaybackCommand = 22,
+    PlaybackCommandResult = 23,
+    PlaybackSnapshotRequest = 24,
+    PlaybackSnapshotResponse = 25,
+    PlaybackStateDelta = 26,
+    PlaybackPlayerLost = 27,
+    PlaybackReconnected = 28,
 };
 
 enum class FieldType : std::uint8_t {
