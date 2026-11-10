@@ -84,9 +84,35 @@ bool validUtf8(std::string_view value)
 
 bool validCastText(const std::string &value, std::size_t maxSize)
 {
-    return value.size() <= maxSize
-        && value.find('\0') == std::string::npos
-        && validUtf8(value);
+    if (value.size() > maxSize || !validUtf8(value))
+        return false;
+    for (unsigned char ch : value) {
+        if (ch < 0x20 || ch == 0x7f)
+            return false;
+    }
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const auto first = static_cast<unsigned char>(value[index]);
+        const auto second = index + 1 < value.size()
+            ? static_cast<unsigned char>(value[index + 1]) : 0;
+        if (first == 0xc2 && second >= 0x80 && second <= 0x9f)
+            return false;
+        if (first == 0xd8 && second == 0x9c)
+            return false;
+        if (first == 0xe2 && index + 2 < value.size()) {
+            const auto third =
+                static_cast<unsigned char>(value[index + 2]);
+            if (second == 0x80
+                && (third == 0x8e || third == 0x8f
+                    || (third >= 0xa8 && third <= 0xae))) {
+                return false;
+            }
+            if (second == 0x81
+                && third >= 0xa6 && third <= 0xa9) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool validCastPeerId(const std::string &value)
@@ -473,6 +499,19 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Protocol)
             return true;
         break;
+    case MessageType::UiCastConfirmationRequest:
+    case MessageType::UiCastConfirmationCancel:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Ui)
+            return true;
+        break;
+    case MessageType::UiCastConfirmationDecision:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Ui
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
     case MessageType::UiOpenReady:
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Protocol
@@ -840,6 +879,8 @@ decodeCastConfirmationRequestMessage(
     if (message.header.type != MessageType::CastConfirmationRequest
         || message.header.messageId == 0
         || message.header.versionMinor < 1
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
         || !validateMessageDirection(
             ConnectionChannel::Control, message.header, error)) {
         error = "message is not a valid cast confirmation request";
@@ -939,6 +980,8 @@ decodeCastConfirmationDecisionMessage(
     if (message.header.type != MessageType::CastConfirmationDecision
         || message.header.messageId == 0
         || message.header.versionMinor < 1
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
         || message.header.correlationId != expectedCorrelationId
         || expectedCorrelationId == 0
         || (static_cast<std::uint16_t>(message.header.flags)
@@ -969,6 +1012,135 @@ decodeCastConfirmationDecisionMessage(
         *claimId,
         *accepted,
     };
+}
+
+std::optional<Message> makeUiCastConfirmationRequestMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationRequestInfo &request, std::string &error)
+{
+    if (correlationId == 0) {
+        error = "UI cast confirmation request correlation is zero";
+        return std::nullopt;
+    }
+    auto message = makeCastConfirmationRequestMessage(
+        messageId, request, error);
+    if (!message)
+        return std::nullopt;
+    message->header.type = MessageType::UiCastConfirmationRequest;
+    message->header.source = ProcessRole::Shell;
+    message->header.destination = ProcessRole::Ui;
+    message->header.correlationId = correlationId;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message->header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<CastConfirmationRequestInfo>
+decodeUiCastConfirmationRequestMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error)
+{
+    if (message.header.type != MessageType::UiCastConfirmationRequest
+        || message.header.versionMinor < 2
+        || message.header.messageId == 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || message.header.correlationId != expectedCorrelationId
+        || expectedCorrelationId == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid UI cast confirmation request";
+        return std::nullopt;
+    }
+    Message canonical = message;
+    canonical.header.type = MessageType::CastConfirmationRequest;
+    canonical.header.source = ProcessRole::Protocol;
+    canonical.header.destination = ProcessRole::Shell;
+    return decodeCastConfirmationRequestMessage(canonical, error);
+}
+
+std::optional<Message> makeUiCastConfirmationDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationDecisionInfo &decision, std::string &error)
+{
+    auto message = makeCastConfirmationDecisionMessage(
+        messageId, correlationId, decision, error);
+    if (!message)
+        return std::nullopt;
+    message->header.type = MessageType::UiCastConfirmationDecision;
+    message->header.source = ProcessRole::Ui;
+    message->header.destination = ProcessRole::Shell;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message->header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<CastConfirmationDecisionInfo>
+decodeUiCastConfirmationDecisionMessage(
+    const Message &message, std::uint64_t expectedRequestCorrelationId,
+    std::string &error)
+{
+    if (message.header.type != MessageType::UiCastConfirmationDecision
+        || message.header.versionMinor < 2
+        || message.header.messageId == 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || message.header.correlationId != expectedRequestCorrelationId
+        || expectedRequestCorrelationId == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid UI cast confirmation decision";
+        return std::nullopt;
+    }
+    Message canonical = message;
+    canonical.header.type = MessageType::CastConfirmationDecision;
+    canonical.header.source = ProcessRole::Shell;
+    canonical.header.destination = ProcessRole::Protocol;
+    return decodeCastConfirmationDecisionMessage(
+        canonical, expectedRequestCorrelationId, error);
+}
+
+std::optional<Message> makeUiCastConfirmationCancelMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::string &error)
+{
+    if (messageId == 0 || correlationId == 0) {
+        error = "UI cast confirmation cancel contains invalid fields";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::UiCastConfirmationCancel;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Ui;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
+    const Message &message, std::string &error)
+{
+    if (message.header.type != MessageType::UiCastConfirmationCancel
+        || message.header.versionMinor < 2
+        || message.header.messageId == 0
+        || message.header.correlationId == 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || !message.payload.empty()
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid UI cast confirmation cancel";
+        return std::nullopt;
+    }
+    return message.header.correlationId;
 }
 
 } // namespace mcast::ipc

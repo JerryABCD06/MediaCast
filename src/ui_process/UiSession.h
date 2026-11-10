@@ -17,6 +17,8 @@ public:
     struct Options {
         bool enabled = false;
         bool standalone = false;
+        bool confirmationOnly = false;
+        bool testTakeoverWindow = false;
         std::string instance;
         std::string nonce;
         std::uint32_t shellPid = 0;
@@ -29,7 +31,7 @@ public:
     ~UiSession();
 
     bool connectToPeers(const Options &options, std::string &error);
-    bool sendFirstFrame(std::string &error);
+    std::unique_ptr<mcast::ipc::PipeConnection> takeControlConnection();
     std::unique_ptr<mcast::ipc::PipeConnection> takePlaybackConnection();
 
 private:

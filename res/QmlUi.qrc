@@ -17,6 +17,7 @@
 <RCC>
     <qresource prefix="/ui">
         <file alias="MainWindow.qml">../src/ui/qml/MainWindow.qml</file>
+        <file alias="CastTakeoverWindow.qml">../src/ui/qml/CastTakeoverWindow.qml</file>
         <file alias="CastPage.qml">../src/ui/qml/CastPage.qml</file>
         <file alias="SettingsPage.qml">../src/ui/qml/SettingsPage.qml</file>
         <!--

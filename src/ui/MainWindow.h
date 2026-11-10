@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QList>
 #include <QString>
+#include <QVariantMap>
 
 class QQmlApplicationEngine;
 class QQmlComponent;
@@ -85,7 +86,15 @@ public:
      */
     Q_INVOKABLE void adoptChildWindow(QObject *child);
 
+    /** QML 确认窗口把用户选择交回来。 */
+    Q_INVOKABLE void respondCastConfirmation(
+        const QString &requestId, bool accepted);
+
 public slots:
+    void showCastConfirmation(
+        qulonglong requestId, const QVariantMap &request);
+    void cancelCastConfirmation(qulonglong requestId);
+
     /**
      * 语言变了。
      *
@@ -107,7 +116,14 @@ signals:
     /** 当前窗口实例完成了一次实际帧交换。 */
     void firstFrameReady();
 
+    /** 这是 UI 自己的按钮结果，不是最终仲裁结果。 */
+    void castConfirmationResponded(qulonglong requestId, bool accepted);
+
+    /** 当前独立确认窗口已经销毁。 */
+    void castConfirmationWindowClosed(qulonglong requestId);
+
 private:
+    bool ensureEngine();
     bool load();
 
     /**
@@ -121,6 +137,9 @@ private:
     QQmlApplicationEngine *m_engine = nullptr;
     QQmlComponent *m_component = nullptr;
     QQuickWindow *m_window = nullptr;
+    QQmlComponent *m_castComponent = nullptr;
+    QPointer<QObject> m_castWindow;
+    qulonglong m_castRequestId = 0;
     SplashWindow *m_splash = nullptr;
     QTimer *m_splashTimeout = nullptr;
 

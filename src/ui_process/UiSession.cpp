@@ -177,6 +177,10 @@ UiSession::parseArguments(int argc, char **argv, std::string &error)
         constexpr std::string_view activationPrefix = "--activation-id=";
         if (argument == "--standalone") {
             options.standalone = true;
+        } else if (argument == "--confirmation-only") {
+            options.confirmationOnly = true;
+        } else if (argument == "--test-takeover-window") {
+            options.testTakeoverWindow = true;
         } else if (argument.starts_with(instancePrefix)) {
             instanceArgumentSeen = true;
             ipcArgumentSeen = true;
@@ -265,28 +269,20 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
         error = "invalid Protocol identity grant";
         return false;
     }
+    if (options.confirmationOnly)
+        return true;
     return connectPlayback(
         options, *protocolGrant, m_playback, error);
+}
+
+std::unique_ptr<mcast::ipc::PipeConnection>
+UiSession::takeControlConnection()
+{
+    return std::move(m_control);
 }
 
 std::unique_ptr<mcast::ipc::PipeConnection>
 UiSession::takePlaybackConnection()
 {
     return std::move(m_playback);
-}
-
-bool UiSession::sendFirstFrame(std::string &error)
-{
-    if (!m_options.enabled)
-        return true;
-    if (!m_control)
-        return false;
-    Message firstFrame;
-    firstFrame.header.type = MessageType::UiFirstFrame;
-    firstFrame.header.source = ProcessRole::Ui;
-    firstFrame.header.destination = ProcessRole::Shell;
-    firstFrame.header.messageId = 5;
-    firstFrame.header.correlationId = m_options.activationId;
-    firstFrame.header.sessionId = 1;
-    return m_control->writeMessage(firstFrame, 2000ms, error);
 }

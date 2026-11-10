@@ -191,4 +191,29 @@ decodeCastConfirmationDecisionMessage(
     const Message &message, std::uint64_t expectedCorrelationId,
     std::string &error);
 
+std::optional<Message> makeUiCastConfirmationRequestMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationRequestInfo &request, std::string &error);
+
+std::optional<CastConfirmationRequestInfo>
+decodeUiCastConfirmationRequestMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error);
+
+std::optional<Message> makeUiCastConfirmationDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const CastConfirmationDecisionInfo &decision, std::string &error);
+
+std::optional<CastConfirmationDecisionInfo>
+decodeUiCastConfirmationDecisionMessage(
+    const Message &message, std::uint64_t expectedRequestCorrelationId,
+    std::string &error);
+
+std::optional<Message> makeUiCastConfirmationCancelMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::string &error);
+
+std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
+    const Message &message, std::string &error);
+
 } // namespace mcast::ipc

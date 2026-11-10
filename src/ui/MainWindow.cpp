@@ -38,6 +38,22 @@ bool MainWindow::isLoaded() const
     return m_window != nullptr;
 }
 
+bool MainWindow::ensureEngine()
+{
+    if (m_engine)
+        return true;
+    m_engine = new QQmlApplicationEngine(this);
+    m_engine->addImportPath(
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml"));
+    connect(m_engine, &QQmlApplicationEngine::warnings, this,
+            [this](const QList<QQmlError> &errors) {
+        for (const QQmlError &error : errors)
+            emit logMessage(
+                QStringLiteral("QML 报错：%1").arg(error.toString()));
+    });
+    return true;
+}
+
 bool MainWindow::load()
 {
     // 窗口还在就什么都不用做。
@@ -72,22 +88,8 @@ bool MainWindow::load()
 
     // **引擎只建一次。** 在这个进程里加载第二个 QQmlApplicationEngine 会崩在
     // Qt6Qml 里。QML 文档则由一个持久 QQmlComponent 只编译一次。
-    if (!m_engine) {
-        m_engine = new QQmlApplicationEngine(this);
-
-        // FluentUI 那个 QML 模块被 CMake 拷到了 exe 旁边的 qml/ 下。
-        // 引擎默认不会往那儿找，得说一声。发布版也是同样的目录结构，
-        // 所以这里不用按 Debug/Release 分支。
-        m_engine->addImportPath(QCoreApplication::applicationDirPath() + QStringLiteral("/qml"));
-
-        // QML 的报错默认只往 stderr 吐，界面和日志里都看不见 —— 出了事只能猜。
-        // 接到日志上，"哪一行、什么东西找不到"一眼就能看见。
-        connect(m_engine, &QQmlApplicationEngine::warnings, this,
-                [this](const QList<QQmlError> &errors) {
-            for (const QQmlError &error : errors)
-                emit logMessage(QStringLiteral("QML 报错：%1").arg(error.toString()));
-        });
-    }
+    if (!ensureEngine())
+        return false;
 
     // 不要用 QQmlApplicationEngine::load() 反复建根对象。那条路会让 Qt6Qml
     // 在窗口销毁后继续访问旧对象；改用持久组件 create()，每次实例的生命周期
@@ -230,6 +232,106 @@ void MainWindow::show()
         // 先停掉上一轮，避免旧计时器把新一轮启动屏幕提前收起。
         m_splashTimeout->start();
     }
+}
+
+void MainWindow::showCastConfirmation(
+    qulonglong requestId, const QVariantMap &request)
+{
+    if (requestId == 0)
+        return;
+    const auto fail = [this, requestId] {
+        emit castConfirmationResponded(requestId, false);
+        if (!m_window)
+            emit castConfirmationWindowClosed(requestId);
+    };
+    if (m_castWindow && m_castRequestId != 0)
+        cancelCastConfirmation(m_castRequestId);
+    if (!ensureEngine()) {
+        emit logMessage(
+            QStringLiteral("投送确认窗口：QML 引擎初始化失败"));
+        fail();
+        return;
+    }
+    if (!m_castComponent) {
+        m_castComponent = new QQmlComponent(
+            m_engine,
+            QUrl(QStringLiteral("qrc:/ui/CastTakeoverWindow.qml")),
+            QQmlComponent::PreferSynchronous, this);
+    }
+    if (m_castComponent->isError()) {
+        for (const QQmlError &error : m_castComponent->errors())
+            emit logMessage(
+                QStringLiteral("QML 报错：%1").arg(error.toString()));
+        emit logMessage(
+            QStringLiteral("投送确认窗口加载失败 —— 看上面的 QML 报错"));
+        fail();
+        return;
+    }
+
+    const QVariantMap properties{
+        {QStringLiteral("requestId"),
+         QString::number(requestId)},
+        {QStringLiteral("protocol"),
+         request.value(QStringLiteral("protocol"))},
+        {QStringLiteral("peerName"),
+         request.value(QStringLiteral("peerName"))},
+        {QStringLiteral("mediaTitle"),
+         request.value(QStringLiteral("mediaTitle"))},
+        {QStringLiteral("timeoutMs"),
+         request.value(QStringLiteral("timeoutMs"))},
+    };
+    QObject *root = m_castComponent->createWithInitialProperties(properties);
+    auto *window = qobject_cast<QQuickWindow *>(root);
+    if (!window) {
+        delete root;
+        emit logMessage(
+            QStringLiteral("投送确认窗口的根对象不是窗口"));
+        fail();
+        return;
+    }
+
+    m_castWindow = root;
+    m_castRequestId = requestId;
+    connect(window, &QObject::destroyed, this, [this, requestId] {
+        const bool wasCurrent = m_castRequestId == requestId;
+        if (wasCurrent) {
+            m_castRequestId = 0;
+            m_castWindow.clear();
+            emit logMessage(QStringLiteral("投送确认窗口已关闭"));
+            emit castConfirmationWindowClosed(requestId);
+        }
+    });
+    window->show();
+    window->raise();
+    window->requestActivate();
+    emit logMessage(QStringLiteral("投送确认窗口已打开"));
+}
+
+void MainWindow::cancelCastConfirmation(qulonglong requestId)
+{
+    if (requestId == 0 || requestId != m_castRequestId)
+        return;
+    if (!m_castWindow)
+        return;
+    if (!QMetaObject::invokeMethod(
+            m_castWindow, "cancelFromShell", Qt::DirectConnection)
+        && qobject_cast<QQuickWindow *>(m_castWindow.data())) {
+        qobject_cast<QQuickWindow *>(m_castWindow.data())->close();
+    }
+}
+
+void MainWindow::respondCastConfirmation(
+    const QString &requestIdText, bool accepted)
+{
+    bool valid = false;
+    const qulonglong requestId = requestIdText.toULongLong(&valid);
+    if (!valid || requestId == 0 || requestId != m_castRequestId)
+        return;
+    emit logMessage(
+        accepted
+        ? QStringLiteral("投送确认：允许")
+        : QStringLiteral("投送确认：继续当前投送"));
+    emit castConfirmationResponded(requestId, accepted);
 }
 
 void MainWindow::retranslate()

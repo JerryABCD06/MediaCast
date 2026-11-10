@@ -130,7 +130,24 @@ void testFrameRoundTrip()
               + std::to_string(frame[3]));
 
     const FrameDecodeResult decoded = decodeFrame(frame);
-    checkEqual(decoded.status, DecodeStatus::Ok, "frame decodes");
+    checkEqual(
+        decoded.status, DecodeStatus::Ok,
+        "frame decodes status="
+            + std::to_string(static_cast<int>(decoded.status))
+            + " minor=" + std::to_string(
+                decoded.message.header.versionMinor)
+            + " type=" + std::to_string(
+                static_cast<int>(decoded.message.header.type))
+            + " source=" + std::to_string(
+                static_cast<int>(decoded.message.header.source))
+            + " destination=" + std::to_string(
+                static_cast<int>(decoded.message.header.destination))
+            + " flags=" + std::to_string(
+                static_cast<int>(decoded.message.header.flags))
+            + " rawMajor=" + std::to_string(frame[4] | (frame[5] << 8))
+            + " rawMinor=" + std::to_string(frame[6] | (frame[7] << 8))
+            + " expectedMajor=" + std::to_string(kProtocolVersionMajor)
+            + " expectedMinor=" + std::to_string(kProtocolVersionMinor));
     checkEqual(decoded.consumed, frame.size(), "frame consumed size");
     checkEqual(decoded.message.header.type, MessageType::Hello,
                "message type round trip");
@@ -484,6 +501,11 @@ void testCastConfirmationSchema()
         check(!decodeCastConfirmationRequestMessage(
                   oldVersion, error).has_value(),
               "cast confirmation request requires IPC minor 1");
+        Message wrongSession = *requestMessage;
+        wrongSession.header.sessionId = 1;
+        check(!decodeCastConfirmationRequestMessage(
+                  wrongSession, error).has_value(),
+              "cast confirmation request rejects candidate session id");
         Message futureVersion = *requestMessage;
         futureVersion.header.versionMinor = kProtocolVersionMinor + 1;
         checkEqual(
@@ -526,6 +548,69 @@ void testCastConfirmationSchema()
               "cast confirmation decision rejects zero expected correlation");
     }
 
+    const auto uiRequestMessage = makeUiCastConfirmationRequestMessage(
+        200, requestMessage ? requestMessage->header.messageId : 100,
+        request, error);
+    check(uiRequestMessage.has_value(),
+          "UI cast confirmation request created: " + error);
+    if (uiRequestMessage) {
+        const auto frame = decodeFrame(encodeFrame(*uiRequestMessage));
+        check(frame.status == DecodeStatus::Ok
+                  && frame.message.header.type
+                      == MessageType::UiCastConfirmationRequest,
+              "UI cast confirmation request survives frame decode");
+        const auto decoded = decodeUiCastConfirmationRequestMessage(
+            frame.message, 100, error);
+        check(decoded.has_value(),
+              "UI cast confirmation request decoded: " + error);
+        if (decoded) {
+            checkEqual(decoded->claimId, request.claimId,
+                       "UI cast confirmation request claim id");
+        }
+        Message oldVersion = *uiRequestMessage;
+        oldVersion.header.versionMinor = 1;
+        check(!decodeUiCastConfirmationRequestMessage(
+                  oldVersion, 100, error).has_value(),
+              "UI cast confirmation requires IPC minor 2");
+    }
+
+    const auto uiDecisionMessage = makeUiCastConfirmationDecisionMessage(
+        201, uiRequestMessage ? uiRequestMessage->header.messageId : 200,
+        decision, error);
+    check(uiDecisionMessage.has_value(),
+          "UI cast confirmation decision created: " + error);
+    if (uiDecisionMessage) {
+        const auto frame = decodeFrame(encodeFrame(*uiDecisionMessage));
+        check(frame.status == DecodeStatus::Ok
+                  && frame.message.header.type
+                      == MessageType::UiCastConfirmationDecision,
+              "UI cast confirmation decision survives frame decode");
+        const auto decoded = decodeUiCastConfirmationDecisionMessage(
+            frame.message, 200, error);
+        check(decoded.has_value(),
+              "UI cast confirmation decision decoded: " + error);
+    }
+
+    const auto uiCancelMessage = makeUiCastConfirmationCancelMessage(
+        202, uiRequestMessage ? uiRequestMessage->header.messageId : 200,
+        error);
+    check(uiCancelMessage.has_value(),
+          "UI cast confirmation cancel created: " + error);
+    if (uiCancelMessage) {
+        checkEqual(
+            decodeFrame(encodeFrame(*uiCancelMessage)).status,
+            DecodeStatus::Ok,
+            "UI cast confirmation cancel survives frame decode");
+        check(decodeUiCastConfirmationCancelMessage(
+                  *uiCancelMessage, error).has_value(),
+              "UI cast confirmation cancel schema decodes");
+        Message oldVersion = *uiCancelMessage;
+        oldVersion.header.versionMinor = 1;
+        check(!decodeUiCastConfirmationCancelMessage(
+                  oldVersion, error).has_value(),
+              "UI cast confirmation cancel requires IPC minor 2");
+    }
+
     auto invalid = request;
     invalid.protocol = mcast::cast::ProtocolKind::None;
     check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
@@ -542,6 +627,14 @@ void testCastConfirmationSchema()
     invalid.peerDisplayName = "\xC0\xAF";
     check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
           "cast confirmation rejects invalid UTF-8 text");
+    invalid = request;
+    invalid.mediaTitle = "line\nbreak";
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects control characters");
+    invalid = request;
+    invalid.mediaTitle = "\xE2\x80\xAE";
+    check(!makeCastConfirmationRequestMessage(1, invalid, error).has_value(),
+          "cast confirmation rejects bidi controls");
 
     MessageHeader direction;
     direction.type = MessageType::CastConfirmationRequest;
@@ -559,6 +652,24 @@ void testCastConfirmationSchema()
     check(validateMessageDirection(
               ConnectionChannel::Control, direction, error),
           "cast confirmation decision direction accepted");
+    direction.type = MessageType::UiCastConfirmationRequest;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "UI cast confirmation request direction accepted");
+    direction.type = MessageType::UiCastConfirmationDecision;
+    direction.source = ProcessRole::Ui;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "UI cast confirmation decision direction accepted");
+    direction.type = MessageType::UiCastConfirmationCancel;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "UI cast confirmation cancel direction accepted");
 }
 
 void testPipeRoundTrip()

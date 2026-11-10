@@ -13,6 +13,7 @@
 #include "ui/MainWindow.h"
 #include "ui/UiState.h"
 #include "ui_process/PlaybackBridge.h"
+#include "ui_process/UiConfirmationBridge.h"
 #include "ui_process/UiSession.h"
 
 #include <QApplication>
@@ -23,6 +24,7 @@
 #include <QSGRendererInterface>
 #include <QTextStream>
 #include <QTime>
+#include <QTimer>
 #include <QtQml/qqml.h>
 
 #include <memory>
@@ -96,6 +98,11 @@ int main(int argc, char *argv[])
     QObject::connect(&mainWindow, &MainWindow::logMessage, writeLog);
     QObject::connect(
         &mainWindow, &MainWindow::windowClosed, &app, &QApplication::quit);
+    if (uiSessionOptions.confirmationOnly) {
+        QObject::connect(
+            &mainWindow, &MainWindow::castConfirmationWindowClosed,
+            &app, &QApplication::quit);
+    }
     QObject::connect(
         &uiState, &UiState::languageChanged,
         &mainWindow, &MainWindow::retranslate);
@@ -122,20 +129,74 @@ int main(int argc, char *argv[])
                 writeLog(QStringLiteral("Playback IPC  %1").arg(text));
             });
     }
+
+    std::unique_ptr<mcast::ui_process::UiConfirmationBridge>
+        confirmationBridge;
+    if (auto controlConnection = uiSession.takeControlConnection()) {
+        confirmationBridge =
+            std::make_unique<mcast::ui_process::UiConfirmationBridge>(
+                std::shared_ptr<mcast::ipc::PipeConnection>(
+                    std::move(controlConnection)));
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::requestReceived,
+            &mainWindow, &MainWindow::showCastConfirmation);
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::cancelReceived,
+            &mainWindow, &MainWindow::cancelCastConfirmation);
+        QObject::connect(
+            &mainWindow, &MainWindow::castConfirmationResponded,
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::submitDecision);
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::logMessage,
+            &mainWindow, [&writeLog](const QString &text) {
+                writeLog(QStringLiteral("确认 IPC  %1").arg(text));
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::connectionLost,
+            &app, [&app, &writeLog](const QString &reason) {
+                writeLog(QStringLiteral("Shell ControlPipe 断开：%1")
+                             .arg(reason));
+                app.quit();
+            });
+    }
     QObject::connect(
         &mainWindow, &MainWindow::firstFrameReady, &app, [&] {
+        if (!confirmationBridge)
+            return;
         std::string error;
-        if (!uiSession.sendFirstFrame(error)) {
+        if (!confirmationBridge->sendFirstFrame(
+                uiSessionOptions.activationId, error)) {
             writeLog(QStringLiteral("FirstFrame 上报失败：%1")
                          .arg(QString::fromStdString(error)));
         }
     });
 
-    player->start();
-    const QVariantMap savedPicture = settings.pictureValues();
-    for (auto it = savedPicture.constBegin(); it != savedPicture.constEnd(); ++it)
-        playback.setPictureControl(it.key(), it.value().toInt());
+    if (!uiSessionOptions.confirmationOnly) {
+        player->start();
+        const QVariantMap savedPicture = settings.pictureValues();
+        for (auto it = savedPicture.constBegin();
+             it != savedPicture.constEnd(); ++it) {
+            playback.setPictureControl(it.key(), it.value().toInt());
+        }
+    }
 
-    mainWindow.show();
+    if (!uiSessionOptions.confirmationOnly)
+        mainWindow.show();
+    if (uiSessionOptions.testTakeoverWindow) {
+        const QVariantMap request{
+            {QStringLiteral("protocol"), 3},
+            {QStringLiteral("peerName"), QStringLiteral("Living Room Phone")},
+            {QStringLiteral("mediaTitle"), QStringLiteral("Example Movie")},
+            {QStringLiteral("timeoutMs"), 10000},
+        };
+        QTimer::singleShot(0, &mainWindow, [&mainWindow, request] {
+            mainWindow.showCastConfirmation(9001, request);
+        });
+    }
     return app.exec();
 }
