@@ -12,6 +12,7 @@
 #include "ipc/NamedPipe.h"
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/TrayIcon.h"
+#include "shell/ShellSettings.h"
 #include "supervisor/ChildProcess.h"
 #include "supervisor/ProcessIdentity.h"
 
@@ -57,6 +58,28 @@ struct Options {
     bool testPersistent = false;
     bool background = false;
     std::uint32_t testUiRounds = 1;
+};
+
+class MainThreadApartment
+{
+public:
+    MainThreadApartment()
+    {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            m_initialized = true;
+        } catch (const winrt::hresult_error &) {
+        }
+    }
+
+    ~MainThreadApartment()
+    {
+        if (m_initialized)
+            winrt::uninit_apartment();
+    }
+
+private:
+    bool m_initialized = false;
 };
 
 std::string narrow(const std::wstring &value)
@@ -479,6 +502,15 @@ public:
 
     bool initialize(std::string &error)
     {
+        m_settings = std::make_unique<mcast::shell::ShellSettings>(
+            mcast::supervisor::currentExecutablePath().parent_path()
+            / L"MediaCast.json");
+        std::string settingsError;
+        if (!m_settings->load(settingsError)) {
+            std::cerr << "Settings load failed: " << settingsError << '\n';
+        }
+        m_receivingEnabled = m_settings->acceptNewCast();
+
         m_nonce = mcast::supervisor::randomHexToken(16);
         if (!m_nonce) {
             error = "cannot generate instance nonce";
@@ -537,6 +569,8 @@ public:
                 },
                 [this] { toggleReceiving(); },
                 [this] { m_quitRequested.store(true); });
+            m_tray->setChinese(m_settings->chineseUi());
+            m_tray->setReceivingEnabled(m_receivingEnabled);
             if (!m_tray->initialize(error))
                 std::cerr << "Tray initialization failed: "
                           << error << '\n';
@@ -552,12 +586,31 @@ public:
 
         const auto startedAt = std::chrono::steady_clock::now();
         auto lastReceivingAttempt = startedAt - 1s;
+        auto lastInitialReceivingAttempt = startedAt - 1s;
+        bool receivingStateSynchronized = m_options.testMode;
         while (true) {
             if (m_tray)
                 m_tray->pumpMessages();
             if (m_quitRequested.load())
                 return 0;
             const auto now = std::chrono::steady_clock::now();
+            if (!receivingStateSynchronized
+                && now - startedAt > 250ms
+                && now - lastInitialReceivingAttempt > 500ms) {
+                lastInitialReceivingAttempt = now;
+                bool effective = m_receivingEnabled;
+                std::string syncError;
+                if (sendReceivingEnabled(
+                        m_receivingEnabled, effective, syncError)) {
+                    m_receivingEnabled = effective;
+                    receivingStateSynchronized = true;
+                    if (m_tray)
+                        m_tray->setReceivingEnabled(effective);
+                } else if (now - startedAt > 5s) {
+                    std::cerr << "Initial receiving state retry: "
+                              << syncError << '\n';
+                }
+            }
             if (m_options.testToggleReceiving
                 && now - startedAt > 10s) {
                 std::cerr << "Receiving command test timed out\n";
@@ -833,6 +886,13 @@ private:
             m_receivingEnabled = effective;
             if (m_tray)
                 m_tray->setReceivingEnabled(effective);
+            if (m_settings) {
+                m_settings->setAcceptNewCast(effective);
+                std::string saveError;
+                if (!m_settings->save(saveError))
+                    std::cerr << "Settings save failed: "
+                              << saveError << '\n';
+            }
         } else {
             std::cerr << "Receiving state command failed: "
                       << error << '\n';
@@ -1372,6 +1432,7 @@ private:
     void cleanup()
     {
         m_tray.reset();
+        m_settings.reset();
         m_splash.hideImmediately();
         if (m_commandThread.joinable()) {
             m_commandThread.request_stop();
@@ -1464,6 +1525,7 @@ private:
     std::mutex m_handoffMutex;
     std::unordered_set<std::uint64_t> m_completedHandoffs;
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
+    std::unique_ptr<mcast::shell::ShellSettings> m_settings;
     bool m_receivingEnabled = true;
     std::atomic_bool m_quitRequested = false;
 
@@ -1507,6 +1569,7 @@ int runPrimaryShell(
 
 int runShellMain(int argc, wchar_t **argv)
 {
+    MainThreadApartment apartment;
     Options options;
     std::string error;
     if (!parseOptions(argc, argv, options, error)) {

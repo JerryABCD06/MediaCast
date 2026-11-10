@@ -31,6 +31,11 @@ constexpr bool        kDefaultMica       = true;
 } // namespace
 
 AppSettings::AppSettings(QObject *parent)
+    : AppSettings(QString(), parent)
+{
+}
+
+AppSettings::AppSettings(const QString &filePath, QObject *parent)
     : QObject(parent)
 {
     // **放在主程序同级目录。**
@@ -38,7 +43,10 @@ AppSettings::AppSettings(QObject *parent)
     // 注意：装到 C:\Program Files\ 那种地方的话这儿是写不进去的。那时
     // isPersistent() 会是 false，用户在界面上改的东西不会保留 —— 但程序照常跑。
     // 真到要打包安装的那一步再考虑退回 %LOCALAPPDATA%。
-    m_path = QCoreApplication::applicationDirPath() + QStringLiteral("/MediaCast.json");
+    m_path = filePath.isEmpty()
+        ? QCoreApplication::applicationDirPath()
+            + QStringLiteral("/MediaCast.json")
+        : filePath;
 
     // 画面调节那几项攒着一起写盘 —— 见 setPictureValue 上面那段。
     m_pictureSaveTimer.setSingleShot(true);
@@ -62,8 +70,9 @@ AppSettings::~AppSettings()
 void AppSettings::load()
 {
     QFile file(m_path);
+    const bool existingFile = file.exists();
 
-    if (file.exists() && file.open(QIODevice::ReadOnly)) {
+    if (existingFile && file.open(QIODevice::ReadOnly)) {
         QJsonParseError error{};
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
         file.close();
@@ -97,11 +106,19 @@ void AppSettings::load()
     cast.insert(QStringLiteral("broadcast_interval"), kDefaultIntervalMs);
 
     m_root = QJsonObject{ { QStringLiteral("ui"), ui }, { QStringLiteral("cast"), cast } };
+    if (existingFile) {
+        // 文件存在但读不懂时，默认值只留在内存里；不能覆盖用户原文件。
+        m_persistent = false;
+        m_writeProtected = true;
+        return;
+    }
     save();
 }
 
 void AppSettings::save()
 {
+    if (m_writeProtected)
+        return;
     QFile file(m_path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (m_persistent) {

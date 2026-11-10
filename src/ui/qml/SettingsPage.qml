@@ -273,23 +273,6 @@ Item {
                     icon: FluentIcons.Send
                     title: qsTr("ui_settings_accept")
                     subtitle: qsTr("ui_settings_accept_desc")
-
-                    // 不写 `checked: Settings.castNewCast` 这种绑定：开关自己点一下
-                    // 就会写 checked，绑定当场被打断，之后（比如托盘点勿扰）就再也
-                    // 跟不回来了。所以平时靠 Connections 跟，点的时候写回 C++。
-                    FluToggleSwitch {
-                        id: switchNewCast
-                        Component.onCompleted: checked = Settings.castNewCast
-                        Connections {
-                            target: Settings
-                            function onAcceptNewCastChanged() {
-                                switchNewCast.checked = Settings.castNewCast
-                            }
-                        }
-                        clickListener: function () {
-                            Settings.castNewCast = !Settings.castNewCast
-                        }
-                    }
                 }
 
                 FluText {

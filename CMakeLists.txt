@@ -57,6 +57,8 @@ target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
 # 真正的协议与 QML 会在后续阶段替换这些 skeleton 入口；原生托盘已进入 Shell。
 add_executable(
     MCast.Shell
+    src/shell/ShellSettings.h
+    src/shell/ShellSettings.cpp
     src/shell/ShellMain.cpp
     src/platform/windows/TrayIcon.h
     src/platform/windows/TrayIcon.cpp
@@ -69,7 +71,7 @@ target_compile_options(MCast.Shell PRIVATE /utf-8)
 target_link_libraries(
     MCast.Shell PRIVATE
     mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib
-    windowscodecs.lib advapi32.lib ole32.lib shell32.lib)
+    windowscodecs.lib advapi32.lib ole32.lib shell32.lib windowsapp.lib)
 set_target_properties(MCast.Shell PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
@@ -89,6 +91,36 @@ if(BUILD_TESTING)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_shell_settings_tests
+        tests/shell_settings_tests.cpp
+        src/shell/ShellSettings.cpp)
+    target_include_directories(
+        mcast_shell_settings_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_shell_settings_tests PRIVATE /utf-8)
+    target_link_libraries(mcast_shell_settings_tests PRIVATE windowsapp.lib)
+    add_test(NAME mcast_shell_settings_tests COMMAND mcast_shell_settings_tests)
+
+    add_executable(
+        mcast_app_settings_tests
+        tests/app_settings_tests.cpp
+        src/core/AppSettings.cpp
+        src/core/AppSettings.h)
+    target_include_directories(
+        mcast_app_settings_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_app_settings_tests PRIVATE /utf-8)
+    target_link_libraries(mcast_app_settings_tests PRIVATE Qt6::Core)
+    set_target_properties(
+        mcast_app_settings_tests PROPERTIES AUTOMOC TRUE)
+    add_test(
+        NAME mcast_app_settings_tests
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
+            -Executable "$<TARGET_FILE:mcast_app_settings_tests>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_test(
         NAME mcast_process_skeleton_smoke

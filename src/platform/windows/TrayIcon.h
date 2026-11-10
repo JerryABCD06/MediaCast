@@ -22,6 +22,7 @@ public:
     NativeTrayIcon &operator=(const NativeTrayIcon &) = delete;
 
     bool initialize(std::string &error);
+    void setChinese(bool chinese);
     void setReceivingEnabled(bool enabled);
     void pumpMessages();
 
@@ -46,6 +47,7 @@ private:
     bool m_receivingEnabled = true;
     bool m_iconAdded = false;
     ULONGLONG m_lastOpenTick = 0;
+    bool m_chinese = false;
 };
 
 } // namespace mcast::platform

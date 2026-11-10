@@ -66,6 +66,7 @@ class AppSettings : public QObject
 
 public:
     explicit AppSettings(QObject *parent = nullptr);
+    AppSettings(const QString &filePath, QObject *parent = nullptr);
     ~AppSettings() override;
 
     /** 设置文件在哪儿。 */
@@ -160,5 +161,6 @@ private:
 
     QString m_path;
     bool    m_persistent = false;
+    bool    m_writeProtected = false;
     QJsonObject m_root;
 };

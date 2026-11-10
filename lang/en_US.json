@@ -87,7 +87,7 @@
     "ui_settings_mica": "Enable Mica tint effect",
     "ui_settings_mica_desc": "Uses colors from the Windows desktop wallpaper to give the window a distinctive look.",
     "ui_settings_accept": "Accept new casts",
-    "ui_settings_accept_desc": "When off, your phone cannot find this device.",
+    "ui_settings_accept_desc": "Pause or resume receiving from the system tray.",
     "ui_settings_advanced": "Advanced (usually no changes needed)",
     "ui_settings_broadcast": "Periodic broadcast",
     "ui_settings_broadcast_desc": "Periodically announces this device on the network. When off, it stops broadcasting, but your phone can still find this device by searching.",

@@ -24,6 +24,8 @@ NativeTrayIcon::NativeTrayIcon(
     , m_toggleReceiving(std::move(toggleReceiving))
     , m_quit(std::move(quit))
 {
+    m_chinese =
+        PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
 }
 
 NativeTrayIcon::~NativeTrayIcon()
@@ -69,6 +71,15 @@ bool NativeTrayIcon::initialize(std::string &error)
         RegisterWindowMessageW(L"TaskbarCreated");
     rebuildMenu();
     return addNotificationIcon(error);
+}
+
+void NativeTrayIcon::setChinese(bool chinese)
+{
+    if (m_chinese == chinese)
+        return;
+    m_chinese = chinese;
+    rebuildMenu();
+    setReceivingEnabled(m_receivingEnabled);
 }
 
 void NativeTrayIcon::setReceivingEnabled(bool enabled)
@@ -243,7 +254,7 @@ void NativeTrayIcon::removeNotificationIcon()
 
 bool NativeTrayIcon::useChinese() const
 {
-    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    return m_chinese;
 }
 
 } // namespace mcast::platform
