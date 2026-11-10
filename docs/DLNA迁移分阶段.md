@@ -109,6 +109,11 @@ current/next 请求和 playerLost/本地 endSession 均会同步到协议快照�
 
 只做 localhost 和假 socket 测试。
 
+当前进展：`mcast_net` 已提供 Winsock RAII、非阻塞 TCP/UDP、loopback
+绑定、可唤醒 socket 事件循环、保留 connect/close 错误码的激活结果、
+唯一 ID 定时器队列，以及带 ifType/multicast/prefix/scope 属性的 IPv4
+网卡枚举。默认测试不占用 1900/8200。
+
 ### 6. HTTP + SOAP
 
 保留现有 `Connection: close` 行为，重写 QTcpServer/QTcpSocket 层；增加

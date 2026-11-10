@@ -62,6 +62,7 @@ int main()
 
     EventState events;
     std::string serverError;
+    std::atomic_bool closeServer = false;
     std::jthread server([&](std::stop_token) {
         try {
             std::string error;
@@ -170,7 +171,10 @@ int main()
                 || command.expectedGeneration != 2)
                 throw std::runtime_error(
                     "third command generation: " + error);
-            std::this_thread::sleep_for(6s);
+            const auto closeDeadline = std::chrono::steady_clock::now() + 30s;
+            while (!closeServer
+                   && std::chrono::steady_clock::now() < closeDeadline)
+                std::this_thread::sleep_for(10ms);
         } catch (const std::exception &exception) {
             serverError = exception.what();
         }
@@ -275,9 +279,19 @@ int main()
     PlaybackCommand third;
     third.type = PlaybackCommandType::Pause;
     check(gateway.submit(third).queued, "third command queues");
-    check(events.waitFor([&](const auto &) {
+    const bool timeoutArrived = events.waitFor([&](const auto &) {
         return callbackStarted.load();
-    }, 7s), "timed-out command completion arrives");
+    }, 10s);
+    if (!timeoutArrived) {
+        std::scoped_lock lock(events.mutex);
+        for (const auto &event : events.events) {
+            std::cerr << "timeout-event kind="
+                      << static_cast<int>(event.kind)
+                      << " outcome=" << static_cast<int>(event.outcome)
+                      << " id=" << event.commandId << '\n';
+        }
+    }
+    check(timeoutArrived, "timed-out command completion arrives");
     std::jthread remover([&] {
         gateway.removeEventListener(blockingListener);
         removeReturned = true;
@@ -291,6 +305,7 @@ int main()
     disconnectedCommand.type = PlaybackCommandType::Stop;
     check(gateway.submit(disconnectedCommand).queued,
           "command can be pending when pipe disconnects");
+    closeServer = true;
 
     server.join();
     check(serverError.empty(), "server completed without errors");

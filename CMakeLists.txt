@@ -44,6 +44,14 @@ target_compile_options(mcast_ipc PUBLIC /utf-8)
 target_include_directories(mcast_ipc PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mcast_ipc PUBLIC advapi32.lib bcrypt.lib)
 
+add_library(mcast_net STATIC
+    src/platform/windows/net/SocketRuntime.h
+    src/platform/windows/net/SocketRuntime.cpp)
+target_compile_features(mcast_net PUBLIC cxx_std_20)
+target_compile_options(mcast_net PUBLIC /utf-8)
+target_include_directories(mcast_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(mcast_net PUBLIC ws2_32.lib iphlpapi.lib)
+
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -95,6 +103,12 @@ if(BUILD_TESTING)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_net_tests
+        tests/socket_runtime_tests.cpp)
+    target_link_libraries(mcast_net_tests PRIVATE mcast_net)
+    add_test(NAME mcast_net_tests COMMAND mcast_net_tests)
 
     add_executable(
         mcast_playback_codec_tests
