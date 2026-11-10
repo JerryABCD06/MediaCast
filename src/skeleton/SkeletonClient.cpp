@@ -137,34 +137,40 @@ std::unique_ptr<PipeConnection> connectControl(
 
 bool requestUi(
     PipeConnection &control, mcast::ipc::PeerIdentityGrant &uiGrant,
-    std::string &error)
+    std::uint64_t requestId, bool &started, std::string &error)
 {
     Message request;
     request.header.type = MessageType::UiActivateRequest;
     request.header.source = ProcessRole::Protocol;
     request.header.destination = ProcessRole::Shell;
-    request.header.messageId = 2;
+    request.header.messageId = requestId;
     request.header.sessionId = 1;
     if (!control.writeMessage(request, 2000ms, error))
         return false;
 
     Message decision;
-    if (!control.readMessage(decision, 3000ms, error)
-        || decision.header.type != MessageType::UiActivateDecision
-        || decision.header.correlationId != request.header.messageId
-        || !mcast::ipc::validateMessageDirection(
-            ConnectionChannel::Control, decision.header, error)) {
-        if (error.empty())
-            error = "invalid UI activation decision";
+    if (!control.readMessage(decision, 3000ms, error))
+        return false;
+    if (decision.header.sessionId != request.header.sessionId) {
+        error = "UI activation decision session mismatch";
         return false;
     }
+    const auto decodedDecision =
+        mcast::ipc::decodeUiActivateDecisionMessage(
+            decision, request.header.messageId, error);
+    if (!decodedDecision)
+        return false;
+    started = decodedDecision->started;
+    if (!started)
+        return true;
+
     Message grant;
     if (!control.readMessage(grant, 3000ms, error))
         return false;
     const auto decoded = mcast::ipc::decodePeerIdentityGrantMessage(
         grant, error);
     if (!decoded || decoded->role != ProcessRole::Ui
-        || decoded->activationId != request.header.messageId) {
+        || decoded->activationId != decodedDecision->activationId) {
         error = "invalid UI identity grant";
         return false;
     }
@@ -304,6 +310,23 @@ bool uiPlaybackClient(
     return true;
 }
 
+bool waitForUiExit(
+    std::uint32_t processId, std::string &error)
+{
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId);
+    if (!process) {
+        error = "cannot open Ui process while waiting for reconnect";
+        return false;
+    }
+    const DWORD result = WaitForSingleObject(process, 5000);
+    CloseHandle(process);
+    if (result != WAIT_OBJECT_0) {
+        error = "Ui process did not exit before the next activation round";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool parseClientOptions(
@@ -318,6 +341,8 @@ bool parseClientOptions(
         constexpr std::wstring_view noncePrefix = L"--nonce=";
         constexpr std::wstring_view shellPidPrefix = L"--shell-pid=";
         constexpr std::wstring_view activationPrefix = L"--activation-id=";
+        constexpr std::wstring_view requestRoundsPrefix =
+            L"--request-ui-rounds=";
         if (argument.starts_with(instancePrefix)) {
             options.instance = narrow(
                 argument.substr(instancePrefix.size()).c_str());
@@ -348,6 +373,19 @@ bool parseClientOptions(
             }
         } else if (argument == L"--request-ui") {
             options.requestUi = true;
+        } else if (argument.starts_with(requestRoundsPrefix)) {
+            const std::wstring value =
+                argument.substr(requestRoundsPrefix.size());
+            try {
+                const unsigned long parsed = std::stoul(value);
+                if (parsed == 0 || parsed > 8)
+                    throw std::out_of_range("rounds");
+                options.uiRequestRounds =
+                    static_cast<std::uint32_t>(parsed);
+            } catch (...) {
+                error = "invalid --request-ui-rounds";
+                return false;
+            }
         } else {
             error = "unknown argument";
             return false;
@@ -369,6 +407,10 @@ bool parseClientOptions(
         error = "--activation-id is required for Ui";
         return false;
     }
+    if (options.uiRequestRounds != 1 && !options.requestUi) {
+        error = "--request-ui-rounds requires --request-ui";
+        return false;
+    }
     return true;
 }
 
@@ -382,14 +424,33 @@ int runClient(const ClientOptions &options)
     }
 
     if (options.role == ProcessRole::Protocol) {
-        mcast::ipc::PeerIdentityGrant uiGrant;
-        if (!options.requestUi || !requestUi(*control, uiGrant, error)) {
-            std::cerr << "UI activation failed: " << error << '\n';
-            return 3;
-        }
-        if (!protocolPlaybackServer(options, uiGrant, error)) {
-            std::cerr << "playback server failed: " << error << '\n';
-            return 4;
+        for (std::uint32_t round = 0;
+             round < options.uiRequestRounds; ++round) {
+            mcast::ipc::PeerIdentityGrant uiGrant;
+            bool started = false;
+            if (!options.requestUi
+                || !requestUi(
+                    *control, uiGrant, 2 + round, started, error)) {
+                std::cerr << "UI activation failed: " << error << '\n';
+                return 3;
+            }
+            if (started
+                && !protocolPlaybackServer(options, uiGrant, error)) {
+                std::cerr << "playback server failed: " << error << '\n';
+                return 4;
+            }
+            if (round + 1 < options.uiRequestRounds) {
+                if (!started) {
+                    std::cerr
+                        << "Cannot start another Ui round while the current "
+                           "Ui is active\n";
+                    return 5;
+                }
+                if (!waitForUiExit(uiGrant.processId, error)) {
+                    std::cerr << "Ui round barrier failed: " << error << '\n';
+                    return 5;
+                }
+            }
         }
     } else if (options.role == ProcessRole::Ui) {
         Message grant;

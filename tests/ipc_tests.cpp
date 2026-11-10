@@ -322,6 +322,26 @@ void testHelloSchema()
         }
     }
 
+    const mcast::ipc::UiActivateDecisionInfo activationDecision{true, 2};
+    const auto decisionMessage =
+        mcast::ipc::makeUiActivateDecisionMessage(
+            3, 2, 1, activationDecision, error);
+    check(decisionMessage.has_value(),
+          "Ui activation decision created: " + error);
+    if (decisionMessage) {
+        const auto decodedDecision =
+            mcast::ipc::decodeUiActivateDecisionMessage(
+                *decisionMessage, 2, error);
+        check(decodedDecision.has_value(),
+              "Ui activation decision decoded: " + error);
+        if (decodedDecision) {
+            checkEqual(decodedDecision->started, true,
+                       "decision started state");
+            checkEqual(decodedDecision->activationId, 2,
+                       "decision activation id");
+        }
+    }
+
     HelloInfo invalid = hello;
     invalid.instanceNonce.clear();
     check(!encodeHelloPayload(invalid, error).has_value(),

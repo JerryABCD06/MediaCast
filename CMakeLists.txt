@@ -61,11 +61,15 @@ target_link_libraries(MCast.Shell PRIVATE mcast_ipc)
 add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
 target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
 
-add_executable(MCast.UiSkeleton src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
-target_link_libraries(MCast.UiSkeleton PRIVATE mcast_ipc)
-add_dependencies(MCast.Shell MCast.Protocol MCast.UiSkeleton)
+add_dependencies(MCast.Shell MCast.Protocol)
 
 if(BUILD_TESTING)
+    add_executable(
+        MCast.UiSkeleton
+        src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
+    target_link_libraries(MCast.UiSkeleton PRIVATE mcast_ipc)
+    add_dependencies(MCast.Shell MCast.UiSkeleton)
+
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
@@ -79,6 +83,17 @@ if(BUILD_TESTING)
             -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
             -UiExe "$<TARGET_FILE:MCast.UiSkeleton>")
     set_tests_properties(mcast_process_skeleton_smoke PROPERTIES TIMEOUT 20)
+
+    add_test(
+        NAME mcast_process_same_shell_two_ui_rounds
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_skeleton_smoke.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.UiSkeleton>"
+            -UiRounds 2)
+    set_tests_properties(
+        mcast_process_same_shell_two_ui_rounds PROPERTIES TIMEOUT 30)
 endif()
 
 # Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。
@@ -270,12 +285,13 @@ set_target_properties(MCast PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-# ── 真实 Qt/QML Ui 进程（离线抽取阶段）──────────────────────────────────
+# ── 真实 Qt/QML Ui 进程 ─────────────────────────────────────────────────
 #
-# 它先独立构建、独立运行，不接管现有 MCast 单体的正式启动路径。
-# 等 MainWindow 在独立进程中验证稳定后，再把 MCast.Ui 骨架替换成这个目标。
+# 它由生产 Shell 启动；无 Qt 的 MCast.UiSkeleton 只用于进程监督自动测试。
 qt_add_executable(MCast.Ui
     src/ui_process/UiMain.cpp
+    src/ui_process/UiSession.h
+    src/ui_process/UiSession.cpp
     src/core/AppSettings.h
     src/core/AppSettings.cpp
     src/core/LegalDocs.h

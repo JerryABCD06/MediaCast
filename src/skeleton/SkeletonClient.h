@@ -16,6 +16,7 @@ struct ClientOptions {
     std::uint32_t shellPid = 0;
     std::uint64_t activationId = 0;
     bool requestUi = false;
+    std::uint32_t uiRequestRounds = 1;
 };
 
 bool parseClientOptions(

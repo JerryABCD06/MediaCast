@@ -194,6 +194,12 @@ void MainWindow::show()
     if (!m_window->isVisible())
         m_window->grabWindow();
 
+    // 必须在 show() 之前接上：窗口首次显示时可能在同一轮事件处理中完成
+    // 帧交换，晚一步连接会把这次唯一可信的首帧通知漏掉。
+    connect(m_window, &QQuickWindow::frameSwapped, this,
+            [this] { emit firstFrameReady(); },
+            Qt::SingleShotConnection);
+
     m_window->show();
     m_window->raise();
     m_window->requestActivate();

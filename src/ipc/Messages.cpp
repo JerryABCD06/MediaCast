@@ -556,4 +556,76 @@ decodePeerIdentityGrantMessage(const Message &message, std::string &error)
     };
 }
 
+std::optional<Message> makeUiActivateDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::uint64_t sessionId, const UiActivateDecisionInfo &decision,
+    std::string &error)
+{
+    if (messageId == 0 || correlationId == 0 || sessionId == 0
+        || decision.activationId == 0) {
+        error = "Ui activation decision contains invalid fields";
+        return std::nullopt;
+    }
+
+    PayloadBuilder builder;
+    if (!builder.addBool(
+            static_cast<std::uint16_t>(FieldId::UiActivationStarted),
+            decision.started)
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::UiActivationId),
+            decision.activationId)) {
+        error = "Ui activation decision exceeds protocol limits";
+        return std::nullopt;
+    }
+
+    Message message;
+    message.header.type = MessageType::UiActivateDecision;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Protocol;
+    message.header.flags = MessageFlags::Response;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    message.header.sessionId = sessionId;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (message.payload.empty()) {
+        error = "Ui activation decision payload is empty";
+        return std::nullopt;
+    }
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<UiActivateDecisionInfo>
+decodeUiActivateDecisionMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error)
+{
+    if (message.header.type != MessageType::UiActivateDecision
+        || message.header.correlationId != expectedCorrelationId
+        || message.header.sessionId == 0
+        || (static_cast<std::uint16_t>(message.header.flags)
+            & static_cast<std::uint16_t>(MessageFlags::Response))
+            == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid Ui activation decision";
+        return std::nullopt;
+    }
+
+    PayloadReader reader(message.payload);
+    const auto started = reader.getBool(
+        static_cast<std::uint16_t>(FieldId::UiActivationStarted));
+    const auto activationId = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::UiActivationId));
+    if (!reader.valid() || !started || !activationId
+        || *activationId == 0) {
+        error = "Ui activation decision has invalid fields";
+        return std::nullopt;
+    }
+    return UiActivateDecisionInfo{*started, *activationId};
+}
+
 } // namespace mcast::ipc

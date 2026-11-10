@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -44,6 +45,7 @@ struct Options {
     std::filesystem::path ui;
     bool testExitAfterFirstFrame = false;
     bool testMode = false;
+    std::uint32_t testUiRounds = 1;
 };
 
 std::string narrow(const std::wstring &value)
@@ -98,6 +100,8 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
         constexpr std::wstring_view instancePrefix = L"--instance=";
         constexpr std::wstring_view protocolPrefix = L"--protocol=";
         constexpr std::wstring_view uiPrefix = L"--ui=";
+        constexpr std::wstring_view testUiRoundsPrefix =
+            L"--test-ui-rounds=";
         if (argument.starts_with(instancePrefix)) {
             options.instance = narrow(
                 argument.substr(instancePrefix.size()));
@@ -111,6 +115,18 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
             options.testExitAfterFirstFrame = true;
         } else if (argument == L"--test") {
             options.testMode = true;
+        } else if (argument.starts_with(testUiRoundsPrefix)) {
+            try {
+                const unsigned long parsed = std::stoul(
+                    argument.substr(testUiRoundsPrefix.size()));
+                if (parsed == 0 || parsed > 8)
+                    throw std::out_of_range("rounds");
+                options.testUiRounds =
+                    static_cast<std::uint32_t>(parsed);
+            } catch (...) {
+                error = "invalid --test-ui-rounds";
+                return false;
+            }
         } else {
             error = "unknown argument";
             return false;
@@ -122,6 +138,10 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
     }
     if (pathOverride && !options.testMode) {
         error = "executable path overrides require --test";
+        return false;
+    }
+    if (options.testUiRounds != 1 && !options.testMode) {
+        error = "--test-ui-rounds requires --test";
         return false;
     }
     return true;
@@ -233,8 +253,11 @@ public:
             reapConnections();
 
             if (m_options.testExitAfterFirstFrame
+                && m_firstFrameRounds.load() >= m_options.testUiRounds
                 && WaitForSingleObject(m_firstFrame, 0) == WAIT_OBJECT_0) {
                 std::cout << "SHELL_FIRST_FRAME_OK\n";
+                std::cout << "SHELL_UI_ROUNDS_OK rounds="
+                          << m_firstFrameRounds.load() << '\n';
                 return 0;
             }
 
@@ -245,13 +268,21 @@ public:
                     ChildRecord *ui = findRecord(ProcessRole::Ui);
                     if (ui && !ui->process.running()) {
                         std::cerr << "UI process exited\n";
+                        std::string terminateError;
+                        ui->process.terminate(0, 1000ms, terminateError);
                         m_uiState = UiState::None;
+                        m_records.erase(std::remove_if(
+                            m_records.begin(), m_records.end(),
+                            [](const std::unique_ptr<ChildRecord> &record) {
+                                return record->role == ProcessRole::Ui;
+                            }),
+                            m_records.end());
                     }
                 }
                 if (m_uiState == UiState::Running
                     && WaitForSingleObject(m_firstFrame, 0) != WAIT_OBJECT_0
                     && std::chrono::steady_clock::now() - m_uiStartedAt
-                        > 5000ms) {
+                        > 15000ms) {
                     std::cerr << "UI FirstFrame timed out\n";
                     return 7;
                 }
@@ -286,6 +317,10 @@ private:
             + L" --nonce=" + widen(*m_nonce)
             + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
             + L" --request-ui";
+        if (m_options.testMode) {
+            arguments += L" --request-ui-rounds="
+                + std::to_wstring(m_options.testUiRounds);
+        }
         return launch(
             ProcessRole::Protocol, m_options.protocol, arguments, error);
     }
@@ -302,23 +337,53 @@ private:
 
     bool activateUi(
         std::uint64_t activationId, std::uint64_t &effectiveId,
-        std::string &error)
+        bool &started, std::string &error)
     {
         std::scoped_lock lock(m_uiMutex);
         if (m_uiState == UiState::Running
             || m_uiState == UiState::Starting) {
-            effectiveId = m_activationId;
-            return true;
+            bool alive = false;
+            {
+                std::scoped_lock recordsLock(m_recordsMutex);
+                ChildRecord *ui = findRecord(ProcessRole::Ui);
+                alive = ui && ui->process.running();
+                if (!alive && ui) {
+                    std::string terminateError;
+                    ui->process.terminate(0, 1000ms, terminateError);
+                    m_records.erase(std::remove_if(
+                        m_records.begin(), m_records.end(),
+                        [](const std::unique_ptr<ChildRecord> &record) {
+                            return record->role == ProcessRole::Ui;
+                        }),
+                        m_records.end());
+                }
+            }
+            if (alive) {
+                effectiveId = m_activationId;
+                started = false;
+                return true;
+            }
+            m_uiState = UiState::None;
         }
+        effectiveId = ++m_nextActivationId;
+        started = true;
         m_uiState = UiState::Starting;
-        m_activationId = activationId;
-        effectiveId = activationId;
+        m_activationId = effectiveId;
         ResetEvent(m_firstFrame);
-        if (!launchUi(activationId, error)) {
+        if (!launchUi(effectiveId, error)) {
             m_uiState = UiState::Failed;
             return false;
         }
         m_uiState = UiState::Running;
+        std::uint32_t processId = 0;
+        {
+            std::scoped_lock recordsLock(m_recordsMutex);
+            ChildRecord *ui = findRecord(ProcessRole::Ui);
+            if (ui)
+                processId = ui->expectation.peerProcessId;
+        }
+        std::cout << "SHELL_UI_STARTED activation=" << effectiveId
+                  << " pid=" << processId << '\n';
         m_uiStartedAt = std::chrono::steady_clock::now();
         return true;
     }
@@ -412,25 +477,26 @@ private:
             return;
         }
 
-        ChildRecord *record = nullptr;
+        std::optional<mcast::ipc::HelloExpectation> expectation;
         {
             std::scoped_lock lock(m_recordsMutex);
-            record = findRecord(helloMessage.header.source);
+            ChildRecord *record = findRecord(helloMessage.header.source);
+            if (!record) {
+                std::cerr << "hello from unknown role\n";
+                return;
+            }
+            if (connection->peerProcessId()
+                != record->expectation.peerProcessId) {
+                std::cerr << "hello pipe peer is not the launched child\n";
+                return;
+            }
+            expectation = record->expectation;
         }
-        if (!record) {
-            std::cerr << "hello from unknown role\n";
-            return;
-        }
-        if (connection->peerProcessId() != record->process.processId()) {
-            std::cerr << "hello pipe peer is not the launched child\n";
-            return;
-        }
-        auto expectation = record->expectation;
-        if (hello->processId != record->process.processId()) {
+        if (hello->processId != expectation->peerProcessId) {
             std::cerr << "hello PID is not the launched child\n";
             return;
         }
-        if (!mcast::ipc::validateHello(*hello, expectation, error)) {
+        if (!mcast::ipc::validateHello(*hello, *expectation, error)) {
             std::cerr << "hello rejected: " << error << '\n';
             return;
         }
@@ -454,14 +520,19 @@ private:
         }
 
         if (helloMessage.header.source == ProcessRole::Ui) {
+            std::uint64_t currentActivation = 0;
+            {
+                std::scoped_lock lock(m_uiMutex);
+                currentActivation = m_activationId;
+            }
             auto protocolGrant = makeGrant(
-                ProcessRole::Protocol, 1, error);
+                ProcessRole::Protocol, currentActivation, error);
             if (!protocolGrant) {
                 std::cerr << "protocol grant: " << error << '\n';
                 return;
             }
             auto grantMessage = mcast::ipc::makePeerIdentityGrantMessage(
-                ProcessRole::Ui, 4, 1, *protocolGrant, error);
+                ProcessRole::Ui, 4, currentActivation, *protocolGrant, error);
             if (!grantMessage
                 || !connection->writeMessage(*grantMessage, 2000ms, error)) {
                 std::cerr << "protocol grant send: " << error << '\n';
@@ -471,7 +542,10 @@ private:
 
         while (true) {
             Message message;
-            if (!connection->readMessage(message, 3000ms, error))
+            const auto idleTimeout =
+                helloMessage.header.source == ProcessRole::Ui
+                ? 20000ms : 3000ms;
+            if (!connection->readMessage(message, idleTimeout, error))
                 return;
             if (message.header.source != helloMessage.header.source
                 || !mcast::ipc::validateMessageDirection(
@@ -484,23 +558,27 @@ private:
                 && helloMessage.header.source == ProcessRole::Protocol) {
                 std::string activationError;
                 std::uint64_t effectiveActivationId = 0;
+                bool started = false;
                 if (!activateUi(
                         message.header.messageId, effectiveActivationId,
-                        activationError)) {
+                        started, activationError)) {
                     std::cerr << "UI launch failed: " << activationError << '\n';
                     return;
                 }
-                Message decision;
-                decision.header.type = MessageType::UiActivateDecision;
-                decision.header.source = ProcessRole::Shell;
-                decision.header.destination = ProcessRole::Protocol;
-                decision.header.messageId = 3;
-                decision.header.correlationId = message.header.messageId;
-                decision.header.sessionId = message.header.sessionId;
-                if (!connection->writeMessage(decision, 2000ms, error)) {
+                const mcast::ipc::UiActivateDecisionInfo activationDecision{
+                    started, effectiveActivationId};
+                const auto decision =
+                    mcast::ipc::makeUiActivateDecisionMessage(
+                        3, message.header.messageId,
+                        message.header.sessionId, activationDecision, error);
+                if (!decision
+                    || !connection->writeMessage(
+                        *decision, 2000ms, error)) {
                     std::cerr << "activation decision: " << error << '\n';
                     return;
                 }
+                if (!started)
+                    continue;
                 auto uiGrant = makeGrant(
                     ProcessRole::Ui, effectiveActivationId, error);
                 if (!uiGrant) {
@@ -524,6 +602,7 @@ private:
                     if (m_uiState == UiState::Running
                         && message.header.correlationId == m_activationId) {
                         SetEvent(m_firstFrame);
+                        m_firstFrameRounds.fetch_add(1);
                         accepted = true;
                     }
                 }
@@ -580,6 +659,8 @@ private:
     };
     UiState m_uiState = UiState::None;
     std::uint64_t m_activationId = 0;
+    std::uint64_t m_nextActivationId = 0;
+    std::atomic_uint32_t m_firstFrameRounds = 0;
     std::chrono::steady_clock::time_point m_uiStartedAt{};
     std::mutex m_uiMutex;
 };

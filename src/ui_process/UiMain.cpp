@@ -12,6 +12,7 @@
 #include "ui/DeviceInfo.h"
 #include "ui/MainWindow.h"
 #include "ui/UiState.h"
+#include "ui_process/UiSession.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -45,6 +46,15 @@ int main(int argc, char *argv[])
             << "  Ui  " << text << '\n';
         log.flush();
     };
+
+    std::string uiSessionError;
+    const UiSession::Options uiSessionOptions =
+        UiSession::parseArguments(argc, argv, uiSessionError);
+    if (!uiSessionError.empty()) {
+        writeLog(QString::fromStdString(uiSessionError));
+        return 3;
+    }
+    UiSession uiSession;
 
     SystemAccentColors systemColors;
     systemColors.refresh();
@@ -93,6 +103,20 @@ int main(int argc, char *argv[])
         &uiState, &UiState::languageChanged,
         &playback, &PlaybackController::retranslate);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Shell", &mainWindow);
+
+    if (!uiSession.connectToPeers(uiSessionOptions, uiSessionError)) {
+        writeLog(QStringLiteral("IPC 连接失败：%1")
+                     .arg(QString::fromStdString(uiSessionError)));
+        return 4;
+    }
+    QObject::connect(
+        &mainWindow, &MainWindow::firstFrameReady, &app, [&] {
+        std::string error;
+        if (!uiSession.sendFirstFrame(error)) {
+            writeLog(QStringLiteral("FirstFrame 上报失败：%1")
+                         .arg(QString::fromStdString(error)));
+        }
+    });
 
     player->start();
     const QVariantMap savedPicture = settings.pictureValues();

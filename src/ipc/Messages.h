@@ -30,6 +30,8 @@ enum class FieldId : std::uint16_t {
     PeerInstanceNonce = 51,
     PeerExecutableHash = 52,
     PeerActivationId = 53,
+    UiActivationStarted = 64,
+    UiActivationId = 65,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -70,6 +72,11 @@ struct PeerIdentityGrant {
     std::string buildId;
     std::string instanceNonce;
     std::string executableHash;
+    std::uint64_t activationId = 0;
+};
+
+struct UiActivateDecisionInfo {
+    bool started = false;
     std::uint64_t activationId = 0;
 };
 
@@ -118,5 +125,15 @@ std::optional<Message> makePeerIdentityGrantMessage(
 
 std::optional<PeerIdentityGrant>
 decodePeerIdentityGrantMessage(const Message &message, std::string &error);
+
+std::optional<Message> makeUiActivateDecisionMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::uint64_t sessionId, const UiActivateDecisionInfo &decision,
+    std::string &error);
+
+std::optional<UiActivateDecisionInfo>
+decodeUiActivateDecisionMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error);
 
 } // namespace mcast::ipc

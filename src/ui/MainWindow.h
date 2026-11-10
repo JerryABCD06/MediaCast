@@ -104,6 +104,9 @@ signals:
     /** 本次 QML 主窗口实例已经销毁。Ui 进程用它决定何时退出。 */
     void windowClosed();
 
+    /** 当前窗口实例完成了一次实际帧交换。 */
+    void firstFrameReady();
+
 private:
     bool load();
 
