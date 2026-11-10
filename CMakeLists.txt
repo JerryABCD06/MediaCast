@@ -55,7 +55,9 @@ target_link_libraries(mcast_net PUBLIC ws2_32.lib iphlpapi.lib)
 add_library(mcast_cast STATIC
     src/cast/CastTypes.h
     src/cast/CastArbiter.h
-    src/cast/CastArbiter.cpp)
+    src/cast/CastArbiter.cpp
+    src/cast/CastClaimCoordinator.h
+    src/cast/CastClaimCoordinator.cpp)
 target_compile_features(mcast_cast PUBLIC cxx_std_20)
 target_compile_options(mcast_cast PUBLIC /utf-8)
 target_include_directories(

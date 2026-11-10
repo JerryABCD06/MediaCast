@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
 
 #include "cast/CastArbiter.h"
+#include "cast/CastClaimCoordinator.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -543,6 +544,99 @@ void testRetirementTimeout()
           "retirement deadline removes stale farewell tracking");
 }
 
+void testClaimCoordinatorConfirmationFlow()
+{
+    CastClaimCoordinator coordinator({
+        true,
+        true,
+        CastTime{10000},
+        CastTime{5000},
+        8,
+    });
+    const auto first = coordinator.claim(
+        request(1, ProtocolKind::Dlna, "phone-a"), CastTime{0});
+    check(first.decision.status == ClaimStatus::Accepted
+              && !first.confirmation,
+          "coordinator first claim needs no confirmation");
+    check(coordinator.sessionReady(first.decision.owner->id),
+          "coordinator first owner ready");
+
+    const auto pending = coordinator.claim(
+        request(2, ProtocolKind::AirPlay, "phone-b"), CastTime{100});
+    check(pending.decision.status == ClaimStatus::AwaitingConfirmation
+              && pending.confirmation,
+          "coordinator exposes a neutral confirmation prompt");
+    check(pending.confirmation->key.protocol == ProtocolKind::AirPlay
+              && pending.confirmation->key.id == 2
+              && pending.confirmation->peer.id == "phone-b"
+              && pending.confirmation->peer.displayName == "phone-b"
+              && pending.confirmation->peer.address == "192.0.2.1"
+              && pending.confirmation->mediaTitle == "Test media"
+              && pending.confirmation->deadline == CastTime{10100}
+              && pending.confirmation->remaining == CastTime{10000},
+          "coordinator prompt carries key, peer, title, and deadline");
+
+    const auto repeated = coordinator.claim(
+        request(2, ProtocolKind::AirPlay, "phone-b"), CastTime{150});
+    check(repeated.decision.status == ClaimStatus::AwaitingConfirmation
+              && repeated.decision.duplicate
+              && !repeated.confirmation,
+          "coordinator duplicate pending claim reuses the existing prompt");
+
+    const auto rejected = coordinator.resolveConfirmation(
+        pending.confirmation->key, false, CastTime{200});
+    check(rejected.status == ClaimStatus::Rejected
+              && coordinator.snapshot().owner->protocol
+                  == ProtocolKind::Dlna,
+          "coordinator rejection keeps the old owner");
+
+    const auto preempt = coordinator.claim(
+        request(3, ProtocolKind::AirPlay, "phone-b"), CastTime{300});
+    check(preempt.decision.status == ClaimStatus::AwaitingConfirmation
+              && preempt.confirmation,
+          "coordinator exposes a second confirmation prompt");
+    const auto accepted = coordinator.resolveConfirmation(
+        preempt.confirmation->key, true, CastTime{400});
+    check(accepted.status == ClaimStatus::Accepted
+              && accepted.reason == ClaimReason::ConfirmationAccepted
+              && coordinator.snapshot().owner->protocol
+                  == ProtocolKind::AirPlay,
+          "coordinator accepted confirmation starts handoff");
+
+    const auto unknown = coordinator.resolveConfirmation(
+        {ProtocolKind::AirPlay, 999}, true, CastTime{500});
+    check(unknown.status == ClaimStatus::NotFound,
+          "coordinator rejects unknown confirmation key");
+
+    CastClaimCoordinator timeoutCoordinator({
+        true,
+        true,
+        CastTime{100},
+        CastTime{5000},
+        8,
+    });
+    const auto timeoutOwner = timeoutCoordinator.claim(
+        request(10, ProtocolKind::Dlna, "phone-a"), CastTime{0});
+    check(timeoutCoordinator.sessionReady(timeoutOwner.decision.owner->id),
+          "coordinator timeout owner ready");
+    const auto timeoutPrompt = timeoutCoordinator.claim(
+        request(11, ProtocolKind::GoogleCast, "phone-b"), CastTime{10});
+    check(timeoutPrompt.confirmation.has_value(),
+          "coordinator timeout prompt present");
+    const auto timeoutTick = timeoutCoordinator.tick(CastTime{111});
+    check(timeoutTick.pendingTimeout
+              && timeoutTick.pendingTimeout->reason
+                  == ClaimReason::ConfirmationTimedOut
+              && timeoutCoordinator.snapshot().owner->protocol
+                  == ProtocolKind::Dlna,
+          "coordinator propagates pending confirmation timeout");
+    const auto late = timeoutCoordinator.resolveConfirmation(
+        timeoutPrompt.confirmation->key, true, CastTime{112});
+    check(late.reason == ClaimReason::ConfirmationTimedOut
+              && late.status == ClaimStatus::Rejected,
+          "coordinator cannot accept a timed-out confirmation");
+}
+
 } // namespace
 
 int main()
@@ -564,6 +658,7 @@ int main()
     testOwnerFailureState();
     testOwnerFailureKeepsPendingClaim();
     testRetirementTimeout();
+    testClaimCoordinatorConfirmationFlow();
     std::cout << "Cast arbiter tests passed\n";
     return 0;
 }
