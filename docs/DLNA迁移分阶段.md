@@ -68,6 +68,9 @@ playerLost、队列清理和上一首/下一首切换测试。
 
 使用假时钟、假网络、假 PlaybackGateway 测试。
 
+当前进展：已建立无 Qt `DlnaSession`，覆盖接收暂停/恢复、订阅连接、
+主动挂断、60 秒宽限、Ui 激活请求和 Playback 事件缓存。
+
 ### 4. Playback IPC 数据面
 
 扩展 IPC：

@@ -125,6 +125,18 @@ if(BUILD_TESTING)
         COMMAND mcast_playback_gateway_tests)
 
     add_executable(
+        mcast_dlna_session_tests
+        tests/dlna_session_tests.cpp
+        src/protocols/dlna/session/DlnaSession.cpp)
+    target_include_directories(
+        mcast_dlna_session_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_dlna_session_tests PRIVATE /utf-8)
+    add_test(
+        NAME mcast_dlna_session_tests
+        COMMAND mcast_dlna_session_tests)
+
+    add_executable(
         mcast_app_settings_tests
         tests/app_settings_tests.cpp
         src/core/AppSettings.cpp

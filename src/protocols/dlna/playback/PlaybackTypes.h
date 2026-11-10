@@ -117,6 +117,8 @@ enum class PlaybackSubmissionStatus {
     InvalidCommand,
     PlayerUnavailable,
     StaleGeneration,
+    WaitingForPlayer,
+    SessionEnding,
 };
 
 struct PlaybackCommandSubmission {
