@@ -52,6 +52,14 @@ target_compile_options(mcast_net PUBLIC /utf-8)
 target_include_directories(mcast_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mcast_net PUBLIC ws2_32.lib iphlpapi.lib)
 
+add_library(mcast_cast STATIC
+    src/cast/CastArbiter.h
+    src/cast/CastArbiter.cpp)
+target_compile_features(mcast_cast PUBLIC cxx_std_20)
+target_compile_options(mcast_cast PUBLIC /utf-8)
+target_include_directories(
+    mcast_cast PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 add_library(mcast_dlna_core STATIC
     src/protocols/dlna/UpnpXml.h
     src/protocols/dlna/UpnpXml.cpp
@@ -150,6 +158,15 @@ if(BUILD_TESTING)
         tests/socket_runtime_tests.cpp)
     target_link_libraries(mcast_net_tests PRIVATE mcast_net)
     add_test(NAME mcast_net_tests COMMAND mcast_net_tests)
+
+    add_executable(
+        mcast_cast_arbiter_tests
+        tests/cast_arbiter_tests.cpp)
+    target_link_libraries(mcast_cast_arbiter_tests PRIVATE mcast_cast)
+    add_test(
+        NAME mcast_cast_arbiter_tests
+        COMMAND mcast_cast_arbiter_tests)
+    set_tests_properties(mcast_cast_arbiter_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_playback_codec_tests
