@@ -37,7 +37,7 @@ FluWindow {
 
     autoDestroy: false
 
-    // 系统那个 backdrop 常关，理由和主窗口一样（见 NewUiWindow.qml 里那段）。
+    // 系统那个 backdrop 常关，理由和主窗口一样（见 MainWindow.qml 里那段）。
     effect: "normal"
 
     // ── 窗口的底：和主窗口一样的那块"自己画的云母" ───────────────────────

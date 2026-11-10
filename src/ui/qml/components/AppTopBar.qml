@@ -25,7 +25,7 @@ import MediaCast 1.0
 // 单独登记进"这些不算标题栏"的名单（`window.setHitTestVisible(item)`）。
 //
 // 所以窗口那三个按钮是 FluAppBar 自己的一组装好的（FluWindow 已经替我们登记
-// 过了），我们自己的按钮是**另一组**，在 NewUiWindow 里登记。混在同一个容器里
+// 过了），我们自己的按钮是**另一组**，在 MainWindow 里登记。混在同一个容器里
 // 是不行的：登记整组的话，那一整块就都不能拖窗口了；不登记的话，按钮点不动。
 //
 // ── 布局（左 → 右）──────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ FluAppBar {
      */
     signal ready()
 
-    // 把自己的按钮暴露出去 —— NewUiWindow 要拿它们去登记"这些不是标题栏"。
+    // 把自己的按钮暴露出去 —— MainWindow 要拿它们去登记"这些不是标题栏"。
     readonly property alias backButton: btn_back
     readonly property alias disconnectButton: btn_disconnect
     readonly property alias infoButton: btn_info

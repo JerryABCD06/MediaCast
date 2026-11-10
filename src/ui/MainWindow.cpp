@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
 
-#include "NewUiWindow.h"
+#include "MainWindow.h"
 
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/WindowFrame.h"
@@ -15,7 +15,7 @@
 #include <QTimer>
 #include <QUrl>
 
-NewUiWindow::NewUiWindow(SplashWindow *splash, QObject *parent)
+MainWindow::MainWindow(SplashWindow *splash, QObject *parent)
     : QObject(parent)
     , m_splash(splash)
 {
@@ -31,14 +31,14 @@ NewUiWindow::NewUiWindow(SplashWindow *splash, QObject *parent)
     });
 }
 
-NewUiWindow::~NewUiWindow() = default;
+MainWindow::~MainWindow() = default;
 
-bool NewUiWindow::isLoaded() const
+bool MainWindow::isLoaded() const
 {
     return m_window != nullptr;
 }
 
-bool NewUiWindow::load()
+bool MainWindow::load()
 {
     // 窗口还在就什么都不用做。
     if (m_window)
@@ -53,7 +53,7 @@ bool NewUiWindow::load()
     // m_window** 的时候调回 `show()` —— 两次都看到"窗口不在"，各建一扇。
     //
     // 实测就是这么来的（2026-09-14）：一次投送让 show() 被调两次，
-    // 日志里两条"新界面已打开"时间戳一模一样，同时冒出两行
+    // 日志里两条"主窗口已打开"时间戳一模一样，同时冒出两行
     // `mpv: There is already a mpv_render_context set.` —— 两扇窗里各有一个
     // MpvQmlItem，而 mpv 的 render API 只允许一个渲染者。从托盘再开一个主窗口
     // 也是同一条路。
@@ -62,7 +62,7 @@ bool NewUiWindow::load()
     if (m_loading) {
         // 留一行日志：这条路径平时不出现，一旦出现就是"投送和托盘撞在一起"的
         // 现场，排查时序问题时有它比没有强得多。
-        emit logMessage(QStringLiteral("新界面正在打开，这次的请求并进去（不重复建窗）"));
+        emit logMessage(QStringLiteral("主窗口正在打开，这次的请求并进去（不重复建窗）"));
         return false;
     }
 
@@ -94,26 +94,26 @@ bool NewUiWindow::load()
     // 边界清楚，而且关闭窗口能释放整棵 QML 树和它持有的图形资源。
     if (!m_component) {
         m_component = new QQmlComponent(
-            m_engine, QUrl(QStringLiteral("qrc:/ui/NewUiWindow.qml")),
+            m_engine, QUrl(QStringLiteral("qrc:/ui/MainWindow.qml")),
             QQmlComponent::PreferSynchronous, this);
     }
     if (m_component->isError()) {
         for (const QQmlError &error : m_component->errors())
             emit logMessage(QStringLiteral("QML 报错：%1").arg(error.toString()));
-        emit logMessage(QStringLiteral("新界面加载失败 —— 看上面的 QML 报错"));
+        emit logMessage(QStringLiteral("主窗口加载失败 —— 看上面的 QML 报错"));
         return false;
     }
 
     QObject *root = m_component->create();
     if (!root) {
-        emit logMessage(QStringLiteral("新界面加载失败 —— 组件没有创建出根对象"));
+        emit logMessage(QStringLiteral("主窗口加载失败 —— 组件没有创建出根对象"));
         return false;
     }
 
     m_window = qobject_cast<QQuickWindow *>(root);
     if (!m_window) {
         delete root;
-        emit logMessage(QStringLiteral("新界面的根对象不是窗口，加载失败"));
+        emit logMessage(QStringLiteral("主窗口的根对象不是窗口，加载失败"));
         return false;
     }
 
@@ -126,7 +126,7 @@ bool NewUiWindow::load()
     // 正常关窗会通过 FluRouter 延迟销毁根对象，所以这里负责及时清掉裸指针。
     connect(m_window, &QObject::destroyed, this, [this] {
         m_window = nullptr;
-        emit logMessage(QStringLiteral("新界面窗口已关闭（需要时会重新打开）"));
+        emit logMessage(QStringLiteral("主窗口已关闭（需要时会重新打开）"));
     });
 
     // FluentUI 建这个窗口的时候少设了两个样式位，补上。
@@ -136,13 +136,13 @@ bool NewUiWindow::load()
     return true;
 }
 
-void NewUiWindow::show()
+void MainWindow::show()
 {
     // 已经有一趟加载在跑：把启动屏幕继续压在最上面，等那一趟完成。
     if (m_loading) {
         if (m_splashRequested && m_splash)
             m_splash->bringToFront();
-        emit logMessage(QStringLiteral("新界面正在打开，这次的请求并进去（不重复建窗）"));
+        emit logMessage(QStringLiteral("主窗口正在打开，这次的请求并进去（不重复建窗）"));
         return;
     }
 
@@ -197,7 +197,7 @@ void NewUiWindow::show()
     m_window->raise();
     m_window->requestActivate();
 
-    emit logMessage(QStringLiteral("新界面已打开"));
+    emit logMessage(QStringLiteral("主窗口已打开"));
 
     if (m_splashRequested && m_splash) {
         // 启动屏幕是 topmost，主窗口 raise/activate 也不能把它压下去。
@@ -225,21 +225,21 @@ void NewUiWindow::show()
     }
 }
 
-void NewUiWindow::retranslate()
+void MainWindow::retranslate()
 {
     // 界面还没建起来的话，等它建起来时本来就用的新语言，不用管。
     if (m_engine)
         m_engine->retranslate();
 }
 
-void NewUiWindow::endCasting()
+void MainWindow::endCasting()
 {
     // 只把话传出去。具体怎么做（结束会话、推事件、让设备在网络里消失一下
     // 再回来）是协议层的事，main() 把这个信号接在 DlnaRenderer::endSession 上。
     emit castEndRequested();
 }
 
-void NewUiWindow::adoptChildWindow(QObject *child)
+void MainWindow::adoptChildWindow(QObject *child)
 {
     if (!child)
         return;
@@ -250,7 +250,7 @@ void NewUiWindow::adoptChildWindow(QObject *child)
     }
     m_childWindows.append(QPointer<QObject>(child));
 
-    // 从属关系本身是靠建窗口时的 `transientParent` 生效的（见 NewUiWindow.qml
+    // 从属关系本身是靠建窗口时的 `transientParent` 生效的（见 MainWindow.qml
     // 里 createChildWindow）。这里再显式设一次原生 owner，是为了让这条登记
     // **不管调用方怎么建窗口**都能成立。
     if (m_window) {
@@ -259,7 +259,7 @@ void NewUiWindow::adoptChildWindow(QObject *child)
     }
 }
 
-void NewUiWindow::setFullscreenWindowMode(bool on)
+void MainWindow::setFullscreenWindowMode(bool on)
 {
     // 窗口还没建起来就没什么可调的（正常情况下不会发生：这是界面调过来的）。
     if (!m_window)
@@ -267,7 +267,7 @@ void NewUiWindow::setFullscreenWindowMode(bool on)
 
     // ── 先把登记过的子窗口从主窗口上摘下来 ────────────────────────────────
     //
-    // 它们是主窗口的**从属窗口**（owned window，见 NewUiWindow.qml 里
+    // 它们是主窗口的**从属窗口**（owned window，见 MainWindow.qml 里
     // createChildWindow / adoptChildWindow），而 Win32 有一条规矩：
     // **销毁 owner 会把 owned 窗口一起销毁**。下面那句 destroy() 正是把主窗口的
     // 原生窗口拆掉 —— 不先摘，用户开着"显示效果"时一切全屏，它就被系统带走了
@@ -298,7 +298,7 @@ void NewUiWindow::setFullscreenWindowMode(bool on)
     // 再也不往上送了：场景照常在渲染（探针数过每秒上百帧、`frameSwapped` 也在
     // 涨），屏幕和 DWM 手里那份都是纯黑。这不是本工程的毛病 —— 一个跟本工程
     // 毫无关系的 `qml.exe`，只要 `QSG_RHI_BACKEND=opengl`，同样黑；换 D3D11
-    // 就正常（详见 NewUiWindow.qml 里全屏那一大段）。
+    // 就正常（详见 MainWindow.qml 里全屏那一大段）。
     //
     // 而**新建出来的窗口从来不黑**（验过很多次）。所以全屏切换时不跟它讲道理，
     // 直接把这个原生窗口拆掉、按新尺寸重新建一个：

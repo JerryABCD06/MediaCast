@@ -19,13 +19,13 @@ Item {
      * 控制栏上「显示效果」被按了 —— 转手报给外面。
      *
      * 这一页自己**不开窗口**（它不认识窗口），只是把请求往上递一层。谁开的窗口、
-     * 开在哪儿，是窗口外壳的事（见 NewUiWindow.qml 里的 openPictureWindow）。
+     * 开在哪儿，是窗口外壳的事（见 MainWindow.qml 里的 openPictureWindow）。
      */
     signal pictureRequested()
 
     ColumnLayout {
         anchors.fill: parent
-        // 页边距由外层（NewUiWindow 里的 FluPivot）统一给，这里不再加一层 ——
+        // 页边距由外层（MainWindow 里的 FluPivot）统一给，这里不再加一层 ——
         // 两处各加一次的话，改一个地方另一个地方就对不上了。
         spacing: 12
 

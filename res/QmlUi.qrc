@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com> -->
 
 <!--
-    新界面（QML）的资源清单。
+    主窗口（QML）的资源清单。
 
     为什么编进资源而不是散在文件系统里：QML 文件散着放的话，构建目录里就得跟着
     一份、发布包里还得再拷一次，两处容易对不上。编进 exe 就只有一份，永远不会
@@ -16,7 +16,7 @@
 -->
 <RCC>
     <qresource prefix="/ui">
-        <file alias="NewUiWindow.qml">../src/ui/qml/NewUiWindow.qml</file>
+        <file alias="MainWindow.qml">../src/ui/qml/MainWindow.qml</file>
         <file alias="CastPage.qml">../src/ui/qml/CastPage.qml</file>
         <file alias="SettingsPage.qml">../src/ui/qml/SettingsPage.qml</file>
         <!--
@@ -54,7 +54,7 @@
         <file alias="legal/TextViewer.qml">../src/ui/qml/legal/TextViewer.qml</file>
         <!--
             「显示效果」那扇独立窗口：PicturePane 是内容（不认识窗口），
-            PictureWindow 是装它的宿主窗口。窗口由 NewUiWindow 按需建、建完留着。
+            PictureWindow 是装它的宿主窗口。窗口由 MainWindow 按需建、建完留着。
         -->
         <file alias="picture/PicturePane.qml">../src/ui/qml/picture/PicturePane.qml</file>
         <file alias="picture/PictureWindow.qml">../src/ui/qml/picture/PictureWindow.qml</file>

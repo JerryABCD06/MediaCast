@@ -59,7 +59,7 @@ Item {
      * 「显示效果」那个按钮被按了。
      *
      * **这条栏自己不窗口、也不开窗口** —— 那个调节窗口是个独立窗口，归窗口
-     * 外壳管（见 NewUiWindow.qml 里 openPictureWindow 那段）。这里只把"用户
+     * 外壳管（见 MainWindow.qml 里 openPictureWindow 那段）。这里只把"用户
      * 要调画面"这件事说出去，至于开在哪儿、怎么开，是宿主的事。
      */
     signal pictureRequested()
@@ -170,7 +170,7 @@ Item {
      * 时投视频，唤起的窗口里控制栏干脆不出来）。
      *
      * 所以开场自己补一次。**补在"窗口真的露出来"那一下**，不是补在对象建好的
-     * 那一下：这个窗口从建好到露面之间还隔着"离屏渲染一帧"（见 NewUiWindow::show），
+     * 那一下：这个窗口从建好到露面之间还隔着"离屏渲染一帧"（见 MainWindow::show），
      * 差着一秒多 —— 补早了，用户看到的就不是 5 秒。
      */
     function startHoldIfVideo() {
@@ -1014,7 +1014,7 @@ Item {
                     onClicked: bar.pictureRequested()
                 }
 
-                // 全屏 / 退出全屏。**两态图标按窗口自己的可见状态换**（见 NewUiWindow
+                // 全屏 / 退出全屏。**两态图标按窗口自己的可见状态换**（见 MainWindow
                 // 里那段"一个事实 + 一张表 + 一处执行"），这里不另记一个开关。
                 TipIconButton {
                     readonly property bool isFull: bar.win ? bar.win.fullscreen : false

@@ -7,7 +7,7 @@ import MediaCast 1.0
 import "components"
 import "picture"
 
-// 新界面的窗口外壳。它只做三件事：
+// 主窗口的窗口外壳。它只做三件事：
 //   一、把 FluentUI 的窗口撑起来；
 //   二、把界面状态（语言 / 深浅）接到 UiState 上；
 //   三、摆好顶栏和内容区。
@@ -70,7 +70,7 @@ FluWindow {
     // 那些窗口），一秒多之后内容才刷上来。探针量过（work/cap-flash.ps1）：
     // 窗口阴影第 14 帧出现，内部颜色到第 40 帧还没变，>1.4 秒。
     //
-    // 关掉它、交给 C++ 那边显示：`NewUiWindow::show()` 是 `load()` **返回之后**
+    // 关掉它、交给 C++ 那边显示：`MainWindow::show()` 是 `load()` **返回之后**
     // 才调 `m_window->show()` 的，而 `load()` 里 `m_engine->load()` 是同步建完整棵
     // 树的 —— 所以窗口一露面就是画好的。
     autoVisible: false
@@ -85,7 +85,7 @@ FluWindow {
     // `visibility = Window.Hidden`），但 QML 的 Window 类型**两个都显式设过就会
     // 打架** —— 一改 `visibility`（进 / 退全屏都要改它），Qt 就报：
     //
-    //     QML NewUiWindow: Conflicting properties 'visible' and 'visibility'
+    //     QML MainWindow: Conflicting properties 'visible' and 'visibility'
     //
     // 而这一打架是**真的会坏**，不是一句唠叨：进全屏报一次、退全屏再报一次之后，
     // 窗口就再也画不出东西 —— 整扇窗全黑，可按钮还点得动（输入照旧、渲染停了）。
@@ -99,7 +99,7 @@ FluWindow {
     //     19:43:20  退全屏      → 停在 (-9,-9) 1938×1038、样式 0x97080000（WS_POPUP）
     //
     // 所以两个属性里**只用 `visibility`** —— 一个属性自己跟自己不会冲突。
-    // （C++ 那边 `NewUiWindow::show()` 调的是 Qt 的 C++ 接口，不走 QML 属性，
+    // （C++ 那边 `MainWindow::show()` 调的是 Qt 的 C++ 接口，不走 QML 属性，
     //   不会把这一行拽回去。）
     visibility: Window.Hidden
 
@@ -130,7 +130,7 @@ FluWindow {
     //   二、它以前唯一还看得见的地方，是"窗口露面到第一帧之间"那段空窗期 ——
     //       开着云母时 DWM 那张会先垫在底下，所以那会儿看着不空（他观察到的
     //       "开了以后就是窗口从一开始绘制带着云母"就是这个）。那段现在用
-    //       "露面之前先离屏渲染一帧"解决了（见 NewUiWindow::show()），不用它兜。
+    //       "露面之前先离屏渲染一帧"解决了（见 MainWindow::show()），不用它兜。
     //   三、关掉之后 DWM 不再每帧白算一张看不见的底。
     //
     // **为什么是"常"关**（而不是跟着设置里的开关走）：运行中途改 backdrop 类型

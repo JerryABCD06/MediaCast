@@ -14,7 +14,7 @@ class QQuickWindow;
 class QTimer;
 class SplashWindow;
 
-// NewUiWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
+// MainWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
 // （旧的 Widgets 界面 2026-09-14 退场了）。
 //
 // 什么时候开：普通启动、手机投送、或者用户在托盘里点「打开主界面」。
@@ -22,7 +22,7 @@ class SplashWindow;
 //
 // 三条约定：
 //
-// 一、**引擎是懒创建的。** 没人打开新界面就不建，省得程序一启动就多几百毫秒，
+// 一、**引擎是懒创建的。** 没人打开主窗口就不建，省得程序一启动就多几百毫秒，
 //     也省得 QML 里的错误拖累主程序启动。
 //
 // 二、**引擎只建一次，QML 文档只编译一次，窗口实例可以反复创建。** 用户关窗后
@@ -33,13 +33,13 @@ class SplashWindow;
 // 三、**它不认识 DLNA，也不认识播放器。** QML 那两件事都走信号：要断投送就把
 //     意思发出去（main() 接在 DlnaRenderer::endSession 上），要读播放状态就
 //     读已经注册给 QML 的 Playback。
-class NewUiWindow : public QObject
+class MainWindow : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit NewUiWindow(SplashWindow *splash = nullptr, QObject *parent = nullptr);
-    ~NewUiWindow() override;
+    explicit MainWindow(SplashWindow *splash = nullptr, QObject *parent = nullptr);
+    ~MainWindow() override;
 
     /** 第一次调用时建引擎、加载 QML；之后再调用就是把窗口叫到前面。 */
     void show();
@@ -64,7 +64,7 @@ public:
      *
      * **为什么不写在 QML 里**：置顶本来可以用 `Qt::WindowStaysOnTopHint`，但那
      * 会让 Qt 重建原生窗口，而本工程用的 OpenGL 后端在这一步会丢窗口表面（整窗
-     * 全黑，见 NewUiWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
+     * 全黑，见 MainWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
      * 就没有这个问题 —— 这是平台相关的活儿，收在 WindowFrame 里。
      */
     Q_INVOKABLE void setFullscreenWindowMode(bool on);

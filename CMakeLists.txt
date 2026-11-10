@@ -82,7 +82,7 @@ if(BUILD_TESTING)
 endif()
 
 # Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。
-# Quick + QuickControls2 是给新界面（QML）用的，和旧的 Widgets 界面并存。
+# Quick + QuickControls2 是给主窗口（QML）用的，和旧的 Widgets 界面并存。
 # LinguistTools 提供 qt_add_translations（lupdate / lrelease 那一套）。
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Quick QuickControls2 LinguistTools)
 
@@ -171,8 +171,8 @@ qt_add_executable(MCast
     src/ui/TrayIcon.cpp
 
     # 界面（QML）。旧的那套 Widgets 界面（MainWindow）2026-09-14 退场了。
-    src/ui/NewUiWindow.h
-    src/ui/NewUiWindow.cpp
+    src/ui/MainWindow.h
+    src/ui/MainWindow.cpp
 
     # 界面状态：语言 + 深浅的唯一源头，界面和原生控件都向它看齐。
     src/ui/UiState.h

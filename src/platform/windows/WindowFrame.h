@@ -38,7 +38,7 @@ namespace WindowFrame
  *
  * 库那几句 `SetWindowLongPtr` 只跑一次（在它自己的初始化里）。而这个工程的
  * "全屏"会在切换时**把原生窗口拆掉重建**（`QWindow::destroy()` + `show()`，
- * 见 NewUiWindow::setFullscreenWindowMode）—— 重建出来的窗口是 Qt 按窗口标志
+ * 见 MainWindow::setFullscreenWindowMode）—— 重建出来的窗口是 Qt 按窗口标志
  * 造的全新原生窗口，**库里那套样式位一个都没有**。症状就是他 2026-09-14 报的：
  * 退出全屏后**最大化键悬停不再出快速贴靠**，而且"顶栏上面莫名多出一小块"
  * （客户区的算法跟着变了：`isMaximized` 那条会给客户区留 8 像素，正常最大化的

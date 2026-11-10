@@ -28,7 +28,7 @@
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/SystemAccentColors.h"
 #include "protocols/dlna/DlnaRenderer.h"
-#include "ui/NewUiWindow.h"
+#include "ui/MainWindow.h"
 #include "ui/TrayIcon.h"
 #include "ui/UiState.h"
 
@@ -121,7 +121,7 @@ int main(int argc, char *argv[])
 
     // ── 图形后端 ─────────────────────────────────────────────────────────
     //
-    // 新界面要用 QML 渲染，而里面的视频区将来是 libmpv 的 render API —— 那套只有
+    // 主窗口要用 QML 渲染，而里面的视频区将来是 libmpv 的 render API —— 那套只有
     // OpenGL 一种 GPU 后端，而 Qt 在 Windows 上默认走 D3D11。两者对不上。
     //
     // 所以整个进程的图形后端钉死成 OpenGL。这句话必须在**建任何窗口之前**执行，
@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
     //
     // 注册成 QML 单例，QML 里 import MediaCast 就能拿到。它必须是 main() 的
     // 局部变量：QML 引擎只借不拥有这个对象，它先没了引擎那边就是野指针。
-    // 声明在 newUi 之前，析构顺序自然就对（后声明的先析构）。
+    // 声明在 mainWindow 之前，析构顺序自然就对（后声明的先析构）。
     // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
     // 用户想改直接拿记事本改，不用翻界面。
     AppSettings settings;
@@ -301,7 +301,7 @@ int main(int argc, char *argv[])
     MpvCore *player = ownedPlayer.get();
 
     // 播放器注册给 QML，和 UiState 同样的道理 —— QML 引擎只借不拥有这个对象，
-    // 所以 ownedPlayer 必须声明在 newUi 之前（后声明的先析构）。必须注册在
+    // 所以 ownedPlayer 必须声明在 mainWindow 之前（后声明的先析构）。必须注册在
     // **创建之前**，所以放在这儿而不是上面 UiState 那一段。
     //
     // 从 QML 那边看到的是 MpvCore 这一层，看不到底下是哪个外壳 —— 界面不该
@@ -317,11 +317,11 @@ int main(int argc, char *argv[])
     // 不直接碰播放器 —— 将来加别的协议时，那个协议也接在这儿。
     PlaybackController playback(player);
 
-    // 控制器也给 QML —— 新界面靠它判断"现在屏幕上是不是空的"，
+    // 控制器也给 QML —— 主窗口靠它判断"现在屏幕上是不是空的"，
     // 好决定显示画面还是显示投屏指引。
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Playback", &playback);
 
-    // "现在放的是哪一条"（标题/歌手/专辑）也得让 QML 读得到 —— 新界面底下那条
+    // "现在放的是哪一条"（标题/歌手/专辑）也得让 QML 读得到 —— 主窗口底下那条
     // 控制栏的标题和副标题就是读它。**匿名注册**：QML 只需要能读它的字段，
     // 不需要拿这个名字去 new 一个出来（它是纯数据）。
     qmlRegisterAnonymousType<NowPlaying>("MediaCast", 1);
@@ -384,7 +384,7 @@ int main(int argc, char *argv[])
     QObject::connect(&tray, &TrayIcon::logMessage,
                      &renderer, &DlnaRenderer::logMessage);
 
-    // ── 新界面（QML）─────────────────────────────────────────────────────
+    // ── 主窗口（QML）─────────────────────────────────────────────────────
     //
     // 正式的界面。旧的 Widgets 那一套还留着，但降级成"测试界面" —— 只在托盘
     // 菜单里手工打开，DLNA 回归测试要有个看得见的观测窗口。
@@ -392,32 +392,32 @@ int main(int argc, char *argv[])
     // 它懒加载 —— 没人点它就不建 QML 引擎，程序启动该多快还多快。
     //
     // 它的日志和大门面走同一条路。
-    NewUiWindow newUi(&splash);
-    QObject::connect(&newUi, &NewUiWindow::logMessage,
+    MainWindow mainWindow(&splash);
+    QObject::connect(&mainWindow, &MainWindow::logMessage,
                      &renderer, &DlnaRenderer::logMessage);
 
-    // 新界面注册给 QML：界面上"关窗并断开投送"要调它。它自己不认识 DLNA，
+    // 主窗口注册给 QML：界面上"关窗并断开投送"要调它。它自己不认识 DLNA，
     // 只把意思发出来，由这儿接到门面上 —— 和 UiState / Playback 一个路子。
     //
     // **必须赶在第一个 QML 引擎建起来之前注册**，所以放在这儿而不是文件开头。
-    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Shell", &newUi);
-    QObject::connect(&newUi, &NewUiWindow::castEndRequested,
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Shell", &mainWindow);
+    QObject::connect(&mainWindow, &MainWindow::castEndRequested,
                      &renderer, &DlnaRenderer::endSession);
 
     // 托盘那个「打开主界面」。
     QObject::connect(&tray, &TrayIcon::openMainUiRequested,
-                     &newUi, &NewUiWindow::show);
-    // 有东西要投过来（或者界面上按了播放），就把新界面拉起来。
+                     &mainWindow, &MainWindow::show);
+    // 有东西要投过来（或者界面上按了播放），就把主窗口拉起来。
     //
     // 这**不只是一句方便**：render API 模式下 mpv 的视频输出要等画面 item
-    // 真的开始渲染才开得起来，所以新界面必须先在这儿起来，片子才放得出来。
+    // 真的开始渲染才开得起来，所以主窗口必须先在这儿起来，片子才放得出来。
     // 控制器那边会把加载攒住，等渲染面就绪再真的发出去 —— 时序不用我们操心。
     QObject::connect(&playback, &PlaybackController::mediaChanged,
-                     &newUi, &NewUiWindow::show);
+                     &mainWindow, &MainWindow::show);
     QObject::connect(&uiState, &UiState::languageChanged,
-                     &newUi, &NewUiWindow::retranslate);
+                     &mainWindow, &MainWindow::retranslate);
     // 托盘菜单那几句是死的 —— QMenu 不会自己重画，得有人把文字重新设一遍。
-    // （新界面那边靠 QML 的绑定重算，这里靠这一句。）
+    // （主窗口那边靠 QML 的绑定重算，这里靠这一句。）
     QObject::connect(&uiState, &UiState::languageChanged,
                      &tray, &TrayIcon::retranslate);
 
@@ -515,7 +515,7 @@ int main(int argc, char *argv[])
     // 普通启动直接显示主界面；登录自启等后台入口传 --background，
     // 此时只驻留托盘，等托盘或投送请求再打开。
     if (!backgroundStart)
-        newUi.show();
+        mainWindow.show();
 
     return app.exec();
 }

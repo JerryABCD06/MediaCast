@@ -40,7 +40,7 @@ enum class MediaSource
  * 界面要用它显示，Windows 的媒体控制面板（那个按音量键弹出来的东西）也要用它。
  * 所以它得是纯数据，不依赖任何一方。
  *
- * Q_GADGET + 那几个 Q_PROPERTY 是为了让 QML 能读它（新界面底下那条控制栏的
+ * Q_GADGET + 那几个 Q_PROPERTY 是为了让 QML 能读它（主窗口底下那条控制栏的
  * 标题/副标题就是这儿来的）。QML 读不了裸结构体的字段。
  */
 struct NowPlaying
