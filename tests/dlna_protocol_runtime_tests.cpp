@@ -4,6 +4,7 @@
 #include "playback/FakePlaybackGateway.h"
 #include "platform/windows/net/SocketRuntime.h"
 #include "protocols/dlna/UpnpXml.h"
+#include "protocols/dlna/net/SsdpSocket.h"
 #include "protocols/dlna/runtime/DlnaProtocolRuntime.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -359,6 +360,7 @@ void testEndToEndInitialMediaAndConfirmation()
             "Runtime Test",
             "uuid:runtime-test",
             0,
+            1900,
             true,
             true,
             true,
@@ -467,6 +469,7 @@ void testMediaLoadFailureFailsHttp()
             "Runtime Failure Test",
             "uuid:runtime-failure",
             0,
+            1900,
             true,
             true,
             true,
@@ -519,6 +522,7 @@ void testEarlyCommandCompletionDoesNotLoseWakeup()
             "Early Completion Test",
             "uuid:early-completion",
             0,
+            1900,
             true,
             true,
             true,
@@ -570,6 +574,7 @@ void testReceivingSurfaceToggle()
             "Receiving Toggle Test",
             "uuid:receiving-toggle",
             0,
+            1900,
             true,
             true,
             true,
@@ -632,6 +637,7 @@ void testReceivingStartsPaused()
             "Paused Start Test",
             "uuid:paused-start",
             0,
+            1900,
             true,
             true,
             false,
@@ -684,6 +690,7 @@ void testPauseCancelsPendingClaim()
             "Paused Claim Test",
             "uuid:paused-claim",
             0,
+            1900,
             true,
             true,
             true,
@@ -757,6 +764,7 @@ void testSubscriptionControlsPeerConnection()
             "GENA Runtime Test",
             "uuid:gena-runtime",
             0,
+            1900,
             true,
             true,
             true,
@@ -891,6 +899,108 @@ void testSubscriptionControlsPeerConnection()
     runtime.stop();
 }
 
+void testEphemeralSsdpSurface()
+{
+    WinsockRuntime winsock;
+    std::string error;
+    check(winsock.initialize(error),
+          "ephemeral SSDP test Winsock initializes");
+
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "SSDP Runtime Test",
+            "uuid:ssdp-runtime",
+            0,
+            0,
+            false,
+            true,
+            true,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    check(runtime.start(error),
+          "ephemeral SSDP runtime starts: " + error);
+    const std::uint16_t httpPort = runtime.localPort();
+    const std::uint16_t ssdpPort = runtime.localSsdpPort();
+    check(httpPort != 0 && ssdpPort != 0,
+          "runtime exposes dynamic HTTP and SSDP ports");
+
+    mcast::dlna::net::SsdpSocket client;
+    mcast::platform::net::SocketEventLoop loop;
+    check(client.open(0, error),
+          "ephemeral SSDP client opens: " + error);
+    check(loop.initialize(error),
+          "ephemeral SSDP event loop initializes: " + error);
+    check(loop.add(client.handle(), FD_READ, error),
+          "ephemeral SSDP client registers: " + error);
+
+    const std::string search =
+        "M-SEARCH * HTTP/1.1\r\n"
+        "HOST: 239.255.255.250:1900\r\n"
+        "MAN: \"ssdp:discover\"\r\n"
+        "MX: 1\r\n"
+        "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+        "\r\n";
+    const std::span<const std::uint8_t> bytes(
+        reinterpret_cast<const std::uint8_t *>(search.data()),
+        search.size());
+    check(client.sendDatagram(
+              bytes, "127.0.0.1", ssdpPort, error)
+              == mcast::dlna::net::SsdpSendStatus::Sent,
+          "ephemeral SSDP M-SEARCH sends: " + error);
+
+    std::string response;
+    const auto deadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (response.empty()
+           && std::chrono::steady_clock::now() < deadline) {
+        std::vector<mcast::platform::net::SocketActivation>
+            activations;
+        bool woken = false;
+        if (!loop.poll(100ms, activations, woken, error))
+            break;
+        while (true) {
+            mcast::dlna::net::SsdpDatagram datagram;
+            const auto status =
+                client.receiveDatagram(datagram, error);
+            if (status
+                == mcast::dlna::net::SsdpReceiveStatus::WouldBlock)
+                break;
+            if (status
+                != mcast::dlna::net::SsdpReceiveStatus::Received)
+                break;
+            response.assign(
+                datagram.bytes.begin(), datagram.bytes.end());
+            break;
+        }
+    }
+    check(response.starts_with("HTTP/1.1 200 OK"),
+          "ephemeral SSDP surface responds to M-SEARCH: " + response);
+    check(response.find(
+              "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n")
+              != std::string::npos,
+          "ephemeral SSDP response preserves the search target");
+    check(response.find(
+              "USN: uuid:ssdp-runtime::"
+              "urn:schemas-upnp-org:device:MediaRenderer:1\r\n")
+              != std::string::npos,
+          "ephemeral SSDP response uses the runtime UDN");
+    check(response.find(
+              "LOCATION: http://") != std::string::npos
+              && response.find(
+                  ":" + std::to_string(httpPort)
+                      + "/description.xml")
+                  != std::string::npos,
+          "ephemeral SSDP response points at the runtime HTTP port");
+
+    loop.remove(client.handle());
+    client.close();
+    runtime.stop();
+}
+
 } // namespace
 
 int main()
@@ -902,6 +1012,7 @@ int main()
     testReceivingStartsPaused();
     testPauseCancelsPendingClaim();
     testSubscriptionControlsPeerConnection();
+    testEphemeralSsdpSurface();
     std::cout << "DLNA protocol runtime tests passed\n";
     return 0;
 }

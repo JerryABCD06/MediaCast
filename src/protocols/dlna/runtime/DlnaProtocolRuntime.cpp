@@ -483,7 +483,10 @@ bool DlnaProtocolRuntime::startNetworkSurface(std::string &error)
     net::SsdpServiceOptions ssdpOptions;
     ssdpOptions.udn = m_options.udn;
     ssdpOptions.httpPort = m_http.localPort();
-    ssdpOptions.ssdpPort = net::SsdpSocket::DefaultPort;
+    ssdpOptions.ssdpPort = m_options.ssdpPort;
+    const bool productionDiscovery = m_options.ssdpPort != 0;
+    ssdpOptions.joinMulticast = productionDiscovery;
+    ssdpOptions.advertise = productionDiscovery;
     ssdpOptions.aliveInterval = std::chrono::seconds{10};
     if (!m_ssdp.start(
             std::move(ssdpOptions),

@@ -229,6 +229,8 @@ void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
 {
     if (message.header.type == ipc::MessageType::PlaybackUiReady) {
         m_uiReady = true;
+        if (m_log)
+            m_log("Playback UI ready");
         PlaybackEvent ready;
         ready.kind = PlaybackEventKind::SnapshotChanged;
         ready.snapshot = snapshot();

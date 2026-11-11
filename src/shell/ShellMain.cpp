@@ -58,6 +58,8 @@ struct Options {
     bool testToggleReceiving = false;
     bool testToggleReceivingAfterFirstFrame = false;
     bool testPersistent = false;
+    bool testEnableSsdp = false;
+    bool testForceReceivingEnabled = false;
     bool background = false;
     std::uint32_t testUiRounds = 1;
 };
@@ -218,6 +220,10 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
             options.testToggleReceivingAfterFirstFrame = true;
         } else if (argument == L"--test-persistent") {
             options.testPersistent = true;
+        } else if (argument == L"--test-enable-ssdp") {
+            options.testEnableSsdp = true;
+        } else if (argument == L"--test-force-receiving-enabled") {
+            options.testForceReceivingEnabled = true;
         } else if (argument == L"--background") {
             options.background = true;
         } else if (argument.starts_with(testUiRoundsPrefix)) {
@@ -263,6 +269,14 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
     }
     if (options.testPersistent && !options.testMode) {
         error = "--test-persistent requires --test";
+        return false;
+    }
+    if (options.testEnableSsdp && !options.testMode) {
+        error = "--test-enable-ssdp requires --test";
+        return false;
+    }
+    if (options.testForceReceivingEnabled && !options.testMode) {
+        error = "--test-force-receiving-enabled requires --test";
         return false;
     }
     return true;
@@ -512,6 +526,8 @@ public:
             std::cerr << "Settings load failed: " << settingsError << '\n';
         }
         m_receivingEnabled = m_settings->acceptNewCast();
+        if (m_options.testForceReceivingEnabled)
+            m_receivingEnabled = true;
 
         m_nonce = mcast::supervisor::randomHexToken(16);
         if (!m_nonce) {
@@ -1648,8 +1664,19 @@ private:
             + (m_options.testMode ? L"0" : L"8200")
             + L" --receiving-enabled="
             + (m_receivingEnabled ? L"1" : L"0");
-        if (m_options.testMode)
+        if (m_options.testMode && !m_options.testEnableSsdp)
             arguments += L" --disable-ssdp";
+        if (m_options.testMode && m_options.testEnableSsdp)
+            arguments += L" --dlna-ssdp-port=0";
+        if (m_options.testMode && m_options.testEnableSsdp) {
+            arguments += L" --protocol-log=\""
+                + (mcast::supervisor::currentExecutablePath()
+                       .parent_path()
+                   / (L"MCast.Protocol."
+                      + widen(m_options.instance) + L".log"))
+                      .wstring()
+                + L"\"";
+        }
         if (!m_options.background)
             arguments += L" --request-ui";
         if (!m_options.testMode || m_options.testPersistent)

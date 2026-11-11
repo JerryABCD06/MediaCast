@@ -12,6 +12,7 @@ $arguments = @(
     "--instance=$instance",
     '--test',
     '--test-persistent',
+    '--test-force-receiving-enabled',
     '--test-toggle-receiving-after-first-frame',
     "--protocol=$ProtocolExe",
     "--ui=$UiExe"

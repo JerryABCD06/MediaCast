@@ -427,6 +427,18 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_dlna_protocol_runtime_tests PROPERTIES TIMEOUT 15)
 
+    add_test(
+        NAME mcast_dlna_shadow_e2e
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/dlna_shadow_e2e.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE:MCast.Ui>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(
+        mcast_dlna_shadow_e2e
+        PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+
     add_executable(
         mcast_gena_manager_tests
         tests/gena_manager_tests.cpp)

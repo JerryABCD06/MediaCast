@@ -20,6 +20,8 @@ struct ClientOptions {
     bool disableSsdp = false;
     bool initialReceivingEnabled = true;
     std::uint16_t dlnaHttpPort = 0;
+    std::uint16_t dlnaSsdpPort = 1900;
+    std::string protocolLogPath;
     std::uint32_t uiRequestRounds = 1;
 };
 

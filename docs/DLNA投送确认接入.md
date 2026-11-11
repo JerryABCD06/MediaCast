@@ -272,8 +272,9 @@ latest MediaRequest
 
 尚未完成：
 
-- 从外部进程驱动 `M-SEARCH -> description -> SetURI -> Playback` 的自动化
-  影子 E2E；
+- 三进程 E2E 已覆盖 description、GENA、SetURI、真实 UI 播放和查询；跨进程
+  UDP 的 M-SEARCH 受本机防火墙影响，改由 `DlnaProtocolRuntime` 动态 SSDP
+  端口测试覆盖；
 - 不同真实控制点在确认窗口前的等待时长实测；
 - MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI 的完整冷启动
   故障路径；

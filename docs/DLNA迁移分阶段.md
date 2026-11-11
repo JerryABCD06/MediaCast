@@ -228,8 +228,7 @@ M-SEARCH 回应队列有上限，搜索类型按 HTTP 规矩大小写不敏感�
 
 只通过显式测试参数启动影子 DLNA，使用独立端口，不绑定 8200/1900。
 旧 `MCast.exe` 仍是生产回退路径。HTTP/SOAP/SSDP/GENA 已全部在无 Qt Protocol
-中具备实现；运行时级测试和真实控制点首轮回归已经完成。尚未完成的是一次从
-外部进程驱动、同时覆盖发现面和播放面的自动化影子 E2E。
+中具备实现；运行时级测试、三进程自动化影子和真实控制点首轮回归已经完成。
 
 已由 `DlnaProtocolRuntime` 运行时测试覆盖：
 
@@ -240,8 +239,17 @@ M-SEARCH 回应队列有上限，搜索类型按 HTTP 规矩大小写不敏感�
 - 主动断开清会话、短暂停网络面、重新上线，以及粘性断开状态；
 - 新 `SetAVTransportURI` 开启下一次会话。
 
-真实控制点已确认首条媒体不再黑屏、代理暂停不终止当前会话、主动断开成功；
-自动测试仍需补齐从 `M-SEARCH` 发现开始的跨组件链路。
+`mcast_dlna_shadow_e2e` 会启动真实 Shell / Protocol / Ui，使用随机端口完成：
+
+- 读取实例级 Protocol 日志中的动态 HTTP/SSDP 端口；
+- `GET /description.xml`；
+- `SUBSCRIBE -> LastChange`；
+- 等待 `Playback UI ready` 后发送 `SetAVTransportURI`；
+- `GetTransportInfo` 查询和进程清理。
+
+`DlnaProtocolRuntime` 还以随机 SSDP 端口实际发送 `M-SEARCH`，校验 `ST`、`USN`
+和 `LOCATION`。跨进程 UDP 版容易被本机防火墙拦截，因此把发现包验证留在同进程
+运行时测试，三进程 E2E 验证后续 HTTP、GENA、播放和查询链。
 
 端到端验收：
 

@@ -28,6 +28,7 @@ struct DlnaProtocolRuntimeOptions {
     std::string friendlyName;
     std::string udn;
     std::uint16_t httpPort = 0;
+    std::uint16_t ssdpPort = 1900;
     bool bindLoopback = true;
     bool enableSsdp = true;
     bool startReceivingEnabled = true;
@@ -64,6 +65,10 @@ public:
         return m_receivingStateVersion.load();
     }
     std::uint16_t localPort() const noexcept;
+    std::uint16_t localSsdpPort() const noexcept
+    {
+        return m_ssdp.localPort();
+    }
 
 private:
     struct MediaTask {

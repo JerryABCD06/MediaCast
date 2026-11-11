@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -37,6 +38,8 @@
 
 namespace mcast::skeleton {
 namespace {
+
+std::string g_protocolLogPath;
 
 using namespace std::chrono_literals;
 using mcast::ipc::ConnectionChannel;
@@ -77,8 +80,15 @@ std::wstring widen(const std::string &value)
 
 void protocolLog(const std::string &text)
 {
-    const auto path = mcast::supervisor::currentExecutablePath()
-        .parent_path() / L"MCast.Protocol.log";
+    const std::filesystem::path path =
+        g_protocolLogPath.empty()
+        ? mcast::supervisor::currentExecutablePath()
+              .parent_path() / L"MCast.Protocol.log"
+        : std::filesystem::path(
+              std::u8string(
+                  reinterpret_cast<const char8_t *>(
+                      g_protocolLogPath.data()),
+                  g_protocolLogPath.size()));
     std::ofstream log(path, std::ios::app);
     if (log)
         log << text << '\n';
@@ -551,6 +561,10 @@ bool parseClientOptions(
         constexpr std::wstring_view activationPrefix = L"--activation-id=";
         constexpr std::wstring_view dlnaPortPrefix =
             L"--dlna-http-port=";
+        constexpr std::wstring_view dlnaSsdpPortPrefix =
+            L"--dlna-ssdp-port=";
+        constexpr std::wstring_view protocolLogPrefix =
+            L"--protocol-log=";
         constexpr std::wstring_view receivingPrefix =
             L"--receiving-enabled=";
         constexpr std::wstring_view requestRoundsPrefix =
@@ -587,8 +601,12 @@ bool parseClientOptions(
             const std::wstring value =
                 argument.substr(dlnaPortPrefix.size());
             try {
-                const unsigned long parsed = std::stoul(value);
-                if (parsed > std::numeric_limits<std::uint16_t>::max())
+                std::size_t consumed = 0;
+                const unsigned long parsed =
+                    std::stoul(value, &consumed);
+                if (consumed != value.size()
+                    || parsed
+                        > std::numeric_limits<std::uint16_t>::max())
                     throw std::out_of_range("port");
                 options.dlnaHttpPort =
                     static_cast<std::uint16_t>(parsed);
@@ -596,6 +614,26 @@ bool parseClientOptions(
                 error = "invalid --dlna-http-port";
                 return false;
             }
+        } else if (argument.starts_with(dlnaSsdpPortPrefix)) {
+            const std::wstring value =
+                argument.substr(dlnaSsdpPortPrefix.size());
+            try {
+                std::size_t consumed = 0;
+                const unsigned long parsed =
+                    std::stoul(value, &consumed);
+                if (consumed != value.size()
+                    || parsed
+                        > std::numeric_limits<std::uint16_t>::max())
+                    throw std::out_of_range("port");
+                options.dlnaSsdpPort =
+                    static_cast<std::uint16_t>(parsed);
+            } catch (...) {
+                error = "invalid --dlna-ssdp-port";
+                return false;
+            }
+        } else if (argument.starts_with(protocolLogPrefix)) {
+            options.protocolLogPath = narrow(
+                argument.substr(protocolLogPrefix.size()).c_str());
         } else if (argument.starts_with(receivingPrefix)) {
             const std::wstring value =
                 argument.substr(receivingPrefix.size());
@@ -656,6 +694,7 @@ bool parseClientOptions(
 
 int runClient(const ClientOptions &options)
 {
+    g_protocolLogPath = options.protocolLogPath;
     std::string error;
     auto control = connectControl(options, error);
     if (!control) {
@@ -905,6 +944,7 @@ int runClient(const ClientOptions &options)
                 "Media Cast Receiver",
                 "uuid:mcast-" + options.instance,
                 options.dlnaHttpPort,
+                options.dlnaSsdpPort,
                 false,
                 !options.disableSsdp,
                 options.initialReceivingEnabled,
