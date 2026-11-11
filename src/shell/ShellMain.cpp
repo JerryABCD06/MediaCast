@@ -601,13 +601,13 @@ public:
                 && now - lastInitialReceivingAttempt > 500ms) {
                 lastInitialReceivingAttempt = now;
                 bool effective = m_receivingEnabled;
+                std::uint64_t stateVersion = 0;
                 std::string syncError;
                 if (sendReceivingEnabled(
-                        m_receivingEnabled, effective, syncError)) {
-                    m_receivingEnabled = effective;
+                        m_receivingEnabled, effective,
+                        stateVersion, syncError)) {
+                    applyReceivingState(effective, stateVersion);
                     receivingStateSynchronized = true;
-                    if (m_tray)
-                        m_tray->setReceivingEnabled(effective);
                 } else if (now - startedAt > 5s) {
                     std::cerr << "Initial receiving state retry: "
                               << syncError << '\n';
@@ -626,8 +626,10 @@ public:
                 && now - lastReceivingAttempt > 500ms) {
                 lastReceivingAttempt = now;
                 bool effective = true;
+                std::uint64_t stateVersion = 0;
                 std::string toggleError;
-                if (sendReceivingEnabled(false, effective, toggleError)) {
+                if (sendReceivingEnabled(
+                        false, effective, stateVersion, toggleError)) {
                     std::cout << "SHELL_RECEIVING_TOGGLE_OK enabled="
                               << (effective ? "true" : "false") << '\n';
                     return 0;
@@ -1408,26 +1410,39 @@ private:
     {
         const bool desired = !m_receivingEnabled;
         bool effective = m_receivingEnabled;
+        std::uint64_t stateVersion = 0;
         std::string error;
-        if (sendReceivingEnabled(desired, effective, error)) {
-            m_receivingEnabled = effective;
-            if (m_tray)
-                m_tray->setReceivingEnabled(effective);
-            if (m_settings) {
-                m_settings->setAcceptNewCast(effective);
-                std::string saveError;
-                if (!m_settings->save(saveError))
-                    std::cerr << "Settings save failed: "
-                              << saveError << '\n';
-            }
+        if (sendReceivingEnabled(
+                desired, effective, stateVersion, error)) {
+            applyReceivingState(effective, stateVersion);
         } else {
             std::cerr << "Receiving state command failed: "
                       << error << '\n';
         }
     }
 
+    void applyReceivingState(
+        bool enabled, std::uint64_t stateVersion)
+    {
+        std::lock_guard lock(m_receivingStateMutex);
+        if (stateVersion < m_receivingStateVersion)
+            return;
+        m_receivingStateVersion = stateVersion;
+        const bool previous = m_receivingEnabled.exchange(enabled);
+        if (m_tray)
+            m_tray->requestReceivingEnabled(enabled);
+        if (previous != enabled && m_settings) {
+            m_settings->setAcceptNewCast(enabled);
+            std::string saveError;
+            if (!m_settings->save(saveError))
+                std::cerr << "Settings save failed: "
+                          << saveError << '\n';
+        }
+    }
+
     bool sendReceivingEnabled(
-        bool enabled, bool &effective, std::string &error)
+        bool enabled, bool &effective,
+        std::uint64_t &stateVersion, std::string &error)
     {
         std::uint32_t protocolProcessId = 0;
         std::string protocolHash;
@@ -1480,7 +1495,7 @@ private:
             return false;
 
         Message state;
-        if (!connection->readMessage(state, 2000ms, error)
+        if (!connection->readMessage(state, 4000ms, error)
             || state.header.type != MessageType::ReceivingState
             || state.header.correlationId != request.header.messageId
             || !mcast::ipc::validateMessageDirection(
@@ -1498,6 +1513,7 @@ private:
             return false;
         }
         effective = *value;
+        stateVersion = state.header.stateVersion;
         return true;
     }
 
@@ -1629,7 +1645,11 @@ private:
             + L" --nonce=" + widen(*m_nonce)
             + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
             + L" --dlna-http-port="
-            + (m_options.testMode ? L"0" : L"8200");
+            + (m_options.testMode ? L"0" : L"8200")
+            + L" --receiving-enabled="
+            + (m_receivingEnabled ? L"1" : L"0");
+        if (m_options.testMode)
+            arguments += L" --disable-ssdp";
         if (!m_options.background)
             arguments += L" --request-ui";
         if (!m_options.testMode || m_options.testPersistent)
@@ -1854,6 +1874,10 @@ private:
         std::uint64_t uiControlGeneration = 0;
         std::uint64_t confirmationGeneration = 0;
         if (helloMessage.header.source == ProcessRole::Protocol) {
+            {
+                std::lock_guard lock(m_receivingStateMutex);
+                m_receivingStateVersion = 0;
+            }
             confirmationGeneration =
                 registerProtocolConnection(connection);
             protocolGuard = std::make_unique<ProtocolConnectionGuard>(
@@ -1982,6 +2006,22 @@ private:
                     std::cerr << "UI grant send: " << error << '\n';
                     return;
                 }
+            } else if (message.header.type
+                           == MessageType::ReceivingState
+                       && helloMessage.header.source
+                           == ProcessRole::Protocol) {
+                const mcast::ipc::PayloadReader reader(
+                    message.payload);
+                const auto enabled = reader.getBool(
+                    static_cast<std::uint16_t>(
+                        mcast::ipc::FieldId::
+                            ReceivingEnabled));
+                if (!reader.valid() || !enabled) {
+                    std::cerr << "receiving state payload invalid\n";
+                    return;
+                }
+                applyReceivingState(
+                    *enabled, message.header.stateVersion);
             } else if (message.header.type
                            == MessageType::CastConfirmationRequest
                        && helloMessage.header.source
@@ -2232,7 +2272,9 @@ private:
     std::unordered_set<std::uint64_t> m_completedHandoffs;
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
     std::unique_ptr<mcast::shell::ShellSettings> m_settings;
-    bool m_receivingEnabled = true;
+    std::atomic_bool m_receivingEnabled{true};
+    std::uint64_t m_receivingStateVersion = 0;
+    std::mutex m_receivingStateMutex;
     std::atomic_uint64_t m_nextMessageId{100};
     std::atomic_bool m_shuttingDown = false;
     std::atomic_bool m_quitRequested = false;

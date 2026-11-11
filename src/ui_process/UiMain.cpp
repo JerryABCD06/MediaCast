@@ -101,6 +101,11 @@ int main(int argc, char *argv[])
     MainWindow mainWindow(nullptr);
     QObject::connect(&mainWindow, &MainWindow::logMessage, writeLog);
     QObject::connect(
+        &playback, &PlaybackController::logMessage,
+        &mainWindow, [&writeLog](const QString &text) {
+            writeLog(QStringLiteral("Playback  %1").arg(text));
+        });
+    QObject::connect(
         &mainWindow, &MainWindow::windowClosed, &app, &QApplication::quit);
     if (uiSessionOptions.confirmationOnly) {
         QObject::connect(
@@ -121,6 +126,31 @@ int main(int argc, char *argv[])
         return 4;
     }
     std::unique_ptr<mcast::ui_process::PlaybackBridge> playbackBridge;
+    std::atomic_bool windowFrameReady{false};
+    std::atomic_bool mpvRendererReady{false};
+    std::atomic_bool playbackUiReadySent{false};
+    std::function<void()> notifyPlaybackReady;
+    QObject::connect(
+        &mainWindow, &MainWindow::castEndRequested,
+        &mainWindow, [&] {
+            if (playbackBridge) {
+                writeLog(QStringLiteral("用户请求断开当前投送"));
+                playbackBridge->requestEndSession();
+                return;
+            }
+            writeLog(QStringLiteral(
+                "断开连接失败：PlaybackBridge 尚未就绪"));
+        });
+    QObject::connect(
+        &mainWindow, &MainWindow::castPauseRequested,
+        &mainWindow, [&] {
+            if (playbackBridge) {
+                playbackBridge->pauseAndFlushState();
+                return;
+            }
+            writeLog(QStringLiteral(
+                "关闭窗口前暂停失败：PlaybackBridge 尚未就绪"));
+        });
     std::function<void()> startPlaybackReconnect;
     std::jthread playbackReconnectThread;
     std::atomic_bool playbackReconnectDone{true};
@@ -136,6 +166,19 @@ int main(int argc, char *argv[])
             &mainWindow, [&writeLog](const QString &text) {
                 writeLog(QStringLiteral("Playback IPC  %1").arg(text));
             });
+        playbackUiReadySent = false;
+        if (notifyPlaybackReady)
+            notifyPlaybackReady();
+    };
+    notifyPlaybackReady = [&] {
+        if (!playbackBridge || !windowFrameReady
+            || !mpvRendererReady || !player->isRunning()
+            || playbackUiReadySent.exchange(true)) {
+            return;
+        }
+        playbackBridge->notifyUiReady();
+        writeLog(QStringLiteral(
+            "Playback UI 就绪：窗口首帧、mpv renderer、PlaybackBridge 均已就绪"));
     };
     if (auto playbackConnection = uiSession.takePlaybackConnection()) {
         createPlaybackBridge(
@@ -231,6 +274,8 @@ int main(int argc, char *argv[])
     }
     QObject::connect(
         &mainWindow, &MainWindow::firstFrameReady, &app, [&] {
+        windowFrameReady = true;
+        notifyPlaybackReady();
         if (!confirmationBridge)
             return;
         std::string error;
@@ -240,6 +285,12 @@ int main(int argc, char *argv[])
                          .arg(QString::fromStdString(error)));
         }
     });
+    QObject::connect(
+        player.get(), &MpvCore::rendererReady,
+        &mainWindow, [&] {
+            mpvRendererReady = true;
+            notifyPlaybackReady();
+        });
 
     if (!uiSessionOptions.confirmationOnly) {
         player->start();

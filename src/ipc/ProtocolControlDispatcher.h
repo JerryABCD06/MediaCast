@@ -44,6 +44,9 @@ public:
 
     bool sendHeartbeat(std::string &error);
     bool sendUiOpenReady(std::string &error);
+    bool sendReceivingState(
+        bool enabled, std::uint64_t stateVersion,
+        std::string &error);
     bool requestPlaybackReconnect(std::string &error);
     bool waitForUiOpenRequest(
         std::chrono::milliseconds timeout, std::string &error);

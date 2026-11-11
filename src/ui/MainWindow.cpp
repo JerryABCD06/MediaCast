@@ -343,9 +343,14 @@ void MainWindow::retranslate()
 
 void MainWindow::endCasting()
 {
-    // 只把话传出去。具体怎么做（结束会话、推事件、让设备在网络里消失一下
-    // 再回来）是协议层的事，main() 把这个信号接在 DlnaRenderer::endSession 上。
+    // 只把话传出去。UiMain 会把它交给 PlaybackBridge，再沿 PlaybackPipe
+    // 请求 Protocol 结束会话；窗口层不认识 DLNA。
     emit castEndRequested();
+}
+
+void MainWindow::pauseCastingForWindowClose()
+{
+    emit castPauseRequested();
 }
 
 void MainWindow::adoptChildWindow(QObject *child)

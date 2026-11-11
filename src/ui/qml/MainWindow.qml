@@ -305,8 +305,8 @@ FluWindow {
     //   一、**关掉就真正释放这次窗口实例**。这个程序是常驻托盘的接收器；
     //       下次要用时（有人投屏、或者托盘点「打开主界面」）再从编译好的
     //       QQmlComponent 新建，既不积累内存，也不走 Qt 的重复 load() 崩溃路径。
-    //   二、**正在投送的时候先问一句**。关掉界面确实会把这边的投送断掉，
-    //       用户应该知道，而不是点完 X 才发现手机上的投屏没了。
+    //   二、**正在投送的时候先问一句**。关闭窗口既可以选择暂停后保留连接，
+    //       也可以明确断开；用户应该知道两种结果的差别。
     //   三、**关窗仍走 FluRouter.removeWindow(window)**，即先摘路由登记再
     //       deleteLater。C++ 侧只复用 QQmlComponent，不重复 load()。
     closeListener: function(event) {
@@ -541,12 +541,23 @@ FluWindow {
 
         title: qsTr("ui_close_dialog_title")
         message: qsTr("ui_close_dialog_text")
+        neutralText: qsTr("ui_close_dialog_neutral")
         negativeText: qsTr("ui_common_cancel")
         positiveText: qsTr("ui_close_dialog_confirm")
-        buttonFlags: FluContentDialogType.NegativeButton | FluContentDialogType.PositiveButton
+        buttonFlags: FluContentDialogType.NeutralButton
+                     | FluContentDialogType.NegativeButton
+                     | FluContentDialogType.PositiveButton
 
         // 取消：什么都不做。窗口还在原地，投送照常。
         onNegativeClicked: {
+        }
+
+        onNeutralClicked: {
+            // 仅关窗口：先把“暂停”同步给 Protocol，让控制点立即看到
+            // TransportState=PAUSED，再销毁窗口。连接和接收服务都保留。
+            dialog_end_cast.close()
+            Shell.pauseCastingForWindowClose()
+            FluRouter.removeWindow(window)
         }
 
         onPositiveClicked: {

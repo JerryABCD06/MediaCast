@@ -158,6 +158,9 @@ std::unique_ptr<PipeConnection> connectControl(
 
 void protocolCommandServer(
     const ClientOptions &options, std::atomic_bool &receivingEnabled,
+    std::atomic_uint64_t &receivingStateVersion,
+    const std::function<bool(
+        bool, bool &, std::uint64_t &, std::string &)> &applyReceiving,
     mcast::ipc::PipeListener &listener, std::stop_token stop)
 {
     while (!stop.stop_requested()) {
@@ -195,15 +198,29 @@ void protocolCommandServer(
             std::cerr << "Protocol command payload is invalid\n";
             continue;
         }
-        receivingEnabled = *enabled;
-        protocolLog(
-            std::string("Protocol receiving enabled=")
-            + (*enabled ? "true" : "false"));
+        std::string applyError;
+        bool applied = true;
+        bool effective = receivingEnabled.load();
+        std::uint64_t stateVersion =
+            receivingStateVersion.load();
+        if (applyReceiving)
+            applied = applyReceiving(
+                *enabled, effective, stateVersion, applyError);
+        receivingEnabled = effective;
+        receivingStateVersion = stateVersion;
+        if (applied) {
+            protocolLog(
+                std::string("Protocol receiving enabled=")
+                + (effective ? "true" : "false"));
+        } else {
+            protocolLog(
+                "Protocol receiving command failed: " + applyError);
+        }
 
         mcast::ipc::PayloadBuilder builder;
         builder.addBool(
             static_cast<std::uint16_t>(mcast::ipc::FieldId::ReceivingEnabled),
-            *enabled);
+            effective);
         Message state;
         state.header.type = MessageType::ReceivingState;
         state.header.source = ProcessRole::Protocol;
@@ -212,6 +229,7 @@ void protocolCommandServer(
         state.header.messageId = 1;
         state.header.correlationId = request.header.messageId;
         state.header.sessionId = request.header.sessionId;
+        state.header.stateVersion = stateVersion;
         state.payload = std::move(builder).finish().value_or(
             std::vector<std::uint8_t>{});
         if (!connection->writeMessage(state, 2000ms, error)) {
@@ -240,12 +258,18 @@ class ProtocolCommandServer
 public:
     ProtocolCommandServer(
         const ClientOptions &options,
-        std::atomic_bool &receivingEnabled)
+        std::atomic_bool &receivingEnabled,
+        std::atomic_uint64_t &receivingStateVersion,
+        std::function<bool(
+            bool, bool &, std::uint64_t &, std::string &)>
+            applyReceiving)
         : m_listener(
             mcast::ipc::makeProtocolCommandPipeName(
                 widen(options.instance)), 2)
         , m_options(options)
         , m_receivingEnabled(receivingEnabled)
+        , m_receivingStateVersion(receivingStateVersion)
+        , m_applyReceiving(std::move(applyReceiving))
     {
         if (!m_listener.valid()) {
             std::cerr << "Protocol command listener failed\n";
@@ -253,7 +277,9 @@ public:
         }
         m_thread = std::jthread([this](std::stop_token stop) {
             protocolCommandServer(
-                m_options, m_receivingEnabled, m_listener, stop);
+                m_options, m_receivingEnabled,
+                m_receivingStateVersion, m_applyReceiving,
+                m_listener, stop);
         });
     }
 
@@ -269,6 +295,10 @@ private:
     mcast::ipc::PipeListener m_listener;
     const ClientOptions &m_options;
     std::atomic_bool &m_receivingEnabled;
+    std::atomic_uint64_t &m_receivingStateVersion;
+    std::function<bool(
+        bool, bool &, std::uint64_t &, std::string &)>
+        m_applyReceiving;
     std::jthread m_thread;
 };
 
@@ -521,6 +551,8 @@ bool parseClientOptions(
         constexpr std::wstring_view activationPrefix = L"--activation-id=";
         constexpr std::wstring_view dlnaPortPrefix =
             L"--dlna-http-port=";
+        constexpr std::wstring_view receivingPrefix =
+            L"--receiving-enabled=";
         constexpr std::wstring_view requestRoundsPrefix =
             L"--request-ui-rounds=";
         if (argument.starts_with(instancePrefix)) {
@@ -564,8 +596,21 @@ bool parseClientOptions(
                 error = "invalid --dlna-http-port";
                 return false;
             }
+        } else if (argument.starts_with(receivingPrefix)) {
+            const std::wstring value =
+                argument.substr(receivingPrefix.size());
+            if (value == L"1" || value == L"true") {
+                options.initialReceivingEnabled = true;
+            } else if (value == L"0" || value == L"false") {
+                options.initialReceivingEnabled = false;
+            } else {
+                error = "invalid --receiving-enabled";
+                return false;
+            }
         } else if (argument == L"--request-ui") {
             options.requestUi = true;
+        } else if (argument == L"--disable-ssdp") {
+            options.disableSsdp = true;
         } else if (argument == L"--persistent") {
             options.persistent = true;
         } else if (argument.starts_with(requestRoundsPrefix)) {
@@ -642,6 +687,7 @@ int runClient(const ClientOptions &options)
         std::shared_ptr<mcast::playback::PlaybackPipeGateway>
             activePlayback;
         std::jthread playbackWatcher;
+        std::function<void()> requestEndCast;
 
         const auto stopReconnectOwner = [&] {
             std::shared_ptr<std::stop_source> owner;
@@ -689,7 +735,11 @@ int runClient(const ClientOptions &options)
                 auto playback =
                     std::make_shared<
                         mcast::playback::PlaybackPipeGateway>(
-                        std::move(connection), protocolLog);
+                        std::move(connection), protocolLog,
+                        [&] {
+                            if (requestEndCast)
+                                requestEndCast();
+                        });
                 playbackGateway->detach(
                     "Ui playback connection replaced");
                 if (!playbackGateway->attach(
@@ -815,7 +865,11 @@ int runClient(const ClientOptions &options)
                                         PlaybackPipeGateway>(
                                     std::move(
                                         replacementConnection),
-                                    protocolLog);
+                                    protocolLog,
+                                    [&] {
+                                        if (requestEndCast)
+                                            requestEndCast();
+                                    });
                             if (!playbackGateway->attach(
                                     replacement, reconnectError)) {
                                 protocolLog(
@@ -852,6 +906,8 @@ int runClient(const ClientOptions &options)
                 "uuid:mcast-" + options.instance,
                 options.dlnaHttpPort,
                 false,
+                !options.disableSsdp,
+                options.initialReceivingEnabled,
                 [&] {
                     mcast::ipc::UiActivationOutcome activation;
                     std::string activationError;
@@ -865,14 +921,47 @@ int runClient(const ClientOptions &options)
                     return succeeded;
                 },
                 protocolLog,
+                [&](bool enabled, std::uint64_t stateVersion) {
+                    std::string stateError;
+                    if (!dispatcher->sendReceivingState(
+                            enabled, stateVersion, stateError)) {
+                        protocolLog(
+                            "Receiving state update failed: "
+                            + stateError);
+                    }
+                },
             });
+        requestEndCast = [&] {
+            protocolLog("Ui end-cast request received");
+            std::string disconnectError;
+            if (dlnaRuntime.requestDisconnect(disconnectError)) {
+                protocolLog("Ui end-cast request accepted");
+            } else {
+                protocolLog(
+                    "Ui end-cast request failed: "
+                    + disconnectError);
+            }
+        };
         if (!dlnaRuntime.start(error)) {
             std::cerr << "DLNA runtime failed: " << error << '\n';
             return 4;
         }
 
-        std::atomic_bool receivingEnabled = true;
-        ProtocolCommandServer commandServer(options, receivingEnabled);
+        std::atomic_bool receivingEnabled =
+            options.initialReceivingEnabled;
+        std::atomic_uint64_t receivingStateVersion = 1;
+        ProtocolCommandServer commandServer(
+            options, receivingEnabled, receivingStateVersion,
+            [&](bool enabled, bool &effective,
+                std::uint64_t &stateVersion,
+                std::string &receivingError) {
+                const bool applied =
+                    dlnaRuntime.setReceivingEnabled(
+                        enabled, receivingError);
+                effective = dlnaRuntime.receivingEnabled();
+                stateVersion = dlnaRuntime.receivingStateVersion();
+                return applied;
+            });
         std::atomic_bool heartbeatFailed = false;
         std::string heartbeatError;
         std::mutex heartbeatMutex;

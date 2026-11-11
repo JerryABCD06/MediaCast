@@ -1,6 +1,6 @@
 # DLNA 迁入无 Qt Protocol
 
-最后更新：2026-11-10
+最后更新：2026-11-11
 
 目标是把现有 `MCast.exe` 中的 DLNA/SSDP/HTTP/SOAP/GENA 逐层迁进
 `MCast.Protocol.exe`，同时保持旧入口可回退。生产切换必须是最后一个独立提交。
@@ -93,6 +93,11 @@ Protocol 侧 `PlaybackPipeGateway` 已支持首快照门控、pending 命令超�
 重复/未知结果去重、generation/stateVersion 去重、断线拒绝 pending 命令，
 以及 listener 析构等待；Ui 侧 PlaybackController bridge 尚待接入。
 
+PlaybackPipe 命令现在还受 `PlaybackUiReady` 门控：UI 只有在窗口首帧、
+MpvQmlItem 完成首次实际 OpenGL 渲染、libmpv 已启动且 PlaybackBridge 已连接后
+才上报。Protocol 可先交换快照，但收到这条消息前不会下发 Open/Play。render
+context 重建或首次加载失败时，会保留最后 URI 并重试。
+
 Ui 侧 `PlaybackBridge` 已接入真实 `PlaybackController`：activation ID 作为
 generation，命令在 Qt 主线程执行，Pipe 写入由独立 writer 线程完成；完整
 current/next 请求和 playerLost/本地 endSession 均会同步到协议快照。
@@ -148,8 +153,24 @@ HTTP 到 SOAP router 已由 `DlnaProtocolRuntime` 组合并由 `MCast.Protocol.e
 确认结果。Ui 不存在时，`LateBindingPlaybackGateway` 让播放命令失败关闭，Ui
 PlaybackPipe 建立后透明挂接。
 
-SSDP 发现、GENA 订阅和“暂停接收”的生产启停尚未迁入该 runtime；当前 HTTP 端口
-虽已由 Protocol 监听，但还没有广播可发现描述。
+“暂停接收”的语义是**不再接受新的投送**，不是替用户结束正在进行的投送。
+没有活动会话时，暂停会关闭 HTTP/SSDP、停止确认 worker 并结束空会话；已有活动
+会话时，只停 SSDP 广播，HTTP/GENA 和当前媒体的播放/暂停/音量/进度控制继续
+服务，同时拒绝新的 `SetAVTransportURI`。恢复时重新开启 SSDP；如果此前已完整
+暂停，才重新开启 HTTP/GENA 并恢复 session。HTTP 轮询线程异常退出时仍会整体
+降级为 `receiving=false`，并通过 ControlPipe 主动同步 Shell。
+
+UI 顶栏的「断开连接」通过 PlaybackPipe 的 `UiEndCastRequest` 回到 Protocol，
+由同一套 `DlnaSession::endSession` 清媒体、断 peer 并产生 GENA 状态变化；UI
+不直接操作协议状态。主动断开是一个粘性状态：后续查询、续订、Play/Stop 都不会
+把它重新标成“已连接”，只有新的 `SetAVTransportURI` 才开启下一次会话。
+考虑部分控制点只认设备从网络消失，主动断开还会把 HTTP/GENA/SSDP 整体停约
+1.5 秒：先由 SSDP 发 `byebye`，再停 GENA 和 HTTP，EndSession 收尾后按
+HTTP/GENA、SSDP `alive` 的顺序重新上线；接收开关本身保持开启。
+
+关闭窗口确认框提供「仅关闭窗口 / 取消 / 关闭并断开」。选择仅关闭窗口时，UI
+先同步把 `PAUSED` 快照经 PlaybackPipe 交给 Protocol，GENA 随即将暂停通知手机，
+然后只销毁 UI 窗口；连接与接收服务保留，手机下一次操作会重新拉起主窗口。
 
 ### 7. SSDP
 
@@ -162,7 +183,15 @@ SSDP 发现、GENA 订阅和“暂停接收”的生产启停尚未迁入该 run
 vEthernet、VPN/TAP/WinTun 等不可靠出口。`SsdpSocket` 支持 `SO_REUSEADDR`
 非阻塞绑定、指定组播出口、加入/离开组播组，以及 16 KiB 有界 UDP 收发；
 超限包、UDP reset 和 would-block 作为可恢复状态返回。测试只使用临时端口，
-并覆盖实体网卡组播发收，生产入口尚未切换。
+并覆盖实体网卡组播发收。
+
+`SsdpService` 已负责完整发现生命周期：选择网卡、绑定 1900、发六种身份
+`alive`/`byebye`、响应 `M-SEARCH`、200 ms 内有界随机错峰，以及可取消停线程。
+M-SEARCH 回应队列有上限，搜索类型按 HTTP 规矩大小写不敏感。测试用临时端口和
+回环接口完成真实 UDP 收发，不占生产 1900。`DlnaProtocolRuntime` 在
+`listenAny()` 的生产路径上组合 HTTP 与 SSDP；loopback 和进程测试路径不启动
+组播。Shell 启动 Protocol 时会直接携带持久化的初始接收开关，因此上次暂停后
+重启不会再出现“先在线 250 ms、再被暂停”的窗口。
 
 ### 8. GENA
 
@@ -176,10 +205,29 @@ vEthernet、VPN/TAP/WinTun 等不可靠出口。`SsdpSocket` 支持 `SO_REUSEADD
 - 5 秒超时
 - 不走系统代理
 
+当前进展：Qt-free `GenaManager` 已接入 `DlnaProtocolRuntime` 和
+`DlnaHttpFrontend`，完整处理 `SUBSCRIBE` / 续订 / `UNSUBSCRIBE`。订阅上限、
+回调 URL 校验、1800 秒有效期和前台 HTTP 应答均有界；回调主机通过
+`getaddrinfo` 解析，支持 DNS、IPv4 和带方括号的 IPv6 地址。新订阅在应答后
+100 ms 收到第一条完整状态。每个订阅同一时刻最多一条 `NOTIFY`，繁忙期间只保留
+“需要补发最新状态”的标记。
+
+网络异常按“可能只是暂时送不到”处理：连接失败不消耗 `SEQ`，按
+250/500/1000/2000 ms 退避重试当前完整快照；恢复后用原序号补发，不会因为失败
+尝试制造序号断层。只有连续五次连不上才移除订阅并以 `Unreachable` 上报，交给
+`DlnaSession` 的 60 秒宽限；连上但没及时返回 200 不算失败。明确退订、过期或
+主动暂停才立即断开。连接恢复后的完整 `LastChange` 会重新对齐状态、时长、队列
+能力、音量/静音和画面参数。
+
+测试覆盖：回调服务器晚于订阅启动时，前两次连接失败后仍以 `SEQ=0` 成功补发；
+成功后下一条为 `SEQ=1` 并包含最新 `PLAYING`；连续五次死回调最终上报
+`Unreachable`；显式退订立即上报断开。GENA 集成测试不访问外网。
+
 ### 9. Protocol 影子集成
 
 只通过显式测试参数启动影子 DLNA，使用独立端口，不绑定 8200/1900。
-旧 `MCast.exe` 仍是生产路径。
+旧 `MCast.exe` 仍是生产路径。HTTP/SOAP/SSDP/GENA 已全部在无 Qt Protocol
+中具备实现，下一步是完整影子端到端和真实控制点回归。
 
 端到端验收：
 
@@ -187,7 +235,8 @@ vEthernet、VPN/TAP/WinTun 等不可靠出口。`SsdpSocket` 支持 `SO_REUSEADD
 - SetAVTransportURI -> PlaybackCommand
 - Ui StateDelta -> SOAP 查询
 - SUBSCRIBE -> LastChange/后续 NOTIFY
-- 暂停接收 -> 会话结束、byebye、停止监听
+- 暂停接收 -> 无活动会话时结束空会话并停监听；有活动会话时保留当前控制，
+  只发 SSDP byebye 并拒绝新的媒体 URI
 - Ui 退出/重启 -> generation 与重连
 
 ## 生产切换

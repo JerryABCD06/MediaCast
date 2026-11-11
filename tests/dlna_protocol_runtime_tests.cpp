@@ -14,8 +14,10 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
@@ -70,13 +72,14 @@ std::string setUriBody(const std::string &uri, const std::string &address)
 }
 
 std::string httpRequest(
-    const std::string &address, const std::string &body)
+    const std::string &address, const std::string &body,
+    std::string action = "SetAVTransportURI")
 {
     return "POST /AVTransport/control HTTP/1.1\r\n"
         "Host: 127.0.0.1\r\n"
         "User-Agent: Runtime-Test-" + address + "\r\n"
         "SOAPACTION: \"urn:schemas-upnp-org:service:AVTransport:1#"
-            "SetAVTransportURI\"\r\n"
+            + action + "\"\r\n"
         "Content-Type: text/xml; charset=utf-8\r\n"
         "Content-Length: " + std::to_string(body.size()) + "\r\n"
         "Connection: close\r\n\r\n" + body;
@@ -125,6 +128,37 @@ std::string exchange(
         break;
     }
     return response;
+}
+
+std::optional<std::string> responseHeader(
+    const std::string &response, std::string_view name)
+{
+    std::size_t offset = 0;
+    while (offset < response.size()) {
+        const std::size_t end = response.find("\r\n", offset);
+        if (end == std::string::npos)
+            break;
+        const std::string line = response.substr(offset, end - offset);
+        const std::size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string key = line.substr(0, colon);
+            std::transform(
+                key.begin(), key.end(), key.begin(),
+                [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+            if (key == name) {
+                std::size_t begin = colon + 1;
+                while (begin < line.size()
+                       && (line[begin] == ' ' || line[begin] == '\t')) {
+                    ++begin;
+                }
+                return line.substr(begin);
+            }
+        }
+        offset = end + 2;
+    }
+    return std::nullopt;
 }
 
 class TestConfirmationPort final : public DlnaClaimConfirmationPort
@@ -326,6 +360,8 @@ void testEndToEndInitialMediaAndConfirmation()
             "uuid:runtime-test",
             0,
             true,
+            true,
+            true,
             [&] {
                 ++activationRequests;
                 return true;
@@ -432,6 +468,8 @@ void testMediaLoadFailureFailsHttp()
             "uuid:runtime-failure",
             0,
             true,
+            true,
+            true,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -482,6 +520,8 @@ void testEarlyCommandCompletionDoesNotLoseWakeup()
             "uuid:early-completion",
             0,
             true,
+            true,
+            true,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -520,6 +560,337 @@ void testEarlyCommandCompletionDoesNotLoseWakeup()
     runtime.stop();
 }
 
+void testReceivingSurfaceToggle()
+{
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "Receiving Toggle Test",
+            "uuid:receiving-toggle",
+            0,
+            true,
+            true,
+            true,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    std::string error;
+    check(runtime.start(error),
+          "receiving toggle runtime starts: " + error);
+    check(runtime.localPort() != 0,
+          "receiving toggle starts HTTP");
+    const auto initialStateVersion =
+        runtime.receivingStateVersion();
+
+    PlaybackCommand open;
+    open.type = PlaybackCommandType::Open;
+    open.media.uri = "http://example.test/active.mp4";
+    check(playback.submit(open).queued,
+          "receiving toggle opens active media");
+    playback.processAll();
+    playback.markReady();
+
+    check(runtime.setReceivingEnabled(false, error),
+          "receiving can pause: " + error);
+    check(runtime.receivingStateVersion() > initialStateVersion,
+          "pausing advances the receiving state version");
+    check(runtime.localPort() == 0,
+          "paused receiving closes HTTP listener");
+    check(!runtime.setReceivingEnabled(true, error),
+          "receiving rejects resume while pause is finishing");
+    check(runtime.localPort() == 0,
+          "rejected resume leaves HTTP listener closed");
+
+    playback.processAll();
+    check(playback.snapshot().state == PlaybackState::NoMedia,
+          "pausing receiving clears active playback");
+    check(runtime.setReceivingEnabled(true, error),
+          "receiving can resume after pause finishes: " + error);
+    check(runtime.receivingStateVersion() > initialStateVersion,
+          "resuming preserves a monotonic receiving state version");
+    check(runtime.localPort() != 0,
+          "resumed receiving restarts HTTP listener");
+    const std::string response = exchange(
+        runtime.localPort(),
+        "GET /description.xml HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n");
+    check(response.starts_with("HTTP/1.1 200 OK"),
+          "resumed receiving serves HTTP again");
+    runtime.stop();
+}
+
+void testReceivingStartsPaused()
+{
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "Paused Start Test",
+            "uuid:paused-start",
+            0,
+            true,
+            true,
+            false,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    std::string error;
+    check(runtime.start(error),
+          "runtime starts with receiving disabled: " + error);
+    check(runtime.localPort() == 0,
+          "persisted pause does not open the HTTP surface");
+    check(runtime.setReceivingEnabled(true, error),
+          "paused runtime can resume: " + error);
+    check(runtime.localPort() != 0,
+          "resuming a paused runtime opens HTTP");
+    runtime.stop();
+    check(runtime.start(error),
+          "runtime can restart with receiving still disabled: " + error);
+    check(runtime.localPort() == 0,
+          "restarted runtime preserves the paused initial state");
+    check(runtime.setReceivingEnabled(true, error),
+          "restarted runtime resumes after reset: " + error);
+    std::string response;
+    std::atomic_bool done{false};
+    std::jthread client([&] {
+        response = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.90",
+                setUriBody(
+                    "http://example.test/after-restart.mp4",
+                    "192.0.2.90")));
+        done = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return done.load(); });
+    client.join();
+    check(response.starts_with("HTTP/1.1 200 OK"),
+          "restarted paused runtime accepts new media without stale end");
+    runtime.stop();
+}
+
+void testPauseCancelsPendingClaim()
+{
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "Paused Claim Test",
+            "uuid:paused-claim",
+            0,
+            true,
+            true,
+            true,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    std::string error;
+    check(runtime.start(error),
+          "claim pause runtime starts: " + error);
+
+    std::atomic_bool firstDone{false};
+    std::jthread firstClient([&] {
+        static_cast<void>(exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.50",
+                setUriBody(
+                    "http://example.test/owner.mp4",
+                    "192.0.2.50"))));
+        firstDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return firstDone.load(); });
+    firstClient.join();
+
+    std::atomic_bool candidateDone{false};
+    std::jthread candidateClient([&] {
+        static_cast<void>(exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.60",
+                setUriBody(
+                    "http://example.test/candidate.mp4",
+                    "192.0.2.60"))));
+        candidateDone = true;
+    });
+    check(port.waitForPrompt().has_value(),
+          "pause test reaches confirmation port");
+
+    check(runtime.setReceivingEnabled(false, error),
+          "pausing cancels a pending claim: " + error);
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (!candidateDone.load()
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    candidateClient.join();
+    check(candidateDone.load(),
+          "pending claim connection closes when receiving pauses");
+
+    playback.processAll();
+    check(playback.snapshot().state == PlaybackState::Playing
+              && playback.snapshot().current.uri
+                  == "http://example.test/owner.mp4",
+          "pausing cancels the candidate without replacing current media");
+    port.decide(true);
+    std::this_thread::sleep_for(20ms);
+    check(playback.snapshot().current.uri
+              == "http://example.test/owner.mp4",
+          "late confirmation cannot revive a paused session");
+    runtime.stop();
+}
+
+void testSubscriptionControlsPeerConnection()
+{
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "GENA Runtime Test",
+            "uuid:gena-runtime",
+            0,
+            true,
+            true,
+            true,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    std::string error;
+    check(runtime.start(error),
+          "GENA runtime starts: " + error);
+
+    const std::string subscribe =
+        "SUBSCRIBE /AVTransport/event HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Callback: <http://127.0.0.1:1/notify>\r\n"
+        "NT: upnp:event\r\n"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n\r\n";
+    const std::string subscribed =
+        exchange(runtime.localPort(), subscribe);
+    check(subscribed.starts_with("HTTP/1.1 200 OK"),
+          "runtime accepts SUBSCRIBE");
+    const auto sid = responseHeader(subscribed, "sid");
+    check(sid.has_value(), "runtime returns a GENA SID");
+
+    playback.processAll();
+    check(playback.snapshot().peerConnected,
+          "a GENA subscription marks the peer connected");
+
+    std::string mediaResponse;
+    std::atomic_bool mediaDone{false};
+    std::jthread mediaClient([&] {
+        mediaResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.80",
+                setUriBody(
+                    "http://example.test/current.mp4",
+                    "192.0.2.80")));
+        mediaDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return mediaDone.load(); });
+    mediaClient.join();
+    check(mediaResponse.starts_with("HTTP/1.1 200 OK")
+              && playback.snapshot().state == PlaybackState::Playing,
+          "connected peer can start the current media");
+
+    check(runtime.setReceivingEnabled(false, error),
+          "pausing with a connected peer succeeds: " + error);
+    check(runtime.localPort() != 0,
+          "pausing keeps HTTP alive for the current session");
+    check(playback.snapshot().state == PlaybackState::Playing,
+          "pausing does not stop the current media");
+    const std::string blockedMedia = exchange(
+        runtime.localPort(),
+        httpRequest(
+            "192.0.2.81",
+            setUriBody(
+                "http://example.test/blocked.mp4",
+                "192.0.2.81")));
+    check(blockedMedia.find("<errorCode>705</errorCode>")
+              != std::string::npos,
+          "paused receiving rejects a new media session");
+    check(runtime.setReceivingEnabled(true, error),
+          "resuming with a kept surface succeeds: " + error);
+    check(playback.snapshot().state == PlaybackState::Playing,
+          "resuming does not disturb the current media");
+    check(runtime.requestDisconnect(error),
+          "an explicit UI disconnect requests a session end: " + error);
+    check(runtime.localPort() == 0,
+          "explicit disconnect briefly stops the DLNA service");
+    playback.processAll();
+    check(playback.snapshot().state == PlaybackState::NoMedia
+              && !playback.snapshot().peerConnected,
+          "explicit disconnect clears media and the peer session");
+    const auto restartDeadline =
+        std::chrono::steady_clock::now() + 4s;
+    while (runtime.localPort() == 0
+           && std::chrono::steady_clock::now() < restartDeadline) {
+        std::this_thread::sleep_for(20ms);
+    }
+    check(runtime.localPort() != 0,
+          "DLNA service comes back after the disconnect bounce");
+    const std::string transportInfo = exchange(
+        runtime.localPort(),
+        httpRequest(
+            "192.0.2.80",
+            soapBody(
+                "GetTransportInfo",
+                "<InstanceID>0</InstanceID>"),
+            "GetTransportInfo"));
+    playback.processAll();
+    check(transportInfo.starts_with("HTTP/1.1 200 OK")
+              && !playback.snapshot().peerConnected,
+          "queries after disconnect do not revive the peer session");
+
+    std::atomic_bool reconnectDone{false};
+    std::jthread reconnectClient([&] {
+        static_cast<void>(exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.80",
+                setUriBody(
+                    "http://example.test/next-session.mp4",
+                    "192.0.2.80"))));
+        reconnectDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return reconnectDone.load(); });
+    reconnectClient.join();
+    check(playback.snapshot().state == PlaybackState::Playing
+              && playback.snapshot().peerConnected,
+          "a new SetAVTransportURI starts a new peer session");
+
+    const std::string unsubscribe =
+        "UNSUBSCRIBE /AVTransport/event HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "SID: " + *sid + "\r\n"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n\r\n";
+    const std::string unsubscribed =
+        exchange(runtime.localPort(), unsubscribe);
+    check(
+        unsubscribed.starts_with("HTTP/1.1 412"),
+        "network bounce invalidates the old GENA subscription; response="
+            + unsubscribed.substr(
+                  0, std::min<std::size_t>(unsubscribed.size(), 64)));
+
+    playback.processAll();
+    check(playback.snapshot().peerConnected,
+          "the stale old SID does not close the newly started session");
+    runtime.stop();
+}
+
 } // namespace
 
 int main()
@@ -527,6 +898,10 @@ int main()
     testEndToEndInitialMediaAndConfirmation();
     testMediaLoadFailureFailsHttp();
     testEarlyCommandCompletionDoesNotLoseWakeup();
+    testReceivingSurfaceToggle();
+    testReceivingStartsPaused();
+    testPauseCancelsPendingClaim();
+    testSubscriptionControlsPeerConnection();
     std::cout << "DLNA protocol runtime tests passed\n";
     return 0;
 }

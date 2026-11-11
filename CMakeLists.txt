@@ -84,6 +84,8 @@ add_library(mcast_dlna_net STATIC
     src/protocols/dlna/net/HttpServer.cpp
     src/protocols/dlna/net/SsdpInterfaceSelector.h
     src/protocols/dlna/net/SsdpInterfaceSelector.cpp
+    src/protocols/dlna/net/SsdpService.h
+    src/protocols/dlna/net/SsdpService.cpp
     src/protocols/dlna/net/SsdpSocket.h
     src/protocols/dlna/net/SsdpSocket.cpp)
 target_compile_features(mcast_dlna_net PUBLIC cxx_std_20)
@@ -103,6 +105,8 @@ add_library(mcast_dlna_protocol STATIC
     src/protocols/dlna/runtime/DlnaHttpFrontend.cpp
     src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.h
     src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.cpp
+    src/protocols/dlna/runtime/GenaManager.h
+    src/protocols/dlna/runtime/GenaManager.cpp
     src/protocols/dlna/runtime/DlnaProtocolRuntime.h
     src/protocols/dlna/runtime/DlnaProtocolRuntime.cpp
     src/protocols/dlna/session/DlnaSession.h
@@ -321,6 +325,17 @@ if(BUILD_TESTING)
     add_test(NAME mcast_dlna_net_tests COMMAND mcast_dlna_net_tests)
     set_tests_properties(mcast_dlna_net_tests PROPERTIES TIMEOUT 20)
 
+    add_executable(
+        mcast_ssdp_service_tests
+        tests/ssdp_service_tests.cpp)
+    target_link_libraries(
+        mcast_ssdp_service_tests PRIVATE mcast_dlna_net)
+    add_test(
+        NAME mcast_ssdp_service_tests
+        COMMAND mcast_ssdp_service_tests)
+    set_tests_properties(
+        mcast_ssdp_service_tests PROPERTIES TIMEOUT 20)
+
     add_executable(mcast_http_server_tests tests/http_server_tests.cpp)
     target_link_libraries(mcast_http_server_tests PRIVATE mcast_dlna_net)
     add_test(NAME mcast_http_server_tests COMMAND mcast_http_server_tests)
@@ -411,6 +426,17 @@ if(BUILD_TESTING)
         COMMAND mcast_dlna_protocol_runtime_tests)
     set_tests_properties(
         mcast_dlna_protocol_runtime_tests PROPERTIES TIMEOUT 15)
+
+    add_executable(
+        mcast_gena_manager_tests
+        tests/gena_manager_tests.cpp)
+    target_link_libraries(
+        mcast_gena_manager_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_gena_manager_tests
+        COMMAND mcast_gena_manager_tests)
+    set_tests_properties(
+        mcast_gena_manager_tests PROPERTIES TIMEOUT 15)
 
     add_executable(
         mcast_dlna_claim_confirmation_worker_tests

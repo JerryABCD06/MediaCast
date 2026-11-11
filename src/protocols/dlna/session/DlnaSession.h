@@ -37,6 +37,7 @@ struct DlnaSessionSnapshot {
     std::size_t subscriptionCount = 0;
     bool peerGraceActive = false;
     SessionTime peerGraceDeadline{0};
+    bool ending = false;
     PlaybackSnapshot playback;
 };
 
@@ -73,19 +74,21 @@ public:
     DlnaSession(const DlnaSession &) = delete;
     DlnaSession &operator=(const DlnaSession &) = delete;
 
-    bool start();
+    bool start(bool accepting = true);
     void pauseAccepting(SessionTime now);
     bool resumeAccepting();
 
     void setSubscriptionCount(
         std::size_t count, SubscriptionChangeReason reason, SessionTime now);
     void peerActivity(SessionTime now);
+    void newMediaRequested(SessionTime now);
     void tick(SessionTime now);
 
     PlaybackCommandSubmission openMedia(
         const MediaRequest &request, SessionTime now);
     PlaybackCommandSubmission submit(PlaybackCommand command);
     PlaybackCommandSubmission endSession(SessionTime now);
+    void resetForRestart();
 
     void handlePlaybackEvent(const PlaybackEvent &event);
     bool transportTransitionPending() const;

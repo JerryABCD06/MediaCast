@@ -178,6 +178,21 @@ int main(int argc, char **argv)
     open.media.description = "Description";
     open.media.protocol = "DLNA";
     open.media.kind = types::MediaKind::Video;
+    const auto beforeUiReady = gateway.submit(open);
+    check(!beforeUiReady.queued
+              && beforeUiReady.status
+                  == PlaybackSubmissionStatus::WaitingForPlayer,
+          "open waits for PlaybackUiReady");
+    std::size_t eventsBeforeReady = 0;
+    {
+        std::scoped_lock lock(events.mutex);
+        eventsBeforeReady = events.events.size();
+    }
+    bridge.notifyUiReady();
+    check(pumpUntil(application, [&] {
+        std::scoped_lock lock(events.mutex);
+        return events.events.size() > eventsBeforeReady;
+    }), "UI ready reaches the protocol gateway");
     check(gateway.submit(open).queued, "open queues");
     check(pumpUntil(application, [&] {
         std::scoped_lock lock(events.mutex);

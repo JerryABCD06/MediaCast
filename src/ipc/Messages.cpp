@@ -469,6 +469,13 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Ui)
             return true;
         break;
+    case MessageType::UiEndCastRequest:
+    case MessageType::PlaybackUiReady:
+        if (channel == ConnectionChannel::Playback
+            && header.source == ProcessRole::Ui
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
     case MessageType::PlaybackSnapshotResponse:
         if (channel == ConnectionChannel::Playback
             && header.source == ProcessRole::Ui
@@ -482,7 +489,8 @@ bool validateMessageDirection(
             return true;
         break;
     case MessageType::ReceivingState:
-        if (channel == ConnectionChannel::Command
+        if ((channel == ConnectionChannel::Command
+             || channel == ConnectionChannel::Control)
             && header.source == ProcessRole::Protocol
             && header.destination == ProcessRole::Shell)
             return true;

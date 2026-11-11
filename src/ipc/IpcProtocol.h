@@ -69,6 +69,8 @@ enum class MessageType : std::uint16_t {
     CastConfirmationCancel = 34,
     PlaybackReconnectRequest = 35,
     UiPlaybackReconnect = 36,
+    UiEndCastRequest = 37,
+    PlaybackUiReady = 38,
 };
 
 enum class FieldType : std::uint8_t {

@@ -32,8 +32,8 @@ class SplashWindow;
 //     0xC0000005 转储里访问的指针是 MSVC 的 0xFEEEFEEE 释放填充值）。
 //
 // 三、**它不认识 DLNA，也不认识播放器。** QML 那两件事都走信号：要断投送就把
-//     意思发出去（main() 接在 DlnaRenderer::endSession 上），要读播放状态就
-//     读已经注册给 QML 的 Playback。
+//     意思发出去（UiMain/PlaybackBridge 转给 Protocol），要读播放状态就读已经
+//     注册给 QML 的 Playback。
 class MainWindow : public QObject
 {
     Q_OBJECT
@@ -55,6 +55,7 @@ public:
      * 那边走 FluRouter.removeWindow() 真正销毁，下次再从同一个组件新建。
      */
     Q_INVOKABLE void endCasting();
+    Q_INVOKABLE void pauseCastingForWindowClose();
 
     /**
      * 进 / 出全屏时要做的**窗口层**调整（QML 那边调不到 Win32 API）。
@@ -109,6 +110,7 @@ signals:
 
     /** 用户要求结束当前投送（不是退出程序，也不是挂断接收）。 */
     void castEndRequested();
+    void castPauseRequested();
 
     /** 本次 QML 主窗口实例已经销毁。Ui 进程用它决定何时退出。 */
     void windowClosed();

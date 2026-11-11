@@ -3,6 +3,8 @@
 
 #include "protocols/dlna/runtime/DlnaProtocolRuntime.h"
 
+#include "protocols/dlna/net/SsdpSocket.h"
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -33,6 +35,22 @@ DlnaProtocolRuntime::DlnaProtocolRuntime(
     , m_adapter(m_coordinator)
     , m_claimRuntime(m_adapter)
     , m_session(m_playback, sessionCallbacks())
+    , m_gena(
+          GenaManagerCallbacks{
+              [this](
+                  std::size_t count,
+                  SubscriptionChangeReason reason) {
+                  m_session.setSubscriptionCount(
+                      count, reason, sessionNow());
+              },
+              [this] {
+                  m_session.peerActivity(sessionNow());
+              },
+              [this](const std::string &message) {
+                  log("GENA: " + message);
+              },
+          },
+          GenaManagerOptions{})
     , m_router(m_session, soap::SoapRouterOptions{
           [] { return sessionNow(); }, m_options.log})
     , m_handler(
@@ -41,8 +59,9 @@ DlnaProtocolRuntime::DlnaProtocolRuntime(
     , m_frontend(
           m_handler,
           DlnaHttpFrontendOptions{
-              m_options.friendlyName, m_options.udn})
+              m_options.friendlyName, m_options.udn, &m_gena})
 {
+    m_gena.updateState(m_playback.snapshot());
     m_playbackListener = m_playback.addEventListener(
         [this](const PlaybackEvent &event) {
             handlePlaybackEvent(event);
@@ -61,44 +80,29 @@ bool DlnaProtocolRuntime::start(std::string &error)
     error.clear();
     if (m_running.exchange(true))
         return true;
-    m_confirmationWorker =
-        std::make_unique<DlnaClaimConfirmationWorker>(
-            m_handler, m_confirmationPort,
-            [] { return castNow(); });
+    m_networkRecoveryPending = false;
     m_mediaStopping = false;
     m_mediaThread = std::jthread(
         [this](std::stop_token stop) { mediaLoop(stop); });
-
-    net::HttpServerOptions options;
-    options.logger = [this](const std::string &message) {
-        log(message);
-    };
-    const bool bound = m_options.bindLoopback
-        ? m_http.listenLoopback(
-              m_options.httpPort,
-              [this](const core::HttpRequest &request) {
-                  return m_frontend.handle(request);
-              },
-              options, error)
-        : m_http.listenAny(
-              m_options.httpPort,
-              [this](const core::HttpRequest &request) {
-                  return m_frontend.handle(request);
-              },
-              options, error);
-    if (!bound) {
-        stop();
-        return false;
-    }
-    m_httpThread = std::jthread(
-        [this](std::stop_token stop) { httpLoop(stop); });
-    if (!m_session.start()) {
-        error = "DLNA session failed to start";
+    m_receivingEnabled = m_options.startReceivingEnabled;
+    m_surfaceKeptForActiveSession = false;
+    if (m_receivingEnabled) {
+        if (!ensureConfirmationWorker(error)
+            || !startNetworkSurface(error)
+            || !m_session.start()) {
+            if (error.empty())
+                error = "DLNA session failed to start";
+            stop();
+            return false;
+        }
+    } else if (!m_session.start(false)) {
+        error = "DLNA session failed to start paused";
         stop();
         return false;
     }
     m_sessionThread = std::jthread(
         [this](std::stop_token stop) { sessionLoop(stop); });
+    notifyReceivingState();
     return true;
 }
 
@@ -106,6 +110,13 @@ void DlnaProtocolRuntime::stop() noexcept
 {
     if (!m_running.exchange(false))
         return;
+    m_receivingEnabled = false;
+    m_surfaceKeptForActiveSession = false;
+    m_disconnectRestartAt.reset();
+    {
+        std::lock_guard requestLock(m_requestGateMutex);
+    }
+    stopConfirmationWorker();
     {
         std::lock_guard lock(m_mediaMutex);
         m_mediaStopping = true;
@@ -120,20 +131,11 @@ void DlnaProtocolRuntime::stop() noexcept
         m_sessionThread.request_stop();
     if (m_sessionThread.joinable())
         m_sessionThread.join();
-    if (m_confirmationWorker) {
-        m_confirmationWorker->controlLost(castNow());
-        m_confirmationWorker->stop();
-    }
-    if (m_httpThread.joinable())
-        m_httpThread.request_stop();
-    m_http.wake();
-    if (m_httpThread.joinable())
-        m_httpThread.join();
-    m_http.stop();
-
     if (m_mediaThread.joinable())
         m_mediaThread.join();
+    stopNetworkSurface();
     static_cast<void>(m_session.endSession(sessionNow()));
+    m_session.resetForRestart();
 }
 
 std::uint16_t DlnaProtocolRuntime::localPort() const noexcept
@@ -141,11 +143,112 @@ std::uint16_t DlnaProtocolRuntime::localPort() const noexcept
     return m_http.localPort();
 }
 
+bool DlnaProtocolRuntime::setReceivingEnabled(
+    bool enabled, std::string &error)
+{
+    error.clear();
+    std::lock_guard lock(m_receivingMutex);
+    if (!m_running.load()) {
+        error = "DLNA runtime is not running";
+        return false;
+    }
+    bool recovered = false;
+    if (m_networkRecoveryPending.exchange(false)) {
+        recovered = m_receivingEnabled.exchange(false);
+        if (recovered)
+            ++m_receivingStateVersion;
+        log("DLNA network failure detected before receiving command");
+        disableReceivingLocked();
+    }
+    if (m_receivingEnabled.exchange(enabled) == enabled) {
+        if (recovered)
+            notifyReceivingState();
+        return true;
+    }
+    ++m_receivingStateVersion;
+    if (!enabled) {
+        if (m_session.snapshot().peerConnected) {
+            m_surfaceKeptForActiveSession = true;
+            {
+                std::lock_guard confirmationLock(
+                    m_confirmationMutex);
+                if (m_confirmationWorker)
+                    m_confirmationWorker->controlLost(castNow());
+            }
+            discardPendingMedia();
+            stopSsdpSurface();
+        } else {
+            disableReceivingLocked();
+        }
+        notifyReceivingState();
+        return true;
+    }
+    std::string workerError;
+    if (!ensureConfirmationWorker(workerError)) {
+        error = "DLNA confirmation worker failed to start: "
+            + workerError;
+        m_receivingEnabled = false;
+        ++m_receivingStateVersion;
+        notifyReceivingState();
+        return false;
+    }
+    if (m_surfaceKeptForActiveSession.exchange(false)) {
+        std::string surfaceError;
+        if (!startNetworkSurface(surfaceError)) {
+            m_receivingEnabled = false;
+            m_surfaceKeptForActiveSession = true;
+            ++m_receivingStateVersion;
+            error = "DLNA network surface failed to resume: "
+                + surfaceError;
+            notifyReceivingState();
+            return false;
+        }
+        notifyReceivingState();
+        return true;
+    }
+    if (!m_session.resumeAccepting()) {
+        error = "DLNA session failed to resume";
+        m_receivingEnabled = false;
+        ++m_receivingStateVersion;
+        stopConfirmationWorker();
+        notifyReceivingState();
+        return false;
+    }
+    notifyReceivingState();
+    return true;
+}
+
+bool DlnaProtocolRuntime::requestDisconnect(std::string &error)
+{
+    error.clear();
+    std::lock_guard lock(m_receivingMutex);
+    if (!m_running.load()) {
+        error = "DLNA runtime is not running";
+        return false;
+    }
+    const auto submission =
+        m_session.endSession(sessionNow());
+    if (!submission.queued) {
+        error = submission.error.empty()
+            ? "DLNA could not end the session"
+            : submission.error;
+        return false;
+    }
+    m_disconnectRestartAt = sessionNow() + SessionTime{1500};
+    stopConfirmationWorker();
+    discardPendingMedia();
+    stopNetworkSurface();
+    log(
+        "DLNA disconnect requested; network surface stopped; EndSession command="
+        + std::to_string(submission.commandId));
+    return true;
+}
+
 DlnaSessionCallbacks DlnaProtocolRuntime::sessionCallbacks()
 {
     DlnaSessionCallbacks callbacks;
     callbacks.requestUiActivation = [this] {
-        if (!m_options.requestUiActivation)
+        if (!m_receivingEnabled || !m_options.requestUiActivation)
             return;
         try {
             static_cast<void>(m_options.requestUiActivation());
@@ -157,7 +260,16 @@ DlnaSessionCallbacks DlnaProtocolRuntime::sessionCallbacks()
             log("Ui activation failed");
         }
     };
-    callbacks.startNetwork = [] { return true; };
+    callbacks.startNetwork = [this] {
+        std::string startError;
+        const bool started = startNetworkSurface(startError);
+        if (!started)
+            log("DLNA network start failed: " + startError);
+        return started;
+    };
+    callbacks.stopNetwork = [this] {
+        stopNetworkSurface();
+    };
     callbacks.requestFailed = [this](const std::string &message) {
         log("DLNA request failed: " + message);
     };
@@ -172,16 +284,27 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
     claim::DlnaClaimHttpCallbacks callbacks;
     callbacks.completeHttp =
         [this](std::uint64_t requestId, net::HttpResponse response) {
+            std::lock_guard lock(m_completionMutex);
+            if ((!m_receivingEnabled
+                 && !m_surfaceKeptForActiveSession)
+                || !m_running) {
+                return false;
+            }
             return m_http.completeRequest(
                 requestId, std::move(response));
         };
     callbacks.requestConfirmation =
         [this](const cast::ConfirmationPrompt &prompt) {
-            if (m_confirmationWorker)
+            std::lock_guard lock(m_confirmationMutex);
+            if (m_receivingEnabled && m_confirmationWorker)
                 m_confirmationWorker->requestConfirmation(prompt);
         };
+    callbacks.acceptNewMedia = [this] {
+        return m_receivingEnabled.load();
+    };
     callbacks.executeMedia =
         [this](const claim::DlnaMediaExecution &execution) {
+            m_session.newMediaRequested(sessionNow());
             MediaTask task;
             task.kind = MediaTask::Kind::ExecuteMedia;
             task.media = execution;
@@ -207,8 +330,11 @@ void DlnaProtocolRuntime::enqueue(MediaTask task)
 {
     {
         std::lock_guard lock(m_mediaMutex);
-        if (m_mediaStopping || !m_running)
+        if (m_mediaStopping || !m_running
+            || (!m_receivingEnabled
+                && !m_surfaceKeptForActiveSession)) {
             return;
+        }
         m_mediaTasks.push_back(std::move(task));
     }
     m_mediaReady.notify_one();
@@ -229,6 +355,11 @@ void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
             task = std::move(m_mediaTasks.front());
             m_mediaTasks.pop_front();
         }
+        if (!m_receivingEnabled
+            && (!m_surfaceKeptForActiveSession
+                || task.kind == MediaTask::Kind::ExecuteMedia)) {
+            continue;
+        }
 
         if (task.kind == MediaTask::Kind::PlayNow
             || task.kind == MediaTask::Kind::StopNow) {
@@ -247,6 +378,8 @@ void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
 
         {
             std::lock_guard lock(m_mediaMutex);
+            if (!m_receivingEnabled)
+                continue;
             PendingMedia pending;
             pending.execution = task.media;
             pending.baselineStateVersion =
@@ -318,17 +451,261 @@ void DlnaProtocolRuntime::httpLoop(std::stop_token stop)
         std::string error;
         if (!m_http.pollOnce(
                 std::chrono::milliseconds{100}, error)) {
-            if (!stop.stop_requested())
+            if (!stop.stop_requested()) {
                 log("DLNA HTTP poll failed: " + error);
+                m_networkRecoveryPending = true;
+            }
+            m_httpPolling = false;
             return;
         }
     }
+    m_httpPolling = false;
+}
+
+bool DlnaProtocolRuntime::startNetworkSurface(std::string &error)
+{
+    std::lock_guard lock(m_networkMutex);
+    if (!m_running.load()) {
+        error = "DLNA runtime is not running";
+        return false;
+    }
+    if (!m_gena.start(error)) {
+        error = "DLNA GENA start failed: " + error;
+        return false;
+    }
+    if (!startHttpLocked(error)) {
+        m_gena.stop();
+        return false;
+    }
+    if (m_options.bindLoopback || !m_options.enableSsdp)
+        return true;
+
+    net::SsdpServiceOptions ssdpOptions;
+    ssdpOptions.udn = m_options.udn;
+    ssdpOptions.httpPort = m_http.localPort();
+    ssdpOptions.ssdpPort = net::SsdpSocket::DefaultPort;
+    ssdpOptions.aliveInterval = std::chrono::seconds{10};
+    if (!m_ssdp.start(
+            std::move(ssdpOptions),
+            [this](const std::string &message) { log(message); },
+            error)) {
+        error = "DLNA SSDP start failed: " + error;
+        stopHttpLocked();
+        m_gena.stop();
+        return false;
+    }
+    return true;
+}
+
+void DlnaProtocolRuntime::stopNetworkSurface() noexcept
+{
+    std::lock_guard lock(m_networkMutex);
+    // An SSDP byebye is a notification, so it must leave before the HTTP and
+    // GENA endpoints disappear. Doing this after stopHttp() made control
+    // points race against an already-dead LOCATION.
+    m_ssdp.stop();
+    m_gena.stop();
+    stopHttpLocked();
+}
+
+void DlnaProtocolRuntime::stopSsdpSurface() noexcept
+{
+    std::lock_guard lock(m_networkMutex);
+    m_ssdp.stop();
+}
+
+bool DlnaProtocolRuntime::ensureConfirmationWorker(std::string &error)
+{
+    std::lock_guard lock(m_confirmationMutex);
+    if (m_confirmationWorker) {
+        error.clear();
+        return true;
+    }
+    try {
+        m_confirmationWorker =
+            std::make_unique<DlnaClaimConfirmationWorker>(
+                m_handler, m_confirmationPort,
+                [] { return castNow(); });
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    } catch (...) {
+        error = "unknown confirmation worker error";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+void DlnaProtocolRuntime::stopConfirmationWorker() noexcept
+{
+    std::unique_ptr<DlnaClaimConfirmationWorker> worker;
+    {
+        std::lock_guard lock(m_confirmationMutex);
+        worker = std::move(m_confirmationWorker);
+    }
+    if (!worker)
+        return;
+    worker->controlLost(castNow());
+    worker->stop();
+}
+
+void DlnaProtocolRuntime::discardPendingMedia() noexcept
+{
+    {
+        std::lock_guard lock(m_mediaMutex);
+        m_mediaTasks.clear();
+        m_pendingMedia.reset();
+        m_earlyCommandCompletions.clear();
+    }
+    m_mediaReady.notify_all();
+}
+
+void DlnaProtocolRuntime::disableReceivingLocked() noexcept
+{
+    m_disconnectRestartAt.reset();
+    m_surfaceKeptForActiveSession = false;
+    {
+        // Requests that already passed the receiving gate must finish before
+        // Claim cancellation. Every later request sees receiving=false.
+        std::lock_guard requestLock(m_requestGateMutex);
+    }
+    stopConfirmationWorker();
+    discardPendingMedia();
+    m_session.pauseAccepting(sessionNow());
+    {
+        // Wait for any completion producer that observed the old state.
+        std::lock_guard completionLock(m_completionMutex);
+    }
+    stopNetworkSurface();
+}
+
+void DlnaProtocolRuntime::handleNetworkFailure() noexcept
+{
+    std::lock_guard lock(m_receivingMutex);
+    if (!m_running.load()
+        || !m_receivingEnabled.exchange(false)) {
+        return;
+    }
+    ++m_receivingStateVersion;
+    log("DLNA network failed; receiving has been disabled");
+    disableReceivingLocked();
+    notifyReceivingState();
+}
+
+bool DlnaProtocolRuntime::startHttpLocked(std::string &error)
+{
+    if (m_httpThread.joinable()) {
+        if (m_httpPolling.load())
+            return true;
+        m_httpThread.join();
+        m_http.stop();
+    }
+    net::HttpServerOptions options;
+    options.logger = [this](const std::string &message) {
+        log(message);
+    };
+    const bool bound = m_options.bindLoopback
+        ? m_http.listenLoopback(
+              m_options.httpPort,
+              [this](const core::HttpRequest &request) {
+                  std::lock_guard requestLock(m_requestGateMutex);
+                  if (!m_receivingEnabled
+                      && !m_surfaceKeptForActiveSession) {
+                      net::HttpResponse response;
+                      response.status = 503;
+                      response.contentType.clear();
+                      return net::HttpDispatchResult{
+                          net::HttpDispatchStatus::Completed,
+                          std::move(response),
+                      };
+                  }
+                  return m_frontend.handle(request);
+              },
+              options, error)
+        : m_http.listenAny(
+              m_options.httpPort,
+              [this](const core::HttpRequest &request) {
+                  std::lock_guard requestLock(m_requestGateMutex);
+                  if (!m_receivingEnabled
+                      && !m_surfaceKeptForActiveSession) {
+                      net::HttpResponse response;
+                      response.status = 503;
+                      response.contentType.clear();
+                      return net::HttpDispatchResult{
+                          net::HttpDispatchStatus::Completed,
+                          std::move(response),
+                      };
+                  }
+                  return m_frontend.handle(request);
+              },
+              options, error);
+    if (!bound)
+        return false;
+    m_httpPolling = true;
+    m_httpThread = std::jthread(
+        [this](std::stop_token stop) { httpLoop(stop); });
+    return true;
+}
+
+void DlnaProtocolRuntime::stopHttpLocked() noexcept
+{
+    {
+        // Producers check m_receivingEnabled under this lock. Once a pause or
+        // stop has cleared it, no completion can enter the next HTTP server.
+        std::lock_guard completionLock(m_completionMutex);
+    }
+    if (m_httpThread.joinable())
+        m_httpThread.request_stop();
+    m_http.wake();
+    if (m_httpThread.joinable())
+        m_httpThread.join();
+    m_http.stop();
+    m_httpPolling = false;
 }
 
 void DlnaProtocolRuntime::sessionLoop(std::stop_token stop)
 {
     while (!stop.stop_requested()) {
+        if (m_networkRecoveryPending.exchange(false))
+            handleNetworkFailure();
         m_session.tick(sessionNow());
+        if (!m_receivingEnabled
+            && m_surfaceKeptForActiveSession
+            && !m_session.snapshot().peerConnected) {
+            std::lock_guard lock(m_receivingMutex);
+            if (!m_receivingEnabled
+                && m_surfaceKeptForActiveSession
+                && !m_session.snapshot().peerConnected) {
+                disableReceivingLocked();
+            }
+        }
+        {
+            std::unique_lock receivingLock(
+                m_receivingMutex, std::try_to_lock);
+            if (receivingLock.owns_lock()
+                && m_disconnectRestartAt
+                && sessionNow() >= *m_disconnectRestartAt
+                && !m_session.snapshot().ending) {
+                if (m_disconnectRestartAt
+                    && m_running.load()
+                    && m_receivingEnabled
+                    && !m_session.snapshot().ending) {
+                    std::string restartError;
+                    if (ensureConfirmationWorker(restartError)
+                        && startNetworkSurface(restartError)) {
+                        m_disconnectRestartAt.reset();
+                        log("DLNA network surface restored after disconnect");
+                    } else {
+                        m_disconnectRestartAt =
+                            sessionNow() + SessionTime{1000};
+                        log(
+                            "DLNA network restart after disconnect failed: "
+                            + restartError);
+                    }
+                }
+            }
+        }
         for (int slice = 0; slice < 10 && !stop.stop_requested(); ++slice)
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
     }
@@ -337,6 +714,14 @@ void DlnaProtocolRuntime::sessionLoop(std::stop_token stop)
 void DlnaProtocolRuntime::handlePlaybackEvent(
     const PlaybackEvent &event)
 {
+    m_gena.updateState(event.snapshot);
+    if (!m_receivingEnabled
+        && !m_surfaceKeptForActiveSession) {
+        std::lock_guard lock(m_mediaMutex);
+        m_pendingMedia.reset();
+        m_earlyCommandCompletions.clear();
+        return;
+    }
     std::optional<std::uint64_t> completedOperation;
     bool success = false;
     {
@@ -403,6 +788,18 @@ void DlnaProtocolRuntime::log(const std::string &message) const
         return;
     try {
         m_options.log(message);
+    } catch (...) {
+    }
+}
+
+void DlnaProtocolRuntime::notifyReceivingState() const noexcept
+{
+    if (!m_options.receivingStateChanged)
+        return;
+    try {
+        m_options.receivingStateChanged(
+            m_receivingEnabled.load(),
+            m_receivingStateVersion.load());
     } catch (...) {
     }
 }

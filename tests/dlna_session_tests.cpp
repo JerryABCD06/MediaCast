@@ -498,9 +498,15 @@ int main()
     snapshot = session.snapshot();
     check(snapshot.peerConnected && snapshot.peerGraceActive,
           "unreachable peer enters grace");
+    session.peerActivity(SessionTime{1001});
+    snapshot = session.snapshot();
+    check(snapshot.peerConnected && !snapshot.peerGraceActive,
+          "any peer activity cancels the unreachable grace period");
+    session.setSubscriptionCount(
+        0, SubscriptionChangeReason::Unreachable, SessionTime{1002});
     session.tick(SessionTime{60999});
     check(session.snapshot().peerConnected, "grace not expired early");
-    session.tick(SessionTime{61000});
+    session.tick(SessionTime{61002});
     check(!session.snapshot().peerConnected, "grace expiry disconnects");
     playback.processAll();
 
@@ -521,8 +527,11 @@ int main()
           "local end announces byebye without stopping network");
 
     session.peerActivity(SessionTime{64000});
+    check(!session.snapshot().peerConnected,
+          "queries do not clear an explicit local disconnect");
+    session.newMediaRequested(SessionTime{64000});
     check(session.snapshot().peerConnected,
-          "peer activity clears local disconnect");
+          "a new media request starts the next session");
     playback.processAll();
 
     const auto reopened = session.openMedia(media, SessionTime{65000});

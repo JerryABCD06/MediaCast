@@ -37,7 +37,8 @@
     "ui_cast_hint_apps": "支持 DLNA 投屏的应用均可使用，例如系统相册和各主流视频应用等",
 
     "ui_close_dialog_title": "正在投送",
-    "ui_close_dialog_text": "关闭窗口将结束本次投送，且与手机断开连接。确定要关闭吗？",
+    "ui_close_dialog_text": "您可以仅关闭窗口：当前投送会暂停，连接仍然保留；之后在手机上继续操作时，主窗口会立即重新打开并继续播放。",
+    "ui_close_dialog_neutral": "仅关闭窗口",
     "ui_close_dialog_confirm": "关闭并断开",
     "ui_common_cancel": "取消",
     "ui_nav_settings": "设置",

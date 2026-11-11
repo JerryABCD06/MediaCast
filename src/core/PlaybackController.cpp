@@ -260,6 +260,10 @@ void PlaybackController::setPeerConnected(bool connected)
     const CastState castBefore = castState();
 
     m_peerConnected = connected;
+    emit logMessage(
+        QStringLiteral("UI peerConnected -> %1")
+            .arg(connected ? QStringLiteral("true")
+                           : QStringLiteral("false")));
 
     // ── 会话边界：播放列表作废 ──────────────────────────────────────────
     //

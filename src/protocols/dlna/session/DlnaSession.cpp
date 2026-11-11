@@ -56,11 +56,17 @@ DlnaSession::~DlnaSession()
     m_playback.removeEventListener(m_playbackListener);
 }
 
-bool DlnaSession::start()
+bool DlnaSession::start(bool accepting)
 {
     Lock lock(m_mutex);
     if (m_transitionInProgress)
         return false;
+    if (!accepting) {
+        m_accepting = false;
+        m_running = false;
+        m_disconnectedByUs = true;
+        return true;
+    }
     if (m_accepting && m_running)
         return true;
 
@@ -165,11 +171,6 @@ void DlnaSession::setSubscriptionCount(
     m_subscriptionCount = count;
     if (m_endOperation)
         return;
-    if (reason == SubscriptionChangeReason::Added
-        || reason == SubscriptionChangeReason::Renewed) {
-        m_disconnectedByUs = false;
-    }
-
     if (count > 0 && !m_disconnectedByUs) {
         cancelPeerGrace();
         setPeerConnected(true, lock);
@@ -194,15 +195,23 @@ void DlnaSession::peerActivity(SessionTime now)
     if (m_endOperation)
         return;
     if (m_disconnectedByUs) {
-        m_disconnectedByUs = false;
-        if (m_subscriptionCount > 0) {
-            cancelPeerGrace();
-            setPeerConnected(true, lock);
-        }
-    } else if (m_subscriptionCount > 0) {
-        cancelPeerGrace();
-        setPeerConnected(true, lock);
+        // A query, Play/Stop or subscription renewal is not a new cast. Keep
+        // the explicit local disconnect sticky until SetAVTransportURI.
+        return;
     }
+    cancelPeerGrace();
+    setPeerConnected(true, lock);
+    (void)now;
+}
+
+void DlnaSession::newMediaRequested(SessionTime now)
+{
+    Lock lock(m_mutex);
+    if (m_endOperation)
+        return;
+    m_disconnectedByUs = false;
+    cancelPeerGrace();
+    setPeerConnected(true, lock);
     (void)now;
 }
 
@@ -428,6 +437,30 @@ PlaybackCommandSubmission DlnaSession::endSession(SessionTime now)
     return requestEnd(EndOperationMode::Disconnect, now, lock);
 }
 
+void DlnaSession::resetForRestart()
+{
+    Lock lock(m_mutex);
+    m_endOperation.reset();
+    m_endSubmitInProgress = false;
+    m_transitionInProgress = false;
+    m_accepting = false;
+    m_running = false;
+    m_peerConnected = false;
+    m_disconnectedByUs = true;
+    m_queuePeerDisconnect = false;
+    m_peerSyncPending = false;
+    m_desiredPeerConnected = false;
+    m_subscriptionCount = 0;
+    m_openInFlight = false;
+    m_openCommandId = 0;
+    m_openIntentInProgress = false;
+    m_openDeadline.reset();
+    m_pendingOpen.reset();
+    m_pendingCommands.clear();
+    m_deferredAfterOpen.clear();
+    cancelPeerGrace();
+}
+
 void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
 {
     Lock lock(m_mutex);
@@ -537,6 +570,7 @@ DlnaSessionSnapshot DlnaSession::snapshot() const
     result.peerGraceActive = m_peerGraceDeadline.has_value();
     if (m_peerGraceDeadline)
         result.peerGraceDeadline = *m_peerGraceDeadline;
+    result.ending = m_endOperation.has_value();
     result.playback = outsideLock(lock, [&] {
         return m_playback.snapshot();
     });
@@ -549,6 +583,13 @@ void DlnaSession::setPeerConnected(
     if (m_peerConnected == connected)
         return;
     m_peerConnected = connected;
+    if (m_callbacks.log) {
+        outsideLock(lock, [&] {
+            m_callbacks.log(
+                std::string("DLNA peerConnected -> ")
+                + (connected ? "true" : "false"));
+        });
+    }
     if (queuePlayback)
         queuePeerConnected(connected, lock);
     if (m_callbacks.peerConnectedChanged) {

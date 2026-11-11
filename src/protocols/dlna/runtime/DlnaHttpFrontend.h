@@ -5,6 +5,7 @@
 
 #include "protocols/dlna/claim/DlnaClaimHttpHandler.h"
 #include "protocols/dlna/net/HttpServer.h"
+#include "protocols/dlna/runtime/GenaManager.h"
 
 #include <string>
 
@@ -13,6 +14,7 @@ namespace mcast::dlna::runtime {
 struct DlnaHttpFrontendOptions {
     std::string friendlyName;
     std::string udn;
+    GenaManager *gena = nullptr;
 };
 
 // DLNA HTTP 面的纯路由层。GET 只暴露设备描述和声明过的 SCPD；

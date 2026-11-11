@@ -93,6 +93,14 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
 
     DlnaClaimRuntimeActions actions;
     if (parsed->action == "SetAVTransportURI") {
+        if (m_callbacks.acceptNewMedia
+            && !m_callbacks.acceptNewMedia()) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                soap::SoapRouter::faultResponse(
+                    705, "Transport is locked"),
+            };
+        }
         const auto uri = parsed->body.value("CurrentURI");
         const auto metadata =
             parsed->body.value("CurrentURIMetaData");
@@ -102,7 +110,6 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
                 soap::SoapRouter::faultResponse(402, "Invalid Args"),
             };
         }
-        m_router.notePeerActivity();
         const cast::PeerIdentity peer = peerIdentity(request);
         {
             std::lock_guard lock(m_mutex);

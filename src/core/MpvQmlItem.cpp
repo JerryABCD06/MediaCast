@@ -61,6 +61,13 @@ public:
             createRenderContext();
         }
 
+        if (!m_ctx) {
+            // The renderer can be constructed before MpvCore::start() has
+            // produced the mpv handle. A failed first attempt must not become
+            // permanent: retry on later scene-graph frames once the handle
+            // exists.
+            createRenderContext();
+        }
         if (!m_ctx)
             return;
 
@@ -79,7 +86,14 @@ public:
             { MPV_RENDER_PARAM_INVALID, nullptr },
         };
 
-        mpv_render_context_render(m_ctx, params);
+        const int renderResult =
+            mpv_render_context_render(m_ctx, params);
+        if (renderResult >= 0 && !m_attachedReported) {
+            m_attachedReported = true;
+            QMetaObject::invokeMethod(
+                m_core, "setRendererAttached",
+                Qt::QueuedConnection, Q_ARG(bool, true));
+        }
 
         // 视频在播就一直要下一帧。不做按需刷新的优化 —— 那种优化要跟 mpv
         // 的"这一帧有没有变"配合，做错了会掉帧，收益却不值。
@@ -134,12 +148,6 @@ private:
         // 信号，真正接收的 item 已经不在了的话，Qt 自己会把那条连接摘掉。
         mpv_render_context_set_update_callback(m_ctx, &MpvItemRenderer::onMpvUpdate, m_core);
 
-        // 告诉核心：渲染面挂上来了，攒着的片子可以放了。
-        //
-        // 这里在渲染线程上，所以用队列连接跳回界面线程 —— setRendererAttached
-        // 会去碰"攒着的那条地址"并发 loadfile，那些都得在界面线程做。
-        QMetaObject::invokeMethod(m_core, "setRendererAttached", Qt::QueuedConnection,
-                                  Q_ARG(bool, true));
     }
 
     void destroyRenderContext()
@@ -150,6 +158,7 @@ private:
         mpv_render_context_set_update_callback(m_ctx, nullptr, nullptr);
         mpv_render_context_free(m_ctx);
         m_ctx = nullptr;
+        m_attachedReported = false;
     }
 
     static void *getProcAddress(void *, const char *name)
@@ -169,6 +178,7 @@ private:
 
     MpvCore *m_core = nullptr;
     mpv_render_context *m_ctx = nullptr;
+    bool m_attachedReported = false;
     /** 建 m_ctx 时那个 GL 上下文。它一变就得重建（见 render() 开头那段）。 */
     QOpenGLContext *m_context = nullptr;
 };

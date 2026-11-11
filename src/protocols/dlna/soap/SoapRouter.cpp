@@ -409,13 +409,23 @@ HttpResponse SoapRouter::handleParsed(
 {
     const HttpResponse response = dispatch(
         request.service, request.action, request.body);
-    notePeerActivity();
+    if (request.service == "AVTransport"
+        && request.action == "SetAVTransportURI") {
+        noteNewMediaRequest();
+    } else {
+        notePeerActivity();
+    }
     return response;
 }
 
 void SoapRouter::notePeerActivity()
 {
     m_session.peerActivity(m_options.now());
+}
+
+void SoapRouter::noteNewMediaRequest()
+{
+    m_session.newMediaRequested(m_options.now());
 }
 
 playback::MediaRequest SoapRouter::mediaRequest(

@@ -228,6 +228,66 @@ PlaybackBridge::~PlaybackBridge()
         m_writerThread.join();
 }
 
+void PlaybackBridge::requestEndSession()
+{
+    ipc::Message message;
+    message.header.type = ipc::MessageType::UiEndCastRequest;
+    message.header.source = ipc::ProcessRole::Ui;
+    message.header.destination = ipc::ProcessRole::Protocol;
+    message.header.messageId = m_nextRequestId.fetch_add(1);
+    message.header.sessionId = 1;
+    std::string error;
+    if (!m_connected || !m_connection
+        || !m_connection->writeMessage(message, 2000ms, error)) {
+        emit logMessage(
+            QStringLiteral("断开连接请求发送失败：%1")
+                .arg(QString::fromStdString(error)));
+    } else {
+        emit logMessage(QStringLiteral("断开当前投送的请求已发送"));
+    }
+}
+
+void PlaybackBridge::pauseAndFlushState()
+{
+    if (m_controller.hasMedia() && !m_controller.isPaused())
+        m_controller.pause();
+    m_stateTimer.stop();
+    ++m_stateVersion;
+    std::string error;
+    auto message = playback::wire::makePlaybackStateMessage(
+        ipc::MessageType::PlaybackStateDelta,
+        m_stateVersion, snapshot(), error);
+    if (!message) {
+        emit logMessage(
+            QStringLiteral("暂停状态编码失败：%1")
+                .arg(QString::fromStdString(error)));
+        return;
+    }
+    if (!m_connection
+        || !m_connection->writeMessage(*message, 2000ms, error)) {
+        emit logMessage(
+            QStringLiteral("暂停状态同步失败：%1")
+                .arg(QString::fromStdString(error)));
+    }
+}
+
+void PlaybackBridge::notifyUiReady()
+{
+    ipc::Message message;
+    message.header.type = ipc::MessageType::PlaybackUiReady;
+    message.header.source = ipc::ProcessRole::Ui;
+    message.header.destination = ipc::ProcessRole::Protocol;
+    message.header.messageId = m_nextRequestId.fetch_add(1);
+    message.header.sessionId = 1;
+    std::string error;
+    if (!m_connected || !m_connection
+        || !m_connection->writeMessage(message, 2000ms, error)) {
+        emit logMessage(
+            QStringLiteral("Playback UI 就绪上报失败：%1")
+                .arg(QString::fromStdString(error)));
+    }
+}
+
 void PlaybackBridge::readLoop(std::stop_token stop)
 {
     while (!stop.stop_requested()) {

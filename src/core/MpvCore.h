@@ -141,6 +141,9 @@ signals:
      */
     void renderUpdate();
 
+    /** render API 已完成首笔实际渲染，播放命令可以安全下发。 */
+    void rendererReady();
+
     // 这行 public: 不能省。moc 的规则是"从 signals: 开始、后面全当信号"，
     // 直到遇到下一个访问说明符才停 —— 少了它，下面那些普通成员函数会被当成
     // 信号，moc 直接报 "Not a signal declaration"。
@@ -248,6 +251,8 @@ private:
      * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。
      */
     QString m_pendingUri;
+    QString m_lastRequestedUri;
+    std::atomic<bool> m_loadFailed{false};
 
     std::atomic<double> m_positionSec{0.0};
     std::atomic<double> m_durationSec{0.0};

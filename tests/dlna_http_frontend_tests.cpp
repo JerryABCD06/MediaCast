@@ -109,7 +109,7 @@ void testErrorsAndSoapPassthrough()
               && response.response.headers.size() == 1
               && response.response.headers.front().first == "allow"
               && response.response.headers.front().second
-                  == "GET, POST",
+                  == "GET, POST, SUBSCRIBE, UNSUBSCRIBE",
           "unsupported method reports the allowed methods");
 
     auto malformed = request("POST", "/AVTransport/control");

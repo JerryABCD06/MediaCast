@@ -41,13 +41,42 @@ DlnaHttpFrontend::DlnaHttpFrontend(
 net::HttpDispatchResult DlnaHttpFrontend::handle(
     const mcast::dlna::core::HttpRequest &request)
 {
+    if (request.method == "SUBSCRIBE") {
+        if (!m_options.gena) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                textResponse(
+                    503, "Service Unavailable",
+                    "text/plain; charset=utf-8"),
+            };
+        }
+        return {
+            net::HttpDispatchStatus::Completed,
+            m_options.gena->handleSubscribe(request),
+        };
+    }
+    if (request.method == "UNSUBSCRIBE") {
+        if (!m_options.gena) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                textResponse(
+                    503, "Service Unavailable",
+                    "text/plain; charset=utf-8"),
+            };
+        }
+        return {
+            net::HttpDispatchStatus::Completed,
+            m_options.gena->handleUnsubscribe(request),
+        };
+    }
     if (request.method == "POST")
         return m_soap.handle(request);
 
     if (request.method != "GET") {
         net::HttpResponse response = textResponse(
             405, "Method Not Allowed", "text/plain; charset=utf-8");
-        response.headers.emplace_back("allow", "GET, POST");
+        response.headers.emplace_back(
+            "allow", "GET, POST, SUBSCRIBE, UNSUBSCRIBE");
         return {net::HttpDispatchStatus::Completed, std::move(response)};
     }
 

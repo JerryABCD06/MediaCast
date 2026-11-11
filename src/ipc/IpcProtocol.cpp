@@ -270,7 +270,7 @@ HeaderDecodeResult decodeHeader(std::span<const std::uint8_t> bytes)
     if (messageType < static_cast<std::uint16_t>(MessageType::Hello)
         || messageType
             > static_cast<std::uint16_t>(
-                MessageType::UiPlaybackReconnect)
+                MessageType::PlaybackUiReady)
         || sourceRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || destinationRole > static_cast<std::uint8_t>(ProcessRole::Ui)
         || (flags & ~0x7u) != 0) {

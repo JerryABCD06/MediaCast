@@ -41,6 +41,7 @@ public:
         HttpResponse &errorResponse);
     HttpResponse handleParsed(const SoapRequestContext &request);
     void notePeerActivity();
+    void noteNewMediaRequest();
 
     static playback::MediaRequest mediaRequest(
         std::string uri, std::string metadata);

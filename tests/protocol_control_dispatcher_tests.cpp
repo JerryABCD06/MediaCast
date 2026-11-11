@@ -92,6 +92,19 @@ void testActivationAndConfirmationRouting()
               "heartbeat has a nonzero shared message ID");
         const std::uint64_t heartbeatId = heartbeat.header.messageId;
 
+        Message receiving;
+        check(pair.server->readMessage(receiving, 3000ms, error),
+              "fake Shell receives unsolicited receiving state: " + error);
+        check(receiving.header.type == MessageType::ReceivingState,
+              "receiving update uses ReceivingState");
+        check(receiving.header.stateVersion == 7,
+              "receiving update carries its state version");
+        const PayloadReader receivingReader(receiving.payload);
+        const auto enabled = receivingReader.getBool(
+            static_cast<std::uint16_t>(FieldId::ReceivingEnabled));
+        check(receivingReader.valid() && enabled && !*enabled,
+              "receiving update carries the effective false state");
+
         Message openRequest;
         openRequest.header.type = MessageType::UiOpenRequest;
         openRequest.header.source = ProcessRole::Shell;
@@ -183,6 +196,9 @@ void testActivationAndConfirmationRouting()
           "control dispatcher starts: " + error);
     check(dispatcher->sendHeartbeat(error),
           "control dispatcher sends heartbeat: " + error);
+    check(dispatcher->sendReceivingState(false, 7, error),
+          "control dispatcher sends unsolicited receiving state: "
+              + error);
     check(dispatcher->waitForUiOpenRequest(2s, error),
           "dispatcher receives UiOpenRequest while other waits are possible: "
               + error);

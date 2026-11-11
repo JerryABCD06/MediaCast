@@ -5,6 +5,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <functional>
 #include <string>
 
@@ -24,6 +25,7 @@ public:
     bool initialize(std::string &error);
     void setChinese(bool chinese);
     void setReceivingEnabled(bool enabled);
+    void requestReceivingEnabled(bool enabled);
     void pumpMessages();
     HWND window() const noexcept { return m_window; }
 
@@ -45,7 +47,7 @@ private:
     HICON m_icon = nullptr;
     HMENU m_menu = nullptr;
     UINT m_taskbarCreatedMessage = 0;
-    bool m_receivingEnabled = true;
+    std::atomic_bool m_receivingEnabled{true};
     bool m_iconAdded = false;
     ULONGLONG m_lastOpenTick = 0;
     bool m_chinese = false;

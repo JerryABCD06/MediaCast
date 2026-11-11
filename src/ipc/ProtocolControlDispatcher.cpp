@@ -94,6 +94,30 @@ bool ProtocolControlDispatcher::sendUiOpenReady(std::string &error)
     return sendMessage(std::move(message), error);
 }
 
+bool ProtocolControlDispatcher::sendReceivingState(
+    bool enabled, std::uint64_t stateVersion, std::string &error)
+{
+    mcast::ipc::PayloadBuilder builder;
+    builder.addBool(
+        static_cast<std::uint16_t>(
+            mcast::ipc::FieldId::ReceivingEnabled),
+        enabled);
+    const auto payload = std::move(builder).finish();
+    if (!payload) {
+        error = "cannot encode receiving state";
+        return false;
+    }
+    Message message;
+    message.header.type = MessageType::ReceivingState;
+    message.header.source = ProcessRole::Protocol;
+    message.header.destination = ProcessRole::Shell;
+    message.header.messageId = nextMessageId();
+    message.header.sessionId = 1;
+    message.header.stateVersion = stateVersion;
+    message.payload = *payload;
+    return sendMessage(std::move(message), error);
+}
+
 bool ProtocolControlDispatcher::requestPlaybackReconnect(
     std::string &error)
 {

@@ -364,6 +364,9 @@ void testHelloSchema()
     check(validateMessageDirection(
               ConnectionChannel::Command, direction, error),
           "ReceivingState accepted on command pipe");
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "ReceivingState accepted as an unsolicited control update");
     direction.type = MessageType::PlaybackCommand;
     direction.source = ProcessRole::Protocol;
     direction.destination = ProcessRole::Ui;
@@ -379,6 +382,20 @@ void testHelloSchema()
     check(validateMessageDirection(
               ConnectionChannel::Playback, direction, error),
           "PlaybackCommandResult accepted on playback pipe");
+    direction.type = MessageType::UiEndCastRequest;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "UiEndCastRequest accepted on playback pipe");
+    check(!validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "UiEndCastRequest rejected on control pipe");
+    direction.type = MessageType::PlaybackUiReady;
+    check(validateMessageDirection(
+              ConnectionChannel::Playback, direction, error),
+          "PlaybackUiReady accepted on playback pipe");
+    check(!validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "PlaybackUiReady rejected on control pipe");
     direction.type = MessageType::PlaybackSnapshotRequest;
     direction.source = ProcessRole::Protocol;
     direction.destination = ProcessRole::Ui;

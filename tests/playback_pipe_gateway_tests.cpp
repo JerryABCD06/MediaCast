@@ -63,6 +63,7 @@ int main()
     EventState events;
     std::string serverError;
     std::atomic_bool closeServer = false;
+    std::atomic_bool endCastRequested = false;
     std::jthread server([&](std::stop_token) {
         try {
             std::string error;
@@ -88,6 +89,29 @@ int main()
             if (!snapshotReply
                 || !connection->writeMessage(*snapshotReply, 2s, error))
                 throw std::runtime_error("snapshot reply: " + error);
+
+            mcast::ipc::Message endCast;
+            endCast.header.type =
+                mcast::ipc::MessageType::UiEndCastRequest;
+            endCast.header.source = mcast::ipc::ProcessRole::Ui;
+            endCast.header.destination =
+                mcast::ipc::ProcessRole::Protocol;
+            endCast.header.messageId = 99;
+            endCast.header.sessionId = 1;
+            if (!connection->writeMessage(endCast, 2s, error))
+                throw std::runtime_error("end cast request: " + error);
+
+            std::this_thread::sleep_for(150ms);
+            mcast::ipc::Message uiReady;
+            uiReady.header.type =
+                mcast::ipc::MessageType::PlaybackUiReady;
+            uiReady.header.source = mcast::ipc::ProcessRole::Ui;
+            uiReady.header.destination =
+                mcast::ipc::ProcessRole::Protocol;
+            uiReady.header.messageId = 100;
+            uiReady.header.sessionId = 1;
+            if (!connection->writeMessage(uiReady, 2s, error))
+                throw std::runtime_error("playback ui ready: " + error);
 
             mcast::ipc::Message commandMessage;
             if (!connection->readMessage(commandMessage, 2s, error))
@@ -181,7 +205,8 @@ int main()
     });
 
     PlaybackPipeGateway gateway(
-        std::move(client), [](const std::string &) {});
+        std::move(client), [](const std::string &) {},
+        [&] { endCastRequested = true; });
     const auto listenerId = gateway.addEventListener(
         [&](const PlaybackEvent &event) {
             {
@@ -204,11 +229,25 @@ int main()
         return !list.empty()
             && list.back().kind == PlaybackEventKind::SnapshotChanged;
     }), "snapshot event arrives");
+    const auto endCastDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!endCastRequested
+           && std::chrono::steady_clock::now() < endCastDeadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    check(endCastRequested.load(),
+          "UI end-cast request reaches the protocol gateway");
     check(gateway.snapshot().generation == 1, "initial generation cached");
 
     PlaybackCommand open;
     open.type = PlaybackCommandType::Open;
     open.media.uri = "http://example.test/movie.mp4";
+    const auto beforeUiReady = gateway.submit(open);
+    check(!beforeUiReady.queued
+              && beforeUiReady.status
+                  == PlaybackSubmissionStatus::WaitingForPlayer,
+          "commands wait until the UI and mpv report ready");
+    std::this_thread::sleep_for(250ms);
     const auto first = gateway.submit(open);
     check(first.queued && first.commandId != 0, "first command queues");
     check(events.waitFor([](const auto &list) {

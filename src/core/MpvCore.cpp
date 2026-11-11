@@ -323,6 +323,8 @@ void MpvCore::eventLoop()
                 mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &flag);
             }
 
+            m_loadFailed = false;
+            m_lastRequestedUri.clear();
             emit ready();
             break;
         }
@@ -333,8 +335,10 @@ void MpvCore::eventLoop()
 
         case MPV_EVENT_END_FILE: {
             auto *endFile = static_cast<mpv_event_end_file *>(event->data);
-            if (endFile && endFile->error < 0)
+            if (endFile && endFile->error < 0) {
+                m_loadFailed = true;
                 emit logMessage(QStringLiteral("播放失败：") + mpvError(endFile->error));
+            }
             emit ended();
             break;
         }
@@ -364,6 +368,8 @@ void MpvCore::load(const QString &uri)
 {
     if (!m_mpv || uri.isEmpty())
         return;
+    m_lastRequestedUri = uri;
+    m_loadFailed = false;
 
     // render API 模式下，渲染面没就绪就先攒着 —— 现在发出去，mpv 会报
     // "No render context set" 然后放弃，而且不会再重试。详见头文件那段。
@@ -388,24 +394,28 @@ void MpvCore::notifyRenderUpdate()
 
 void MpvCore::setRendererAttached(bool attached)
 {
-    if (m_rendererAttached == attached)
-        return;
-
-    m_rendererAttached = attached;
-
     if (!attached) {
-        // 渲染面没了（窗口被关掉之类）。攒着的那条也一并丢掉 ——
-        // 没有画面可出，放它没有意义。
-        m_pendingUri.clear();
+        m_rendererAttached = false;
+        // Keep the pending URI across a short renderer detach. Qt can tear
+        // down and recreate the framebuffer renderer while the same window is
+        // still being brought up; clearing here permanently dropped the first
+        // cast, then a second cast appeared to "fix" it. If the process is
+        // really exiting, it disappears together with MpvCore anyway.
         return;
     }
+    m_rendererAttached = true;
+    emit rendererReady();
 
-    if (m_pendingUri.isEmpty())
+    QString uri = m_pendingUri;
+    m_pendingUri.clear();
+    if (uri.isEmpty() && m_loadFailed.load()) {
+        uri = m_lastRequestedUri;
+        m_loadFailed = false;
+    }
+    if (uri.isEmpty())
         return;
 
     // 攒着的那条现在可以放了。这就是"先拉起界面、等渲染面就绪再投屏"那一步。
-    const QString uri = m_pendingUri;
-    m_pendingUri.clear();
     emit logMessage(QStringLiteral("渲染窗口已就绪，把攒着的那条放出去"));
     loadNow(uri);
 }
@@ -502,6 +512,9 @@ void MpvCore::unload()
         return;
 
     m_playOnLoad.store(false);
+    m_pendingUri.clear();
+    m_lastRequestedUri.clear();
+    m_loadFailed = false;
 
     // 这个才是"卸掉"。会话结束（挂断投送）时用。
     const char *command[] = {"stop", nullptr};

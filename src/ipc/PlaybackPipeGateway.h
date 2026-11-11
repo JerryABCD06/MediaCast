@@ -23,10 +23,11 @@ class PlaybackPipeGateway final : public PlaybackGateway
 {
 public:
     using Log = std::function<void(const std::string &)>;
+    using EndSessionRequest = std::function<void()>;
 
     explicit PlaybackPipeGateway(
         std::unique_ptr<ipc::PipeConnection> connection,
-        Log log = {});
+        Log log = {}, EndSessionRequest endSessionRequest = {});
     ~PlaybackPipeGateway() override;
 
     PlaybackPipeGateway(const PlaybackPipeGateway &) = delete;
@@ -52,6 +53,7 @@ private:
 
     std::unique_ptr<ipc::PipeConnection> m_connection;
     Log m_log;
+    EndSessionRequest m_endSessionRequest;
     mutable std::mutex m_snapshotMutex;
     PlaybackSnapshot m_snapshot;
     bool m_hasSnapshot = false;
@@ -72,6 +74,7 @@ private:
     std::atomic_uint64_t m_nextMessageId{1};
     std::atomic_uint64_t m_nextListenerId{1};
     std::atomic_bool m_connected{true};
+    std::atomic_bool m_uiReady{false};
     std::jthread m_readThread;
     std::jthread m_timeoutThread;
     std::atomic_bool m_disconnectReported{false};

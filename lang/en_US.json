@@ -37,7 +37,8 @@
     "ui_cast_hint_apps": "Works with apps that support DLNA casting, including the built-in gallery and major video apps",
 
     "ui_close_dialog_title": "Casting in progress",
-    "ui_close_dialog_text": "Closing this window will end the current cast and disconnect your phone. Close anyway?",
+    "ui_close_dialog_text": "You can close only this window: playback pauses and the phone stays connected. The next phone action reopens the window and resumes playback.",
+    "ui_close_dialog_neutral": "Close window only",
     "ui_close_dialog_confirm": "Close and disconnect",
     "ui_common_cancel": "Cancel",
     "ui_nav_settings": "Settings",

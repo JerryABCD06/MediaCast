@@ -20,9 +20,11 @@ thread_local std::uint64_t t_activeListenerId = 0;
 } // namespace
 
 PlaybackPipeGateway::PlaybackPipeGateway(
-    std::unique_ptr<ipc::PipeConnection> connection, Log log)
+    std::unique_ptr<ipc::PipeConnection> connection, Log log,
+    EndSessionRequest endSessionRequest)
     : m_connection(std::move(connection))
     , m_log(std::move(log))
+    , m_endSessionRequest(std::move(endSessionRequest))
 {
     if (!m_connection || !m_connection->valid()) {
         m_connected = false;
@@ -77,6 +79,11 @@ PlaybackCommandSubmission PlaybackPipeGateway::submit(
     if (!hasSnapshot) {
         return {false, PlaybackSubmissionStatus::WaitingForPlayer, 0,
                 current.generation, "playback snapshot is not ready",
+                current.stateVersion};
+    }
+    if (!m_uiReady) {
+        return {false, PlaybackSubmissionStatus::WaitingForPlayer, 0,
+                current.generation, "playback UI is not ready",
                 current.stateVersion};
     }
     if (!current.playerAvailable) {
@@ -220,6 +227,30 @@ void PlaybackPipeGateway::timeoutLoop(std::stop_token stop)
 
 void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
 {
+    if (message.header.type == ipc::MessageType::PlaybackUiReady) {
+        m_uiReady = true;
+        PlaybackEvent ready;
+        ready.kind = PlaybackEventKind::SnapshotChanged;
+        ready.snapshot = snapshot();
+        notify(ready);
+        return;
+    }
+    if (message.header.type == ipc::MessageType::UiEndCastRequest) {
+        if (m_endSessionRequest) {
+            try {
+                m_endSessionRequest();
+            } catch (const std::exception &exception) {
+                if (m_log)
+                    m_log(
+                        std::string("End-session callback failed: ")
+                        + exception.what());
+            } catch (...) {
+                if (m_log)
+                    m_log("End-session callback failed");
+            }
+        }
+        return;
+    }
     if (message.header.type == ipc::MessageType::PlaybackCommandResult) {
         wire::PlaybackCommandResultWire result;
         std::string error;
@@ -305,6 +336,7 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
     if (m_disconnectReported.exchange(true))
         return;
     m_connected = false;
+    m_uiReady = false;
     PlaybackSnapshot final;
     {
         std::scoped_lock lock(m_snapshotMutex);

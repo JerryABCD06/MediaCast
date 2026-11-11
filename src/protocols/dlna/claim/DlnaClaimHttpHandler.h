@@ -29,6 +29,7 @@ struct DlnaClaimHttpCallbacks {
     std::function<void(const DlnaMediaExecution &)> executeMedia;
     std::function<void()> playNow;
     std::function<void()> stopNow;
+    std::function<bool()> acceptNewMedia;
     // Optional replacement for the default IP+User-Agent fingerprint. Future
     // DLNA control subscriptions can provide a stronger application identity.
     std::function<cast::PeerIdentity(const core::HttpRequest &)>

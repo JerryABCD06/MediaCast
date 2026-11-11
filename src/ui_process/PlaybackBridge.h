@@ -33,6 +33,10 @@ public:
         QObject *parent = nullptr);
     ~PlaybackBridge() override;
 
+    void requestEndSession();
+    void pauseAndFlushState();
+    void notifyUiReady();
+
 signals:
     void logMessage(const QString &text);
 
@@ -60,6 +64,7 @@ private:
     std::shared_ptr<ipc::PipeConnection> m_connection;
     PlaybackController &m_controller;
     std::atomic_bool m_connected = true;
+    std::atomic_uint64_t m_nextRequestId{1};
     std::jthread m_readThread;
     std::jthread m_writerThread;
     std::mutex m_outboundMutex;
