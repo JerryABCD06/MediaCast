@@ -775,7 +775,10 @@ std::optional<Message> makeUiActivateDecisionMessage(
             decision.started)
         || !builder.addUInt64(
             static_cast<std::uint16_t>(FieldId::UiActivationId),
-            decision.activationId)) {
+            decision.activationId)
+        || !builder.addBool(
+            static_cast<std::uint16_t>(FieldId::UiPresent),
+            decision.uiPresent)) {
         error = "Ui activation decision exceeds protocol limits";
         return std::nullopt;
     }
@@ -822,12 +825,15 @@ decodeUiActivateDecisionMessage(
         static_cast<std::uint16_t>(FieldId::UiActivationStarted));
     const auto activationId = reader.getUInt64(
         static_cast<std::uint16_t>(FieldId::UiActivationId));
-    if (!reader.valid() || !started || !activationId
+    const auto uiPresent = reader.getBool(
+        static_cast<std::uint16_t>(FieldId::UiPresent));
+    if (!reader.valid() || !started || !activationId || !uiPresent
         || *activationId == 0) {
         error = "Ui activation decision has invalid fields";
         return std::nullopt;
     }
-    return UiActivateDecisionInfo{*started, *activationId};
+    return UiActivateDecisionInfo{
+        *started, *activationId, *uiPresent};
 }
 
 std::optional<Message> makeCastConfirmationRequestMessage(

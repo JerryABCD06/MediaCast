@@ -145,7 +145,8 @@ bool ProtocolControlDispatcher::waitForTermination(
 
 bool ProtocolControlDispatcher::requestUiActivation(
     UiActivationOutcome &outcome,
-    std::chrono::milliseconds timeout, std::string &error)
+    std::chrono::milliseconds timeout, std::string &error,
+    bool probeOnly)
 {
     error.clear();
     outcome = {};
@@ -171,6 +172,19 @@ bool ProtocolControlDispatcher::requestUiActivation(
     request.header.destination = ProcessRole::Shell;
     request.header.messageId = messageId;
     request.header.sessionId = 1;
+    PayloadBuilder builder;
+    if (!builder.addBool(
+            static_cast<std::uint16_t>(FieldId::UiActivationProbeOnly),
+            probeOnly)) {
+        error = "UI activation probe payload exceeds limits";
+        return false;
+    }
+    request.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (request.payload.empty()) {
+        error = "UI activation request payload is empty";
+        return false;
+    }
     if (!sendMessage(std::move(request), error))
         return false;
 
@@ -194,6 +208,7 @@ bool ProtocolControlDispatcher::requestUiActivation(
         return false;
     }
     outcome.started = m_activation->started;
+    outcome.uiPresent = m_activation->uiPresent;
     outcome.grant = std::move(m_activation->grant);
     m_activation.reset();
     return true;
@@ -369,6 +384,7 @@ bool ProtocolControlDispatcher::dispatch(
             message, m_activation->requestMessageId, error);
         if (!decision)
             return false;
+        m_activation->uiPresent = decision->uiPresent;
         if (!decision->started) {
             m_activation->phase = ActivationPhase::Done;
         } else {

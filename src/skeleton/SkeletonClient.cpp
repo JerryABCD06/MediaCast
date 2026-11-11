@@ -285,7 +285,8 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
         error = "playback pipe listener failed";
         return nullptr;
     }
-    std::atomic<PipeConnection *> activeConnection{nullptr};
+    std::mutex activeConnectionMutex;
+    PipeConnection *activeConnection = nullptr;
     std::jthread cancelAccept;
     if (stop.stop_possible()) {
         cancelAccept = std::jthread(
@@ -297,10 +298,9 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
                 }
                 if (stop.stop_requested()) {
                     listener.stop();
-                    if (auto *connection =
-                            activeConnection.load()) {
+                    std::lock_guard lock(activeConnectionMutex);
+                    if (auto *connection = activeConnection)
                         connection->close();
-                    }
                 }
             });
     }
@@ -311,16 +311,27 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
     }
 
     auto connection = listener.accept(8000ms, error);
-    activeConnection = connection.get();
-    struct ActiveConnectionGuard {
-        std::atomic<PipeConnection *> &value;
-        ~ActiveConnectionGuard() { value = nullptr; }
-    } activeConnectionGuard{activeConnection};
+    {
+        std::lock_guard lock(activeConnectionMutex);
+        activeConnection = connection.get();
+    }
+    struct CancelAcceptGuard {
+        std::mutex &mutex;
+        PipeConnection *&active;
+        std::jthread &thread;
+        ~CancelAcceptGuard()
+        {
+            {
+                std::lock_guard lock(mutex);
+                active = nullptr;
+            }
+            thread.request_stop();
+            if (thread.joinable())
+                thread.join();
+        }
+    } cancelAcceptGuard{
+        activeConnectionMutex, activeConnection, cancelAccept};
     if (stop.stop_requested()) {
-        cancelAccept.request_stop();
-        if (cancelAccept.joinable())
-            cancelAccept.join();
-        connection.reset();
         error = "playback listener cancelled";
         return nullptr;
     }
@@ -385,10 +396,6 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
         return nullptr;
 
     std::cout << "PLAYBACK_SNAPSHOT_SERVED\n";
-    activeConnection = nullptr;
-    cancelAccept.request_stop();
-    if (cancelAccept.joinable())
-        cancelAccept.join();
     return connection;
 }
 
@@ -653,7 +660,13 @@ int runClient(const ClientOptions &options)
             [&](mcast::ipc::UiActivationOutcome &activation,
                 std::string &activationError) {
                 std::lock_guard activationLock(activationMutex);
-                stopReconnectOwner();
+                mcast::ipc::UiActivationOutcome presence;
+                if (!dispatcher->requestUiActivation(
+                        presence, 3s, activationError, true)) {
+                    return false;
+                }
+                if (!presence.uiPresent)
+                    stopReconnectOwner();
                 if (!dispatcher->requestUiActivation(
                         activation, 3s, activationError)) {
                     return false;

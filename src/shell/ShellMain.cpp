@@ -1366,6 +1366,22 @@ private:
         return ui->process.processId();
     }
 
+    void uiPresenceSnapshot(
+        bool &present, std::uint64_t &activationId,
+        std::uint64_t &nextActivationId)
+    {
+        std::scoped_lock lock(m_uiMutex);
+        activationId = m_activationId;
+        nextActivationId = m_nextActivationId;
+        present = m_uiState == UiState::Running
+            || m_uiState == UiState::Starting;
+        if (!present)
+            return;
+        std::scoped_lock recordsLock(m_recordsMutex);
+        ChildRecord *ui = findRecord(ProcessRole::Ui);
+        present = ui && ui->process.running();
+    }
+
     bool requestOpenUiFromHost(std::string &error)
     {
         const auto uiProcessId = liveUiProcessId();
@@ -1888,6 +1904,45 @@ private:
                 markProtocolReadyForUiOpen();
             } else if (message.header.type == MessageType::UiActivateRequest
                 && helloMessage.header.source == ProcessRole::Protocol) {
+                const mcast::ipc::PayloadReader probeReader(
+                    message.payload);
+                const bool probeOnly = probeReader.getBool(
+                    static_cast<std::uint16_t>(
+                        mcast::ipc::FieldId::
+                            UiActivationProbeOnly))
+                    .value_or(false);
+                if (!probeReader.valid()) {
+                    std::cerr << "UI activation request payload invalid\n";
+                    return;
+                }
+                if (probeOnly) {
+                    bool present = false;
+                    std::uint64_t currentActivationId = 0;
+                    std::uint64_t nextActivationId = 0;
+                    uiPresenceSnapshot(
+                        present, currentActivationId,
+                        nextActivationId);
+                    std::uint64_t decisionActivationId =
+                        currentActivationId;
+                    if (decisionActivationId == 0)
+                        decisionActivationId = nextActivationId + 1;
+                    if (decisionActivationId == 0)
+                        decisionActivationId = 1;
+                    const mcast::ipc::UiActivateDecisionInfo decision{
+                        false, decisionActivationId, present};
+                    const auto reply =
+                        mcast::ipc::makeUiActivateDecisionMessage(
+                            3, message.header.messageId,
+                            message.header.sessionId, decision, error);
+                    if (!reply
+                        || !connection->writeMessage(
+                            *reply, 2000ms, error)) {
+                        std::cerr << "UI presence decision: "
+                                  << error << '\n';
+                        return;
+                    }
+                    continue;
+                }
                 std::string activationError;
                 std::uint64_t effectiveActivationId = 0;
                 bool started = false;
@@ -1898,7 +1953,8 @@ private:
                     return;
                 }
                 const mcast::ipc::UiActivateDecisionInfo activationDecision{
-                    started, effectiveActivationId};
+                    started, effectiveActivationId,
+                    started || liveUiProcessId().has_value()};
                 const auto decision =
                     mcast::ipc::makeUiActivateDecisionMessage(
                         3, message.header.messageId,

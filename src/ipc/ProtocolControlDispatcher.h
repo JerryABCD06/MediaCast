@@ -20,6 +20,7 @@ namespace mcast::ipc {
 
 struct UiActivationOutcome {
     bool started = false;
+    bool uiPresent = false;
     std::optional<PeerIdentityGrant> grant;
 };
 
@@ -51,7 +52,8 @@ public:
 
     bool requestUiActivation(
         UiActivationOutcome &outcome,
-        std::chrono::milliseconds timeout, std::string &error);
+        std::chrono::milliseconds timeout, std::string &error,
+        bool probeOnly = false);
     bool requestCastConfirmation(
         const CastConfirmationRequestInfo &request,
         std::chrono::milliseconds timeout, bool &accepted,
@@ -72,6 +74,7 @@ private:
         std::uint64_t expectedActivationId = 0;
         ActivationPhase phase = ActivationPhase::AwaitingDecision;
         bool started = false;
+        bool uiPresent = false;
         std::optional<PeerIdentityGrant> grant;
     };
 

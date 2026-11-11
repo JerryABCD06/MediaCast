@@ -43,6 +43,8 @@ enum class FieldId : std::uint16_t {
     PlaybackSubmissionStatus = 73,
     PlaybackOutcomeStatus = 74,
     PlaybackStateVersion = 75,
+    UiActivationProbeOnly = 76,
+    UiPresent = 77,
     CastProtocol = 80,
     CastClaimId = 81,
     CastPeerId = 82,
@@ -98,6 +100,7 @@ struct PeerIdentityGrant {
 struct UiActivateDecisionInfo {
     bool started = false;
     std::uint64_t activationId = 0;
+    bool uiPresent = false;
 };
 
 struct CastConfirmationRequestInfo {

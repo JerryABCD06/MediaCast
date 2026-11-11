@@ -110,7 +110,7 @@ void testActivationAndConfirmationRouting()
         const std::uint64_t activationRequestId =
             activation.header.messageId;
 
-        const UiActivateDecisionInfo decision{true, 900};
+        const UiActivateDecisionInfo decision{true, 900, true};
         auto decisionMessage = makeUiActivateDecisionMessage(
             11, activationRequestId, 1, decision, error);
         check(decisionMessage.has_value(),
@@ -191,6 +191,7 @@ void testActivationAndConfirmationRouting()
     check(dispatcher->requestUiActivation(activation, 3s, error),
           "dispatcher completes UI activation: " + error);
     check(activation.started && activation.grant
+              && activation.uiPresent
               && activation.grant->processId == 123
               && activation.grant->activationId == 900,
           "dispatcher routes activation decision and uncorrelated grant");
@@ -234,6 +235,44 @@ void testActivationRejectedWithoutGrant()
           "rejected activation completes without a grant: " + error);
     check(!outcome.started && !outcome.grant,
           "started=false activation does not wait for PeerIdentityGrant");
+    server.join();
+    dispatcher->stop();
+}
+
+void testUiPresenceProbe()
+{
+    PipePair pair = makePipePair(L"presence-probe");
+    std::jthread server([&] {
+        std::string error;
+        Message request;
+        check(pair.server->readMessage(request, 3000ms, error),
+              "fake Shell receives UI presence probe: " + error);
+        PayloadReader reader(request.payload);
+        const auto probe = reader.getBool(
+            static_cast<std::uint16_t>(FieldId::UiActivationProbeOnly));
+        check(reader.valid() && probe && *probe,
+              "UI presence request carries probeOnly=true");
+        const UiActivateDecisionInfo presence{false, 1, true};
+        const auto reply = makeUiActivateDecisionMessage(
+            25, request.header.messageId, request.header.sessionId,
+            presence, error);
+        check(reply.has_value(),
+              "fake Shell builds presence decision: " + error);
+        check(pair.server->writeMessage(*reply, 2000ms, error),
+              "fake Shell writes presence decision: " + error);
+    });
+
+    auto dispatcher = std::make_unique<ProtocolControlDispatcher>(
+        std::move(pair.client));
+    std::string error;
+    check(dispatcher->start(error),
+          "presence probe dispatcher starts: " + error);
+    UiActivationOutcome outcome;
+    check(dispatcher->requestUiActivation(
+              outcome, 2s, error, true),
+          "presence probe completes: " + error);
+    check(!outcome.started && outcome.uiPresent && !outcome.grant,
+          "presence probe reports an existing UI without a grant");
     server.join();
     dispatcher->stop();
 }
@@ -391,6 +430,7 @@ int main()
 {
     testActivationAndConfirmationRouting();
     testActivationRejectedWithoutGrant();
+    testUiPresenceProbe();
     testTransportFailureWakesWaiters();
     testConfirmationTimeout();
     testConfirmationCancellation();
