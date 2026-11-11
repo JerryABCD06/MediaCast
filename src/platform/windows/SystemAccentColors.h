@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "AccentPalette.h"
+
 #include <QColor>
 #include <QObject>
 
@@ -53,9 +55,9 @@ private:
 
     QColor m_accent{0x00, 0x78, 0xd4};
     QColor m_light1{0x26, 0x8c, 0xdc};
-    QColor m_light2{0x4c, 0xa0, 0xe0};
+    QColor m_light2{mcast::platform::WindowsBlueAccent.dark};
     QColor m_light3{0x60, 0xab, 0xe4};
-    QColor m_dark1{0x00, 0x66, 0xb4};
+    QColor m_dark1{mcast::platform::WindowsBlueAccent.light};
     QColor m_dark2{0x00, 0x54, 0x94};
     QColor m_dark3{0x00, 0x4a, 0x83};
 };

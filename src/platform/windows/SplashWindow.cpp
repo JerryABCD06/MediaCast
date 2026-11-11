@@ -5,6 +5,7 @@
 // author's NoUninstallIcon project.
 
 #include "SplashWindow.h"
+#include "AccentPalette.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -311,8 +312,8 @@ private:
     float m_scale = 1.0f;
     bool m_followSystem = true;
     bool m_dark = false;
-    unsigned int m_lightAccent = 0x0067c0;
-    unsigned int m_darkAccent = 0x4cc2ff;
+    unsigned int m_lightAccent = mcast::platform::WindowsBlueAccent.light;
+    unsigned int m_darkAccent = mcast::platform::WindowsBlueAccent.dark;
     bool m_visible = false;
     bool m_dismissRequested = false;
     bool m_fading = false;

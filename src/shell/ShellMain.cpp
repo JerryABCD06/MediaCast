@@ -10,6 +10,7 @@
 
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
+#include "platform/windows/AccentPalette.h"
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/TrayIcon.h"
 #include "shell/ShellLanguage.h"
@@ -175,14 +176,11 @@ bool effectiveDarkMode(const std::string &configured)
     return systemUsesDarkTheme();
 }
 
-struct AccentPair {
-    unsigned int light = 0x0067c0;
-    unsigned int dark = 0x4cc2ff;
-};
-
-AccentPair splashAccentColors(const std::string &configured)
+mcast::platform::AccentPair splashAccentColors(
+    const std::string &configured)
 {
-    AccentPair result;
+    mcast::platform::AccentPair result =
+        mcast::platform::WindowsBlueAccent;
     if (configured != "System")
         return result;
     try {
@@ -197,8 +195,9 @@ AccentPair splashAccentColors(const std::string &configured)
         result.dark = (static_cast<unsigned int>(dark.R) << 16)
             | (static_cast<unsigned int>(dark.G) << 8)
             | static_cast<unsigned int>(dark.B);
-    } catch (const winrt::hresult_error &) {
-        // Keep the Windows Blue fallback when Windows returns no palette.
+    } catch (const winrt::hresult_error &exception) {
+        std::cerr << "System accent unavailable; using Windows Blue: "
+                  << winrt::to_string(exception.message()) << '\n';
     }
     return result;
 }
@@ -676,7 +675,7 @@ public:
         if (m_options.testForceReceivingEnabled)
             m_receivingEnabled = true;
         const std::string darkMode = m_settings->darkMode();
-        const AccentPair accent =
+        const mcast::platform::AccentPair accent =
             splashAccentColors(m_settings->accentMode());
         m_splash.setTheme(
             darkMode == "System", darkMode == "Dark");
@@ -747,7 +746,7 @@ public:
                     std::lock_guard lock(m_settingsMutex);
                     const bool dark = effectiveDarkMode(
                         m_settings->darkMode());
-                    const AccentPair accent =
+                    const mcast::platform::AccentPair accent =
                         splashAccentColors(m_settings->accentMode());
                     m_tray->setDark(dark);
                     m_splash.setTheme(
@@ -2001,7 +2000,7 @@ private:
             m_tray->requestTexts(m_trayTexts);
         }
         const std::string darkMode = m_settings->darkMode();
-        const AccentPair accent =
+        const mcast::platform::AccentPair accent =
             splashAccentColors(m_settings->accentMode());
         m_splash.setTheme(
             darkMode == "System", darkMode == "Dark");
