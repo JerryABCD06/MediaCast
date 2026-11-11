@@ -38,6 +38,7 @@ public slots:
 signals:
     void requestReceived(qulonglong requestId, const QVariantMap &request);
     void cancelReceived(qulonglong requestId);
+    void playbackReconnectRequested(qulonglong requestId);
     void connectionLost(const QString &reason);
     void logMessage(const QString &message);
 

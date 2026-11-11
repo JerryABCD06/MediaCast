@@ -165,12 +165,31 @@ void testCancellationMapping()
     dispatcher->stop();
 }
 
+void testCancelBeforeWait()
+{
+    PipePair pair = makePipePair(L"pre-cancel");
+    auto dispatcher = std::make_unique<ProtocolControlDispatcher>(
+        std::move(pair.client));
+    std::string error;
+    check(dispatcher->start(error),
+          "pre-cancel dispatcher starts: " + error);
+    mcast::skeleton::ProtocolDlnaConfirmationPort port(*dispatcher);
+    port.cancel();
+    bool accepted = true;
+    check(!port.waitForDecision(prompt(), accepted, error)
+              && !accepted
+              && error.find("cancelled") != std::string::npos,
+          "cancellation before wait is sticky and fail-closed");
+    dispatcher->stop();
+}
+
 } // namespace
 
 int main()
 {
     testDecisionMapping();
     testCancellationMapping();
+    testCancelBeforeWait();
     std::cout << "Protocol DLNA confirmation port tests passed\n";
     return 0;
 }

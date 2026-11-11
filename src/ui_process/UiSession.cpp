@@ -109,10 +109,14 @@ std::optional<std::uint64_t> parseUnsignedDecimal(const std::string &value)
 bool connectPlayback(
     const UiSession::Options &options, const PeerIdentityGrant &protocol,
     std::unique_ptr<PipeConnection> &playback,
-    std::string &error)
+    std::string &error, bool reconnect = false)
 {
+    const auto connectTimeout = reconnect ? 1500ms : 5000ms;
+    const auto ackTimeout = reconnect ? 1000ms : 3000ms;
+    const auto writeTimeout = reconnect ? 1000ms : 2000ms;
     auto connection = PipeClient::connect(
-        makePlaybackPipeName(widen(options.instance)), 5000ms, error);
+        makePlaybackPipeName(widen(options.instance)),
+        connectTimeout, error);
     if (!connection)
         return false;
     if (connection->peerProcessId() != protocol.processId) {
@@ -139,11 +143,11 @@ bool connectPlayback(
     request.header.destination = ProcessRole::Protocol;
     request.header.messageId = 4;
     request.header.sessionId = 1;
-    if (!connection->writeMessage(request, 2000ms, error))
+    if (!connection->writeMessage(request, writeTimeout, error))
         return false;
 
     Message snapshot;
-    if (!connection->readMessage(snapshot, 3000ms, error)
+    if (!connection->readMessage(snapshot, ackTimeout, error)
         || snapshot.header.type != MessageType::SessionSnapshot
         || snapshot.header.correlationId != request.header.messageId
         || snapshot.header.sessionId != request.header.sessionId
@@ -271,8 +275,27 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
     }
     if (options.confirmationOnly)
         return true;
+    m_protocolGrant = *protocolGrant;
+    m_hasProtocolGrant = true;
     return connectPlayback(
-        options, *protocolGrant, m_playback, error);
+        options, *protocolGrant, m_playback, error, false);
+}
+
+std::unique_ptr<mcast::ipc::PipeConnection>
+UiSession::reconnectPlayback(std::string &error)
+{
+    error.clear();
+    if (!m_options.enabled || m_options.confirmationOnly
+        || !m_hasProtocolGrant) {
+        error = "Ui playback reconnect has no protocol grant";
+        return nullptr;
+    }
+    std::unique_ptr<mcast::ipc::PipeConnection> playback;
+    if (!connectPlayback(
+            m_options, m_protocolGrant, playback, error, true)) {
+        return nullptr;
+    }
+    return playback;
 }
 
 std::unique_ptr<mcast::ipc::PipeConnection>

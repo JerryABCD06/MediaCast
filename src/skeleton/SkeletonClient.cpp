@@ -22,12 +22,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -272,7 +275,9 @@ private:
 std::unique_ptr<PipeConnection> protocolPlaybackServer(
     const ClientOptions &options,
     const mcast::ipc::PeerIdentityGrant &expectedUi,
-    std::string &error)
+    std::string &error,
+    std::function<void(std::string &)> onListening = {},
+    std::stop_token stop = {})
 {
     mcast::ipc::PipeListener listener(
         mcast::ipc::makePlaybackPipeName(widen(options.instance)), 2);
@@ -280,8 +285,45 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
         error = "playback pipe listener failed";
         return nullptr;
     }
+    std::atomic<PipeConnection *> activeConnection{nullptr};
+    std::jthread cancelAccept;
+    if (stop.stop_possible()) {
+        cancelAccept = std::jthread(
+            [&](std::stop_token internalStop) {
+                while (!internalStop.stop_requested()
+                       && !stop.stop_requested()) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds{10});
+                }
+                if (stop.stop_requested()) {
+                    listener.stop();
+                    if (auto *connection =
+                            activeConnection.load()) {
+                        connection->close();
+                    }
+                }
+            });
+    }
+    if (onListening) {
+        onListening(error);
+        if (!error.empty())
+            return nullptr;
+    }
 
     auto connection = listener.accept(8000ms, error);
+    activeConnection = connection.get();
+    struct ActiveConnectionGuard {
+        std::atomic<PipeConnection *> &value;
+        ~ActiveConnectionGuard() { value = nullptr; }
+    } activeConnectionGuard{activeConnection};
+    if (stop.stop_requested()) {
+        cancelAccept.request_stop();
+        if (cancelAccept.joinable())
+            cancelAccept.join();
+        connection.reset();
+        error = "playback listener cancelled";
+        return nullptr;
+    }
     if (!connection)
         return nullptr;
 
@@ -343,6 +385,10 @@ std::unique_ptr<PipeConnection> protocolPlaybackServer(
         return nullptr;
 
     std::cout << "PLAYBACK_SNAPSHOT_SERVED\n";
+    activeConnection = nullptr;
+    cancelAccept.request_stop();
+    if (cancelAccept.joinable())
+        cancelAccept.join();
     return connection;
 }
 
@@ -583,14 +629,31 @@ int runClient(const ClientOptions &options)
         const bool persistent = options.persistent;
         std::mutex activationMutex;
         std::mutex playbackMutex;
+        std::mutex reconnectOwnerMutex;
+        std::condition_variable reconnectOwnerChanged;
+        std::shared_ptr<std::stop_source> reconnectOwner;
         std::shared_ptr<mcast::playback::PlaybackPipeGateway>
             activePlayback;
         std::jthread playbackWatcher;
+
+        const auto stopReconnectOwner = [&] {
+            std::shared_ptr<std::stop_source> owner;
+            {
+                std::lock_guard lock(reconnectOwnerMutex);
+                owner = reconnectOwner;
+            }
+            if (owner)
+                owner->request_stop();
+            std::unique_lock lock(reconnectOwnerMutex);
+            reconnectOwnerChanged.wait(
+                lock, [&] { return !reconnectOwner; });
+        };
 
         const auto activateUi =
             [&](mcast::ipc::UiActivationOutcome &activation,
                 std::string &activationError) {
                 std::lock_guard activationLock(activationMutex);
+                stopReconnectOwner();
                 if (!dispatcher->requestUiActivation(
                         activation, 3s, activationError)) {
                     return false;
@@ -602,6 +665,10 @@ int runClient(const ClientOptions &options)
                         "UI activation has no identity grant";
                     return false;
                 }
+                if (playbackWatcher.joinable()) {
+                    playbackWatcher.request_stop();
+                    playbackWatcher.join();
+                }
                 auto connection = protocolPlaybackServer(
                     options, *activation.grant, activationError);
                 if (!connection)
@@ -610,10 +677,6 @@ int runClient(const ClientOptions &options)
                     std::make_shared<
                         mcast::playback::PlaybackPipeGateway>(
                         std::move(connection), protocolLog);
-                if (playbackWatcher.joinable()) {
-                    playbackWatcher.request_stop();
-                    playbackWatcher.join();
-                }
                 playbackGateway->detach(
                     "Ui playback connection replaced");
                 if (!playbackGateway->attach(
@@ -626,41 +689,143 @@ int runClient(const ClientOptions &options)
                 const std::uint32_t processId =
                     activation.grant->processId;
                 playbackWatcher = std::jthread(
-                    [&, playback, processId](
-                        std::stop_token stop) {
-                        std::string waitReason;
-                        const bool exited =
-                            waitForUiOrPlaybackEnd(
-                                processId, *playback, stop,
-                                waitReason);
-                        if (stop.stop_requested())
-                            return;
-                        if (!exited) {
+                    [&, playback, processId,
+                     grant = *activation.grant](
+                        std::stop_token stop) mutable {
+                        auto currentPlayback = playback;
+                        while (!stop.stop_requested()) {
+                            std::string waitReason;
+                            const bool ended =
+                                waitForUiOrPlaybackEnd(
+                                    processId, *currentPlayback,
+                                    stop, waitReason);
+                            if (stop.stop_requested())
+                                return;
+                            if (!ended) {
+                                protocolLog(
+                                    "Ui playback wait failed: "
+                                    + waitReason);
+                                return;
+                            }
+                            bool current = false;
+                            {
+                                std::lock_guard playbackLock(
+                                    playbackMutex);
+                                current =
+                                    activePlayback.get()
+                                    == currentPlayback.get();
+                                if (current)
+                                    activePlayback.reset();
+                            }
+                            if (!current)
+                                return;
+                            playbackGateway->detach(waitReason);
+                            if (waitReason != "PlaybackPipe disconnected")
+                                break;
+
                             protocolLog(
-                                "Ui playback wait failed: "
-                                + waitReason);
-                            return;
+                                "PlaybackPipe disconnected; "
+                                "requesting Ui reconnect");
+                            auto reconnectStop =
+                                std::make_shared<std::stop_source>();
+                            {
+                                std::lock_guard lock(reconnectOwnerMutex);
+                                reconnectOwner = reconnectStop;
+                            }
+                            struct ReconnectOwnerGuard {
+                                std::mutex &mutex;
+                                std::condition_variable &changed;
+                                std::shared_ptr<std::stop_source> &owner;
+                                const std::shared_ptr<std::stop_source>
+                                    &expected;
+                                ~ReconnectOwnerGuard()
+                                {
+                                    {
+                                        std::lock_guard lock(mutex);
+                                        if (owner == expected)
+                                            owner.reset();
+                                    }
+                                    changed.notify_all();
+                                }
+                            } reconnectOwnerGuard{
+                                reconnectOwnerMutex,
+                                reconnectOwnerChanged,
+                                reconnectOwner,
+                                reconnectStop,
+                            };
+                            std::string reconnectError;
+                            std::unique_ptr<PipeConnection>
+                                replacementConnection;
+                            for (int attempt = 0; attempt < 3; ++attempt) {
+                                if (stop.stop_requested())
+                                    return;
+                                if (attempt != 0) {
+                                    for (int slice = 0;
+                                         slice < 50
+                                         && !stop.stop_requested()
+                                         && !reconnectStop
+                                                 ->stop_requested();
+                                         ++slice) {
+                                        std::this_thread::sleep_for(
+                                            std::chrono::milliseconds{10});
+                                    }
+                                }
+                                reconnectError.clear();
+                                replacementConnection =
+                                    protocolPlaybackServer(
+                                        options, grant, reconnectError,
+                                        [&](std::string &listenError) {
+                                            static_cast<void>(
+                                                dispatcher
+                                                    ->requestPlaybackReconnect(
+                                                        listenError));
+                                        },
+                                        reconnectStop->get_token());
+                                if (replacementConnection)
+                                    break;
+                                protocolLog(
+                                    "Ui playback reconnect attempt "
+                                    + std::to_string(attempt + 1)
+                                    + " failed: " + reconnectError);
+                            }
+                            if (reconnectStop->stop_requested())
+                                return;
+                            if (!replacementConnection) {
+                                protocolLog(
+                                    "Ui playback reconnect failed: "
+                                    + reconnectError);
+                                break;
+                            }
+                            auto replacement =
+                                std::make_shared<
+                                    mcast::playback::
+                                        PlaybackPipeGateway>(
+                                    std::move(
+                                        replacementConnection),
+                                    protocolLog);
+                            if (!playbackGateway->attach(
+                                    replacement, reconnectError)) {
+                                protocolLog(
+                                    "Ui playback reattach failed: "
+                                    + reconnectError);
+                                break;
+                            }
+                            {
+                                std::lock_guard playbackLock(
+                                    playbackMutex);
+                                activePlayback = replacement;
+                            }
+                            currentPlayback = replacement;
+                            protocolLog(
+                                "PlaybackPipe reconnected");
                         }
-                        bool current = false;
-                        {
-                            std::lock_guard playbackLock(
-                                playbackMutex);
-                            current =
-                                activePlayback.get()
-                                == playback.get();
-                            if (current)
-                                activePlayback.reset();
-                        }
-                        if (!current)
-                            return;
-                        playbackGateway->detach(waitReason);
                         if (persistent) {
                             std::string readyError;
                             if (!dispatcher->sendUiOpenReady(
                                     readyError)) {
                                 protocolLog(
-                                    "UiOpenReady after Ui exit failed: "
-                                    + readyError);
+                                    "UiOpenReady after playback end "
+                                    "failed: " + readyError);
                             }
                         }
                     });

@@ -94,6 +94,14 @@ bool ProtocolControlDispatcher::sendUiOpenReady(std::string &error)
     return sendMessage(std::move(message), error);
 }
 
+bool ProtocolControlDispatcher::requestPlaybackReconnect(
+    std::string &error)
+{
+    auto message = makePlaybackReconnectRequestMessage(
+        nextMessageId(), error);
+    return message && sendMessage(std::move(*message), error);
+}
+
 bool ProtocolControlDispatcher::waitForUiOpenRequest(
     std::chrono::milliseconds timeout, std::string &error)
 {

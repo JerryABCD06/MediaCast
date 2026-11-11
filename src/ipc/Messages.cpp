@@ -505,6 +505,18 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Shell)
             return true;
         break;
+    case MessageType::PlaybackReconnectRequest:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::UiPlaybackReconnect:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Ui)
+            return true;
+        break;
     case MessageType::UiCastConfirmationRequest:
     case MessageType::UiCastConfirmationCancel:
         if (channel == ConnectionChannel::Control
@@ -1055,6 +1067,85 @@ decodeCastConfirmationCancelMessage(
         || !validateMessageDirection(
             ConnectionChannel::Control, message.header, error)) {
         error = "message is not a valid cast confirmation cancel";
+        return std::nullopt;
+    }
+    return message.header.correlationId;
+}
+
+std::optional<Message> makePlaybackReconnectRequestMessage(
+    std::uint64_t messageId, std::string &error)
+{
+    if (messageId == 0) {
+        error = "playback reconnect request has zero message id";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::PlaybackReconnectRequest;
+    message.header.source = ProcessRole::Protocol;
+    message.header.destination = ProcessRole::Shell;
+    message.header.messageId = messageId;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<std::uint64_t>
+decodePlaybackReconnectRequestMessage(
+    const Message &message, std::string &error)
+{
+    if (message.header.type
+            != MessageType::PlaybackReconnectRequest
+        || message.header.versionMinor < 1
+        || message.header.messageId == 0
+        || message.header.correlationId != 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || !message.payload.empty()
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid playback reconnect request";
+        return std::nullopt;
+    }
+    return message.header.messageId;
+}
+
+std::optional<Message> makeUiPlaybackReconnectMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::string &error)
+{
+    if (messageId == 0 || correlationId == 0) {
+        error = "UI playback reconnect contains invalid ids";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::UiPlaybackReconnect;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Ui;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<std::uint64_t>
+decodeUiPlaybackReconnectMessage(
+    const Message &message, std::string &error)
+{
+    if (message.header.type != MessageType::UiPlaybackReconnect
+        || message.header.versionMinor < 1
+        || message.header.messageId == 0
+        || message.header.correlationId == 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || !message.payload.empty()
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid UI playback reconnect";
         return std::nullopt;
     }
     return message.header.correlationId;

@@ -164,6 +164,19 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 m_pending.erase(message.header.correlationId);
             }
             emit cancelReceived(message.header.correlationId);
+        } else if (
+            message.header.type
+            == ipc::MessageType::UiPlaybackReconnect) {
+            const auto requestId =
+                ipc::decodeUiPlaybackReconnectMessage(
+                    message, error);
+            if (!requestId) {
+                emit logMessage(
+                    QStringLiteral("播放管道重连消息无效：%1")
+                        .arg(QString::fromStdString(error)));
+                continue;
+            }
+            emit playbackReconnectRequested(*requestId);
         }
     }
 }

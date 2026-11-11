@@ -1992,6 +1992,39 @@ private:
                 cancelProtocolConfirmation(
                     *requestMessageId, confirmationGeneration);
             } else if (message.header.type
+                           == MessageType::PlaybackReconnectRequest
+                       && helloMessage.header.source
+                           == ProcessRole::Protocol) {
+                const auto requestMessageId =
+                    mcast::ipc::decodePlaybackReconnectRequestMessage(
+                        message, error);
+                if (!requestMessageId) {
+                    std::cerr << "playback reconnect request: "
+                              << error << '\n';
+                    return;
+                }
+                std::shared_ptr<mcast::ipc::PipeConnection>
+                    uiConnection;
+                {
+                    std::scoped_lock lock(m_uiControlMutex);
+                    uiConnection = m_uiControlConnection;
+                }
+                if (!uiConnection) {
+                    std::cerr
+                        << "Playback reconnect has no UI ControlPipe\n";
+                    continue;
+                }
+                const auto notify =
+                    mcast::ipc::makeUiPlaybackReconnectMessage(
+                        nextMessageId(), *requestMessageId, error);
+                if (!notify
+                    || !uiConnection->writeMessage(
+                        *notify, 2000ms, error)) {
+                    std::cerr << "UI playback reconnect notify: "
+                              << error << '\n';
+                    continue;
+                }
+            } else if (message.header.type
                            == MessageType::UiCastConfirmationDecision
                        && helloMessage.header.source == ProcessRole::Ui) {
                 completeUiConfirmation(

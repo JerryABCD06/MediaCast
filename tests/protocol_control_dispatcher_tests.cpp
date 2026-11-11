@@ -352,6 +352,39 @@ void testConfirmationCancellation()
     dispatcher->stop();
 }
 
+void testPlaybackReconnectRequest()
+{
+    PipePair pair = makePipePair(L"playback-reconnect");
+    std::jthread server([&] {
+        std::string error;
+        Message request;
+        check(pair.server->readMessage(request, 3000ms, error),
+              "fake Shell receives playback reconnect: " + error);
+        const auto requestId =
+            decodePlaybackReconnectRequestMessage(request, error);
+        check(requestId.has_value()
+                  && *requestId == request.header.messageId,
+              "playback reconnect message decodes: " + error);
+        const auto uiRequest = makeUiPlaybackReconnectMessage(
+            50, *requestId, error);
+        check(uiRequest.has_value()
+                  && decodeUiPlaybackReconnectMessage(
+                      *uiRequest, error)
+                      == requestId,
+              "Shell can forward playback reconnect to Ui: " + error);
+    });
+
+    auto dispatcher = std::make_unique<ProtocolControlDispatcher>(
+        std::move(pair.client));
+    std::string error;
+    check(dispatcher->start(error),
+          "playback reconnect dispatcher starts: " + error);
+    check(dispatcher->requestPlaybackReconnect(error),
+          "Protocol sends playback reconnect request: " + error);
+    server.join();
+    dispatcher->stop();
+}
+
 } // namespace
 
 int main()
@@ -361,6 +394,7 @@ int main()
     testTransportFailureWakesWaiters();
     testConfirmationTimeout();
     testConfirmationCancellation();
+    testPlaybackReconnectRequest();
     std::cout << "Protocol control dispatcher tests passed\n";
     return 0;
 }

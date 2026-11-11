@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "ipc/Messages.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -31,6 +33,8 @@ public:
     ~UiSession();
 
     bool connectToPeers(const Options &options, std::string &error);
+    std::unique_ptr<mcast::ipc::PipeConnection> reconnectPlayback(
+        std::string &error);
     std::unique_ptr<mcast::ipc::PipeConnection> takeControlConnection();
     std::unique_ptr<mcast::ipc::PipeConnection> takePlaybackConnection();
 
@@ -38,4 +42,6 @@ private:
     Options m_options;
     std::unique_ptr<mcast::ipc::PipeConnection> m_control;
     std::unique_ptr<mcast::ipc::PipeConnection> m_playback;
+    mcast::ipc::PeerIdentityGrant m_protocolGrant;
+    bool m_hasProtocolGrant = false;
 };

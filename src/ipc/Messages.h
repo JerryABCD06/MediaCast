@@ -198,6 +198,19 @@ std::optional<Message> makeCastConfirmationCancelMessage(
 std::optional<std::uint64_t> decodeCastConfirmationCancelMessage(
     const Message &message, std::string &error);
 
+std::optional<Message> makePlaybackReconnectRequestMessage(
+    std::uint64_t messageId, std::string &error);
+
+std::optional<std::uint64_t> decodePlaybackReconnectRequestMessage(
+    const Message &message, std::string &error);
+
+std::optional<Message> makeUiPlaybackReconnectMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::string &error);
+
+std::optional<std::uint64_t> decodeUiPlaybackReconnectMessage(
+    const Message &message, std::string &error);
+
 std::optional<Message> makeUiCastConfirmationRequestMessage(
     std::uint64_t messageId, std::uint64_t correlationId,
     const CastConfirmationRequestInfo &request, std::string &error);

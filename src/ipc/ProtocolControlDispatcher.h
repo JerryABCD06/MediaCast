@@ -43,6 +43,7 @@ public:
 
     bool sendHeartbeat(std::string &error);
     bool sendUiOpenReady(std::string &error);
+    bool requestPlaybackReconnect(std::string &error);
     bool waitForUiOpenRequest(
         std::chrono::milliseconds timeout, std::string &error);
     bool waitForTermination(

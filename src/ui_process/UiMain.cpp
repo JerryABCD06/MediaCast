@@ -20,6 +20,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QIcon>
+#include <QMetaObject>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTextStream>
@@ -27,7 +28,10 @@
 #include <QTimer>
 #include <QtQml/qqml.h>
 
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <thread>
 
 int main(int argc, char *argv[])
 {
@@ -117,18 +121,72 @@ int main(int argc, char *argv[])
         return 4;
     }
     std::unique_ptr<mcast::ui_process::PlaybackBridge> playbackBridge;
-    if (auto playbackConnection = uiSession.takePlaybackConnection()) {
-        playbackBridge = std::make_unique<mcast::ui_process::PlaybackBridge>(
-            std::shared_ptr<mcast::ipc::PipeConnection>(
-                std::move(playbackConnection)),
-            playback, uiSessionOptions.activationId);
+    std::function<void()> startPlaybackReconnect;
+    std::jthread playbackReconnectThread;
+    std::atomic_bool playbackReconnectDone{true};
+    const auto createPlaybackBridge =
+        [&](std::shared_ptr<mcast::ipc::PipeConnection> connection) {
+        playbackBridge =
+            std::make_unique<mcast::ui_process::PlaybackBridge>(
+                std::move(connection),
+                playback, uiSessionOptions.activationId);
         QObject::connect(
             playbackBridge.get(),
             &mcast::ui_process::PlaybackBridge::logMessage,
             &mainWindow, [&writeLog](const QString &text) {
                 writeLog(QStringLiteral("Playback IPC  %1").arg(text));
             });
+    };
+    if (auto playbackConnection = uiSession.takePlaybackConnection()) {
+        createPlaybackBridge(
+            std::shared_ptr<mcast::ipc::PipeConnection>(
+                std::move(playbackConnection)));
     }
+    std::atomic_bool playbackReconnectPending{false};
+    startPlaybackReconnect = [&] {
+        if (playbackReconnectThread.joinable()) {
+            if (!playbackReconnectDone.load()) {
+                playbackReconnectPending = true;
+                return;
+            }
+            playbackReconnectThread.join();
+        }
+        playbackReconnectDone = false;
+        playbackReconnectThread = std::jthread(
+            [&](std::stop_token stop) {
+                std::string reconnectError;
+                auto connection =
+                    uiSession.reconnectPlayback(reconnectError);
+                if (stop.stop_requested())
+                    return;
+                auto shared = connection
+                    ? std::shared_ptr<mcast::ipc::PipeConnection>(
+                          std::move(connection))
+                    : std::shared_ptr<mcast::ipc::PipeConnection>{};
+                QMetaObject::invokeMethod(
+                    &mainWindow,
+                    [&,
+                     shared = std::move(shared),
+                     reconnectError = std::move(reconnectError)] {
+                        playbackReconnectDone = true;
+                        if (shared) {
+                            playbackBridge.reset();
+                            createPlaybackBridge(shared);
+                            writeLog(QStringLiteral(
+                                "Playback IPC 已重新连接"));
+                        } else {
+                            writeLog(
+                                QStringLiteral(
+                                    "Playback IPC 重连失败：%1")
+                                    .arg(QString::fromStdString(
+                                        reconnectError)));
+                        }
+                        if (playbackReconnectPending.exchange(false))
+                            startPlaybackReconnect();
+                    },
+                    Qt::QueuedConnection);
+            });
+    };
 
     std::unique_ptr<mcast::ui_process::UiConfirmationBridge>
         confirmationBridge;
@@ -145,6 +203,13 @@ int main(int argc, char *argv[])
             confirmationBridge.get(),
             &mcast::ui_process::UiConfirmationBridge::cancelReceived,
             &mainWindow, &MainWindow::cancelCastConfirmation);
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::
+                playbackReconnectRequested,
+            &mainWindow, [&](qulonglong) {
+                startPlaybackReconnect();
+            });
         QObject::connect(
             &mainWindow, &MainWindow::castConfirmationResponded,
             confirmationBridge.get(),
