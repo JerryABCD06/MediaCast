@@ -267,6 +267,28 @@ DlnaClaimTick DlnaClaimAdapter::tick(cast::CastTime now)
     return result;
 }
 
+bool DlnaClaimAdapter::sessionReady(std::uint64_t sessionId)
+{
+    return m_coordinator.sessionReady(sessionId);
+}
+
+bool DlnaClaimAdapter::sessionEnded(
+    std::uint64_t sessionId, cast::EndReason reason)
+{
+    return m_coordinator.sessionEnded(sessionId, reason);
+}
+
+bool DlnaClaimAdapter::sessionRetired(std::uint64_t sessionId)
+{
+    return m_coordinator.sessionRetired(sessionId);
+}
+
+const cast::ArbitrationSnapshot &
+DlnaClaimAdapter::snapshot() const noexcept
+{
+    return m_coordinator.snapshot();
+}
+
 bool DlnaClaimAdapter::ownsPeer(
     const cast::PeerIdentity &peer) const
 {

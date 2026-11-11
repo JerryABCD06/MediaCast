@@ -5,6 +5,7 @@
 
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
+#include "ipc/ProtocolControlDispatcher.h"
 #include "supervisor/ProcessIdentity.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -147,76 +149,6 @@ std::unique_ptr<PipeConnection> connectControl(
     return connection;
 }
 
-bool requestUi(
-    PipeConnection &control, mcast::ipc::PeerIdentityGrant &uiGrant,
-    std::uint64_t requestId, bool &started, std::string &error)
-{
-    Message request;
-    request.header.type = MessageType::UiActivateRequest;
-    request.header.source = ProcessRole::Protocol;
-    request.header.destination = ProcessRole::Shell;
-    request.header.messageId = requestId;
-    request.header.sessionId = 1;
-    if (!control.writeMessage(request, 2000ms, error))
-        return false;
-
-    Message decision;
-    if (!control.readMessage(decision, 3000ms, error))
-        return false;
-    if (decision.header.sessionId != request.header.sessionId) {
-        error = "UI activation decision session mismatch";
-        return false;
-    }
-    const auto decodedDecision =
-        mcast::ipc::decodeUiActivateDecisionMessage(
-            decision, request.header.messageId, error);
-    if (!decodedDecision)
-        return false;
-    started = decodedDecision->started;
-    if (!started)
-        return true;
-
-    Message grant;
-    if (!control.readMessage(grant, 3000ms, error))
-        return false;
-    const auto decoded = mcast::ipc::decodePeerIdentityGrantMessage(
-        grant, error);
-    if (!decoded || decoded->role != ProcessRole::Ui
-        || decoded->activationId != decodedDecision->activationId) {
-        error = "invalid UI identity grant";
-        return false;
-    }
-    uiGrant = *decoded;
-    return true;
-}
-
-bool sendUiOpenReady(
-    PipeConnection &control, std::uint64_t messageId, std::string &error)
-{
-    Message ready;
-    ready.header.type = MessageType::UiOpenReady;
-    ready.header.source = ProcessRole::Protocol;
-    ready.header.destination = ProcessRole::Shell;
-    ready.header.messageId = messageId;
-    ready.header.sessionId = 1;
-    return control.writeMessage(ready, 2000ms, error);
-}
-
-bool waitForUiOpenCommand(PipeConnection &control, std::string &error)
-{
-    Message command;
-    if (!control.readMessage(command, 24h, error))
-        return false;
-    if (command.header.type != MessageType::UiOpenRequest
-        || !mcast::ipc::validateMessageDirection(
-            ConnectionChannel::Control, command.header, error)) {
-        if (error.empty())
-            error = "invalid UiOpenRequest";
-        return false;
-    }
-    return true;
-}
-
 void protocolCommandServer(
     const ClientOptions &options, std::atomic_bool &receivingEnabled,
     mcast::ipc::PipeListener &listener, std::stop_token stop)
@@ -336,6 +268,7 @@ private:
 bool protocolPlaybackServer(
     const ClientOptions &options,
     const mcast::ipc::PeerIdentityGrant &expectedUi,
+    mcast::ipc::ProtocolControlDispatcher &dispatcher,
     std::string &error)
 {
     mcast::ipc::PipeListener listener(
@@ -407,6 +340,17 @@ bool protocolPlaybackServer(
         return false;
 
     std::cout << "PLAYBACK_SNAPSHOT_SERVED\n";
+    std::atomic_bool controlLost{false};
+    std::jthread controlMonitor([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            std::string monitorError;
+            if (dispatcher.waitForTermination(200ms, monitorError)) {
+                controlLost = true;
+                connection->close();
+                return;
+            }
+        }
+    });
     // Keep the PlaybackPipe alive for the Ui lifetime. The current skeleton
     // does not consume the new playback command/state stream yet, but must not
     // tear the connection down immediately after the legacy snapshot.
@@ -414,6 +358,10 @@ bool protocolPlaybackServer(
         Message trailing;
         if (!connection->readMessage(trailing, 24h, error))
             break;
+    }
+    if (controlLost.load()) {
+        error = "ControlPipe was lost while PlaybackPipe was active";
+        return false;
     }
     return true;
 }
@@ -591,21 +539,28 @@ int runClient(const ClientOptions &options)
     }
 
     if (options.role == ProcessRole::Protocol) {
+        auto dispatcher = std::make_unique<
+            mcast::ipc::ProtocolControlDispatcher>(
+            std::move(control), 2);
+        if (!dispatcher->start(error)) {
+            std::cerr << "control dispatcher failed: "
+                      << error << '\n';
+            return 3;
+        }
+
         std::atomic_bool receivingEnabled = true;
         ProtocolCommandServer commandServer(options, receivingEnabled);
         std::atomic_bool heartbeatFailed = false;
         std::string heartbeatError;
+        std::mutex heartbeatMutex;
         std::jthread heartbeat([&](std::stop_token stop) {
-            std::uint64_t messageId = 1;
             while (!stop.stop_requested()) {
-                Message heartbeatMessage;
-                heartbeatMessage.header.type = MessageType::Heartbeat;
-                heartbeatMessage.header.source = ProcessRole::Protocol;
-                heartbeatMessage.header.destination = ProcessRole::Shell;
-                heartbeatMessage.header.messageId = messageId++;
-                heartbeatMessage.header.sessionId = 1;
-                if (!control->writeMessage(
-                        heartbeatMessage, 2000ms, heartbeatError)) {
+                std::string sendError;
+                if (!dispatcher->sendHeartbeat(sendError)) {
+                    {
+                        std::lock_guard lock(heartbeatMutex);
+                        heartbeatError = std::move(sendError);
+                    }
                     heartbeatFailed = true;
                     return;
                 }
@@ -620,36 +575,38 @@ int runClient(const ClientOptions &options)
         std::uint32_t round = 0;
         while (true) {
             if (waitForUiOpenBeforeRound
-                && (!sendUiOpenReady(
-                        *control, 1000 + round, error)
-                    || !waitForUiOpenCommand(*control, error))) {
+                && (!dispatcher->sendUiOpenReady(error)
+                    || !dispatcher->waitForUiOpenRequest(
+                        24h, error))) {
                 std::cerr << "UiOpenRequest wait failed: "
                           << error << '\n';
                 return 3;
             }
             if (heartbeatFailed) {
+                std::lock_guard lock(heartbeatMutex);
                 error = heartbeatError.empty()
                     ? "Protocol heartbeat failed" : heartbeatError;
                 std::cerr << error << '\n';
                 return 3;
             }
 
-            mcast::ipc::PeerIdentityGrant uiGrant;
-            bool started = false;
-            if (!requestUi(
-                    *control, uiGrant, 2 + round, started, error)) {
+            mcast::ipc::UiActivationOutcome activation;
+            if (!dispatcher->requestUiActivation(
+                    activation, 3s, error)) {
                 std::cerr << "UI activation failed: " << error << '\n';
                 return 3;
             }
-            if (started
-                && !protocolPlaybackServer(options, uiGrant, error)) {
+            if (activation.started
+                && (!activation.grant
+                    || !protocolPlaybackServer(
+                        options, *activation.grant, *dispatcher, error))) {
                 std::cerr << "playback server failed: " << error << '\n';
                 return 4;
             }
             if (persistent) {
-                if (started
+                if (activation.started
                     && !waitForUiExit(
-                        uiGrant.processId, 24h, error)) {
+                        activation.grant->processId, 24h, error)) {
                     std::cerr << "Ui lifetime wait failed: "
                               << error << '\n';
                     return 5;
@@ -659,9 +616,9 @@ int runClient(const ClientOptions &options)
                 continue;
             }
             if (round + 1 < options.uiRequestRounds) {
-                if (!started
+                if (!activation.started
                     || !waitForUiExit(
-                        uiGrant.processId, 5000ms, error)) {
+                        activation.grant->processId, 5000ms, error)) {
                     std::cerr << "Ui round barrier failed: "
                               << error << '\n';
                     return 5;
@@ -670,6 +627,7 @@ int runClient(const ClientOptions &options)
             if (++round >= options.uiRequestRounds)
                 break;
         }
+        dispatcher->stop();
     } else if (options.role == ProcessRole::Ui) {
         Message grant;
         if (!control->readMessage(grant, 3000ms, error)) {

@@ -15,10 +15,18 @@ HTTP socket 线程
     -> async handler 返回 Completed 或 Pending
 
 Protocol 单一仲裁执行上下文
+  ProtocolControlDispatcher
+    -> 唯一读取 ControlPipe
+    -> 统一分配消息 ID 和等待 activation/confirmation
+
   DlnaClaimAdapter
     -> 判断动作是否明确要求开始投送
     -> 保存 Stop/SetURI/Play 的 DLNA 跨请求事务
     -> 唯一调用 CastClaimCoordinator
+
+  DlnaClaimRuntime
+    -> 保存 HTTP requestId 与 DLNA 事务的关联
+    -> 等媒体打开完成后才放行 SetURI/Play
 
 DLNA 协议执行层
   SoapRouter / DlnaSession
@@ -27,6 +35,10 @@ DLNA 协议执行层
 
 `DlnaClaimAdapter` 不解析 SOAP，不持有 socket，也不直接发送 IPC。它只接受已经
 抽象后的设备身份、来源地址和 `MediaRequest`。
+
+`DlnaClaimRuntime` 同样不拥有 socket。它返回 HTTP completion、media execution
+和 confirmation prompt，由 Protocol 组合根分别交给 `HttpServer`、播放层和
+ControlPipe。
 
 ## 2. HTTP 请求与完成
 
@@ -81,6 +93,44 @@ handler 返回 `Pending` 后，连接保持。确认线程或媒体准备线程�
   `SetAVTransportURI` 的成功响应写回。
 
 真实控制点能等待多久仍未实测，因此 60 秒只是保护值，不是目标等待时长。
+
+## 3.1 ControlPipe 单 reader
+
+`ProtocolControlDispatcher` 在 Protocol Hello 握手完成后接管整个
+`PipeConnection`。此后它是该连接唯一允许调用 `readMessage()` 的组件。
+
+- heartbeat、`UiOpenReady`、UI 激活和确认请求共用一个非零消息 ID 序列；
+- 握手已使用 message ID 1，因此 dispatcher 从 2 开始；
+- UI activation 分为 `AwaitingDecision / AwaitingGrant / Done`；
+- `UiActivateDecision` 按 correlation ID 匹配，`PeerIdentityGrant` 按
+  activation ID 匹配；
+- cast confirmation 按 correlation ID 匹配，并再次校验 protocol 和 claimId；
+- 已完成的响应不能被迟到或冲突的重复消息翻转；
+- `UiOpenRequest` 只增加可等待事件，不在 reader 线程执行外部业务或 callback；
+- read/write 失败统一进入一次性的 terminal failure，清空所有等待并唤醒
+  `waitForTermination()`；
+- terminal 后 `start()` 不会假装成功。
+
+控制通道断开时，非 reader 的 Protocol 串行上下文必须调用
+`DlnaClaimRuntime::controlLost()`，拒绝当前确认候选和正在准备媒体的全部 HTTP。
+不能依赖日志 callback 代替这次语义通知。
+
+## 3.2 HTTP requestId 与媒体打开
+
+`DlnaClaimRuntime` 维护两层关联：
+
+- 待确认候选：保存 SetURI 和 Play 的 HTTP requestId；
+- 正在打开的媒体：保存 operation ID、session、epoch、mediaGeneration，以及
+  SetURI/Play requestId。
+
+行为：
+
+- 首次投送即使不需要确认，HTTP 也等到 `mediaReady(operationId, true)` 后才成功；
+- 慢 Open 期间到达的 Play 附着到 operation；
+- 同一 owner 的新媒体会拒绝旧 operation 的 HTTP，并创建新的 operation；
+- operation 完成后迟到的 `mediaReady` 返回 `staleOperation`；
+- sessionReady 失败时 HTTP 必须失败，不能因为 mpv 已经完成打开就报告成功；
+- ControlPipe 丢失时，确认候选和正在准备的媒体都 fail-closed。
 
 ## 4. 明确 Claim
 
@@ -156,12 +206,16 @@ latest MediaRequest
 - `HttpRequest` 来源地址和 requestId；
 - `DlnaClaimAdapter` 首投、同一 owner 换片、跨来源确认、拒绝、超时、重复决定、
   禁用抢占和候选期间命令隔离；
-- HTTP 专项与 DLNA Claim 专项测试。
+- `ProtocolControlDispatcher`：单 reader、activation/grant、
+  confirmation、terminal failure、重复响应隔离和真实命名管道测试；
+- `DlnaClaimRuntime`：HTTP requestId 生命周期、慢 Open 替换、媒体就绪后完成
+  SetURI/Play、controlLost 批量失败；
+- Protocol 骨架已经使用 dispatcher 完成 heartbeat、UI Open、activation 和
+  PlaybackPipe 握手；
+- HTTP、DLNA Claim、dispatcher、runtime 和进程级测试。
 
 尚未完成：
 
-- DLNA runtime 把 HTTP requestId 和 attached `Play` requestId 写入待确认事务；
-- Protocol 在 ControlPipe 上发送 `CastConfirmationRequest` 并处理 decision；
 - ControlPipe 断开时批量 fail-closed 所有待确认 HTTP；
 - `SoapRouter::handle()` 或外层 adapter 返回异步 `Pending`；
 - 确认后继续 Open，并把成功/失败映射为 SOAP 响应；

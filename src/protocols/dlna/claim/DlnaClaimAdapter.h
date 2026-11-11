@@ -80,6 +80,12 @@ public:
     DlnaClaimResolution cancelAllPending(cast::CastTime now);
     DlnaClaimTick tick(cast::CastTime now);
 
+    bool sessionReady(std::uint64_t sessionId);
+    bool sessionEnded(
+        std::uint64_t sessionId, cast::EndReason reason);
+    bool sessionRetired(std::uint64_t sessionId);
+    const cast::ArbitrationSnapshot &snapshot() const noexcept;
+
     bool ownsPeer(const cast::PeerIdentity &peer) const;
     // These two are projection queries. Call tick(now) before using them as a
     // deadline-sensitive source of truth.

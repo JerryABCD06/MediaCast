@@ -26,6 +26,8 @@ add_library(mcast_ipc STATIC
     src/ipc/IpcProtocol.cpp
     src/ipc/NamedPipe.h
     src/ipc/NamedPipe.cpp
+    src/ipc/ProtocolControlDispatcher.h
+    src/ipc/ProtocolControlDispatcher.cpp
     src/ipc/Messages.h
     src/ipc/Messages.cpp
     src/ipc/PlaybackCodec.h
@@ -91,6 +93,8 @@ target_link_libraries(mcast_dlna_net PUBLIC mcast_net mcast_dlna_core)
 add_library(mcast_dlna_protocol STATIC
     src/protocols/dlna/claim/DlnaClaimAdapter.h
     src/protocols/dlna/claim/DlnaClaimAdapter.cpp
+    src/protocols/dlna/claim/DlnaClaimRuntime.h
+    src/protocols/dlna/claim/DlnaClaimRuntime.cpp
     src/protocols/dlna/session/DlnaSession.h
     src/protocols/dlna/session/DlnaSession.cpp
     src/protocols/dlna/soap/SoapRouter.h
@@ -159,6 +163,17 @@ if(BUILD_TESTING)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_protocol_control_dispatcher_tests
+        tests/protocol_control_dispatcher_tests.cpp)
+    target_link_libraries(
+        mcast_protocol_control_dispatcher_tests PRIVATE mcast_ipc)
+    add_test(
+        NAME mcast_protocol_control_dispatcher_tests
+        COMMAND mcast_protocol_control_dispatcher_tests)
+    set_tests_properties(
+        mcast_protocol_control_dispatcher_tests PROPERTIES TIMEOUT 15)
 
     add_executable(
         mcast_net_tests
@@ -311,6 +326,17 @@ if(BUILD_TESTING)
         COMMAND mcast_dlna_claim_adapter_tests)
     set_tests_properties(
         mcast_dlna_claim_adapter_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_dlna_claim_runtime_tests
+        tests/dlna_claim_runtime_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_claim_runtime_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_claim_runtime_tests
+        COMMAND mcast_dlna_claim_runtime_tests)
+    set_tests_properties(
+        mcast_dlna_claim_runtime_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_app_settings_tests
