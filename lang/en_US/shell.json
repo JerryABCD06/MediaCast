@@ -1,0 +1,8 @@
+{
+  "tray_open_main": "Open main window",
+  "tray_pause_receiving": "Pause receiving",
+  "tray_resume_receiving": "Resume receiving",
+  "tray_quit": "Quit",
+  "tray_tooltip_receiving": "Media Cast",
+  "tray_tooltip_paused": "Media Cast (receiving paused)"
+}

@@ -260,6 +260,15 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
             *m_control, ConnectionChannel::Control, 1, options.nonce, error))
         return false;
 
+    Message catalogMessage;
+    if (!m_control->readMessage(catalogMessage, 3000ms, error))
+        return false;
+    const auto catalogJson =
+        decodeLanguageCatalogMessage(catalogMessage, error);
+    if (!catalogJson)
+        return false;
+    m_languageCatalogJson = *catalogJson;
+
     Message settingsMessage;
     if (!m_control->readMessage(settingsMessage, 3000ms, error))
         return false;
@@ -267,7 +276,8 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
         decodeSettingsSnapshotMessage(settingsMessage, error);
     if (!settingsJson)
         return false;
-    m_settingsJson = *settingsJson;
+    m_settingsJson = settingsJson->json;
+    m_resolvedLanguage = settingsJson->resolvedLanguage;
     m_settingsVersion = settingsMessage.header.stateVersion;
 
     Message grantMessage;

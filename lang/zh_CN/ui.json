@@ -1,15 +1,5 @@
 {
-  "meta": {
-    "name": "简体中文",
-    "system": ["zh_CN", "zh_Hans_CN", "zh_SG", "zh_Hans_SG"]
-  },
-
   "strings": {
-    "tray_open_main": "打开主界面",
-    "tray_pause": "暂停接收投送",
-    "tray_resume": "恢复接收投送",
-    "tray_quit": "退出",
-
     "media_kind_video": "视频",
     "media_kind_audio": "音频",
     "media_kind_image": "图片",

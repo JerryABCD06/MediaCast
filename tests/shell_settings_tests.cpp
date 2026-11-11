@@ -72,7 +72,6 @@ int main()
     if (!customLoaded)
         std::cerr << "custom load error: " << error << '\n';
     check(customLoaded, "custom settings load");
-    check(custom.chineseUi(), "zh_CN selects Chinese tray");
     check(custom.acceptNewCast(), "custom newcast loaded");
     check(!custom.broadcast(), "custom broadcast loaded");
     custom.setAcceptNewCast(false);
@@ -91,7 +90,8 @@ int main()
     error.clear();
     check(reloaded.load(error), "reloaded settings load");
     check(!reloaded.acceptNewCast(), "main receiving state survives reload");
-    check(reloaded.chineseUi(), "main language still loads");
+    check(reloaded.language() == "zh_CN",
+          "main language still loads");
 
     {
         std::ofstream file(statePath, std::ios::binary | std::ios::trunc);

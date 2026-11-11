@@ -8,9 +8,9 @@
 
 Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 
-当前正在把单进程 `MCast.exe` 迁向 `MCast.Shell.exe / MCast.Protocol.exe /
-MCast.Ui.exe` 三进程架构。生产入口切换前旧单体仍保留作回退，新的 shell 入口
-已覆盖托盘、启动屏幕、DLNA Protocol 和按需 MainWindow。
+生产入口是 `MCast.Shell.exe / MCast.Protocol.exe / MCast.Ui.exe` 三进程架构，
+已覆盖原生托盘、启动屏幕、DLNA Protocol、按需 MainWindow 和语言包。旧的
+单进程 `MCast.exe` 只保留作开发回退，不进入发布包。
 
 - 接收 **DLNA / UPnP AV** 投送（用 vivo 相册、BubbleUPnP 实测过）
 - 播放后端是 **libmpv**，画面用 render API 合进 QML 界面

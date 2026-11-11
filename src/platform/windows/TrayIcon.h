@@ -11,20 +11,33 @@
 
 namespace mcast::platform {
 
+struct TrayTexts {
+    std::wstring openMain;
+    std::wstring pauseReceiving;
+    std::wstring resumeReceiving;
+    std::wstring quit;
+    std::wstring tooltipReceiving;
+    std::wstring tooltipPaused;
+};
+
 class NativeTrayIcon
 {
 public:
     using Action = std::function<void()>;
 
-    NativeTrayIcon(Action openUi, Action toggleReceiving, Action quit);
+    NativeTrayIcon(
+        Action openUi, Action toggleReceiving, Action quit,
+        Action themeChanged = {});
     ~NativeTrayIcon();
 
     NativeTrayIcon(const NativeTrayIcon &) = delete;
     NativeTrayIcon &operator=(const NativeTrayIcon &) = delete;
 
     bool initialize(std::string &error);
-    void setChinese(bool chinese);
-    void requestChinese(bool chinese);
+    void setTexts(const TrayTexts &texts);
+    void requestTexts(TrayTexts texts);
+    void setDark(bool dark);
+    void requestDark(bool dark);
     void setReceivingEnabled(bool enabled);
     void requestReceivingEnabled(bool enabled);
     void pumpMessages();
@@ -39,11 +52,12 @@ private:
     void activateOpenUi();
     bool addNotificationIcon(std::string &error);
     void removeNotificationIcon();
-    bool useChinese() const;
+    void applyDarkMode();
 
     Action m_openUi;
     Action m_toggleReceiving;
     Action m_quit;
+    Action m_themeChanged;
     HWND m_window = nullptr;
     HICON m_icon = nullptr;
     HMENU m_menu = nullptr;
@@ -51,7 +65,8 @@ private:
     std::atomic_bool m_receivingEnabled{true};
     bool m_iconAdded = false;
     ULONGLONG m_lastOpenTick = 0;
-    bool m_chinese = false;
+    TrayTexts m_texts;
+    bool m_dark = false;
 };
 
 } // namespace mcast::platform

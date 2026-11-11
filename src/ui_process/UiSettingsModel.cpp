@@ -6,6 +6,8 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 
+#include <algorithm>
+
 namespace mcast::ui_process {
 
 UiSettingsModel::UiSettingsModel(QObject *parent)
@@ -184,6 +186,22 @@ bool UiSettingsModel::applySnapshot(
     return true;
 }
 
+void UiSettingsModel::acceptPendingPatch(std::uint64_t version)
+{
+    const bool oldMica = mica();
+    const bool oldAccept = acceptNewCast();
+    const bool oldBroadcast = broadcast();
+    const int oldInterval = broadcastIntervalMs();
+    mergePatch(m_authoritativeRoot, m_inFlightPatch);
+    m_inFlightPatch = {};
+    m_version = std::max(m_version, version);
+    m_root = m_authoritativeRoot;
+    mergePatch(m_root, m_patch);
+    if (!m_patch.isEmpty())
+        m_patchTimer.start();
+    emitChanges(oldMica, oldAccept, oldBroadcast, oldInterval);
+}
+
 void UiSettingsModel::rejectPendingPatch()
 {
     m_patchTimer.stop();
@@ -191,6 +209,7 @@ void UiSettingsModel::rejectPendingPatch()
     const bool oldAccept = acceptNewCast();
     const bool oldBroadcast = broadcast();
     const int oldInterval = broadcastIntervalMs();
+    m_inFlightPatch = {};
     m_root = m_authoritativeRoot;
     mergePatch(m_root, m_patch);
     if (!m_patch.isEmpty())
@@ -260,8 +279,13 @@ void UiSettingsModel::flushPatch()
 {
     if (m_patch.isEmpty())
         return;
+    if (!m_inFlightPatch.isEmpty()) {
+        m_patchTimer.start();
+        return;
+    }
     const QByteArray json =
         QJsonDocument(m_patch).toJson(QJsonDocument::Compact);
+    m_inFlightPatch = m_patch;
     m_patch = {};
     emit settingsPatchReady(json);
 }

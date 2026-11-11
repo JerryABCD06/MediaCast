@@ -1239,6 +1239,14 @@ int runClient(const ClientOptions &options)
         }
         dispatcher->stop();
     } else if (options.role == ProcessRole::Ui) {
+        Message languageCatalog;
+        if (!control->readMessage(languageCatalog, 3000ms, error)
+            || !mcast::ipc::decodeLanguageCatalogMessage(
+                languageCatalog, error)) {
+            std::cerr << "language catalog read failed: "
+                      << error << '\n';
+            return 4;
+        }
         Message settingsSnapshot;
         if (!control->readMessage(settingsSnapshot, 3000ms, error)
             || !mcast::ipc::decodeSettingsSnapshotMessage(

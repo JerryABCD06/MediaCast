@@ -34,9 +34,8 @@ class Tr;
 //
 // ── 语言这一项和 Tr 怎么分工 ──────────────────────────────────────────────
 //
-//   这里存的是**用户选的是哪个**（写进设置文件里那个 ui.language），
-//   **有哪些语言、哪个键对应哪句话、系统语言该对到哪个**在 Tr 里（它才知道
-//   lang 目录里有什么）。所以构造时要给它一个 Tr，切语言时由这儿去换表。
+//   这里存的是用户选择的语言；实际使用哪个语言由 Shell 解析。
+//   Tr 只保存 Shell 下发的语言目录、读取当前 ui.json，并完成键值查找。
 class UiState : public QObject
 {
     Q_OBJECT
@@ -84,9 +83,12 @@ public:
     void setAccentMode(int mode);
     void setLanguage(const QString &code);
     bool applySettingsJson(
-        const QByteArray &json, QString *error = nullptr);
+        const QByteArray &json, const QString &resolvedLanguage,
+        QString *error = nullptr);
     void applyAppearance(
-        int themeMode, int accentMode, const QString &language);
+        int themeMode, int accentMode,
+        const QString &requestedLanguage,
+        const QString &resolvedLanguage);
 
 signals:
     void themeModeChanged();
@@ -105,7 +107,7 @@ private:
     int m_accentMode = WindowsBlue;
     QString m_language;   // 空 = 跟随系统
 
-    /** 我们自己那套（查的是 lang/*.json）。**只借不拥有** —— 它归 main()。 */
+    /** 我们自己的语言表（生产 Ui 读取 Shell 指定的 ui.json）。只借不拥有。 */
     Tr *m_tr = nullptr;
 
     QTranslator *m_qtTranslator = nullptr;   // Qt 自带原生控件的 qtbase_*.qm

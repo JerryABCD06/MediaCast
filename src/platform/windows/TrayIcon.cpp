@@ -4,7 +4,9 @@
 #include "platform/windows/TrayIcon.h"
 
 #include <windowsx.h>
+#include <winternl.h>
 
+#include <memory>
 #include <utility>
 
 namespace mcast::platform {
@@ -13,21 +15,111 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"MCast.NativeTray";
 constexpr UINT kTrayMessage = WM_APP + 0x41;
 constexpr UINT kReceivingUpdateMessage = WM_APP + 0x42;
-constexpr UINT kChineseUpdateMessage = WM_APP + 0x43;
+constexpr UINT kTextsUpdateMessage = WM_APP + 0x43;
+constexpr UINT kDarkUpdateMessage = WM_APP + 0x44;
 constexpr UINT kOpenMainCommand = 1;
 constexpr UINT kToggleReceivingCommand = 2;
 constexpr UINT kQuitCommand = 3;
 
+enum PreferredAppMode : int {
+    DefaultMode = 0,
+    AllowDarkMode = 1,
+    ForceDarkMode = 2,
+    ForceLightMode = 3,
+};
+
+using SetPreferredAppModeFn = int(WINAPI *)(int);
+using AllowDarkModeForWindowFn = bool(WINAPI *)(HWND, bool);
+using FlushMenuThemesFn = void(WINAPI *)();
+
+struct DarkModeApi {
+    SetPreferredAppModeFn setPreferredAppMode = nullptr;
+    AllowDarkModeForWindowFn allowDarkModeForWindow = nullptr;
+    FlushMenuThemesFn flushMenuThemes = nullptr;
+};
+
+bool knownDarkModeOrdinalRange()
+{
+    using RtlGetVersionFn = LONG(WINAPI *)(PRTL_OSVERSIONINFOW);
+    const HMODULE module = GetModuleHandleW(L"ntdll.dll");
+    if (!module)
+        return false;
+    const auto getVersion = reinterpret_cast<RtlGetVersionFn>(
+        GetProcAddress(module, "RtlGetVersion"));
+    if (!getVersion)
+        return false;
+    RTL_OSVERSIONINFOW version{};
+    version.dwOSVersionInfoSize = sizeof(version);
+    if (getVersion(&version) != 0)
+        return false;
+    return version.dwBuildNumber >= 17763
+        && version.dwBuildNumber <= 26100;
+}
+
+DarkModeApi darkModeApi()
+{
+    static const DarkModeApi api = [] {
+        DarkModeApi result;
+        HMODULE module = LoadLibraryW(L"uxtheme.dll");
+        if (!module)
+            return result;
+        result.setPreferredAppMode =
+            reinterpret_cast<SetPreferredAppModeFn>(
+                GetProcAddress(module, "SetPreferredAppMode"));
+        const bool useOrdinals = knownDarkModeOrdinalRange();
+        if (!result.setPreferredAppMode && useOrdinals) {
+            result.setPreferredAppMode =
+                reinterpret_cast<SetPreferredAppModeFn>(
+                    GetProcAddress(module, MAKEINTRESOURCEA(135)));
+        }
+        result.allowDarkModeForWindow =
+            reinterpret_cast<AllowDarkModeForWindowFn>(
+                GetProcAddress(module, "AllowDarkModeForWindow"));
+        if (!result.allowDarkModeForWindow && useOrdinals) {
+            result.allowDarkModeForWindow =
+                reinterpret_cast<AllowDarkModeForWindowFn>(
+                    GetProcAddress(module, MAKEINTRESOURCEA(133)));
+        }
+        result.flushMenuThemes =
+            reinterpret_cast<FlushMenuThemesFn>(
+                GetProcAddress(module, "FlushMenuThemes"));
+        if (!result.flushMenuThemes && useOrdinals) {
+            result.flushMenuThemes =
+                reinterpret_cast<FlushMenuThemesFn>(
+                    GetProcAddress(module, MAKEINTRESOURCEA(136)));
+        }
+        return result;
+    }();
+    return api;
+}
+
+bool highContrastEnabled()
+{
+    HIGHCONTRASTW contrast{sizeof(contrast)};
+    return SystemParametersInfoW(
+               SPI_GETHIGHCONTRAST, sizeof(contrast),
+               &contrast, 0)
+        && (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+}
+
 } // namespace
 
 NativeTrayIcon::NativeTrayIcon(
-    Action openUi, Action toggleReceiving, Action quit)
+    Action openUi, Action toggleReceiving, Action quit,
+    Action themeChanged)
     : m_openUi(std::move(openUi))
     , m_toggleReceiving(std::move(toggleReceiving))
     , m_quit(std::move(quit))
+    , m_themeChanged(std::move(themeChanged))
 {
-    m_chinese =
-        PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    m_texts = {
+        L"Open main window",
+        L"Pause receiving",
+        L"Resume receiving",
+        L"Quit",
+        L"Media Cast",
+        L"Media Cast (receiving paused)",
+    };
 }
 
 NativeTrayIcon::~NativeTrayIcon()
@@ -72,27 +164,47 @@ bool NativeTrayIcon::initialize(std::string &error)
     m_taskbarCreatedMessage =
         RegisterWindowMessageW(L"TaskbarCreated");
     rebuildMenu();
+    applyDarkMode();
     return addNotificationIcon(error);
 }
 
-void NativeTrayIcon::setChinese(bool chinese)
+void NativeTrayIcon::setTexts(const TrayTexts &texts)
 {
-    if (m_chinese == chinese)
-        return;
-    m_chinese = chinese;
+    m_texts = texts;
     rebuildMenu();
     setReceivingEnabled(m_receivingEnabled);
 }
 
-void NativeTrayIcon::requestChinese(bool chinese)
+void NativeTrayIcon::requestTexts(TrayTexts texts)
+{
+    if (m_window) {
+        auto *payload = new TrayTexts(std::move(texts));
+        if (!PostMessageW(
+                m_window, kTextsUpdateMessage, 0,
+                reinterpret_cast<LPARAM>(payload))) {
+            delete payload;
+        }
+        return;
+    }
+    setTexts(texts);
+}
+
+void NativeTrayIcon::setDark(bool dark)
+{
+    m_dark = dark;
+    if (m_window)
+        applyDarkMode();
+}
+
+void NativeTrayIcon::requestDark(bool dark)
 {
     if (m_window) {
         PostMessageW(
-            m_window, kChineseUpdateMessage, 0,
-            chinese ? 1 : 0);
+            m_window, kDarkUpdateMessage, 0,
+            dark ? 1 : 0);
         return;
     }
-    setChinese(chinese);
+    m_dark = dark;
 }
 
 void NativeTrayIcon::setReceivingEnabled(bool enabled)
@@ -106,9 +218,8 @@ void NativeTrayIcon::setReceivingEnabled(bool enabled)
     data.hWnd = m_window;
     data.uID = 1;
     data.uFlags = NIF_TIP;
-    const std::wstring tooltip = useChinese()
-        ? (enabled ? L"Media Cast" : L"Media Cast（已暂停接收投送）")
-        : (enabled ? L"Media Cast" : L"Media Cast (receiving paused)");
+    const std::wstring &tooltip = enabled
+        ? m_texts.tooltipReceiving : m_texts.tooltipPaused;
     wcsncpy_s(data.szTip, tooltip.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &data);
 }
@@ -176,8 +287,19 @@ LRESULT NativeTrayIcon::handleMessage(
     } else if (message == kReceivingUpdateMessage) {
         setReceivingEnabled(lParam != 0);
         return 0;
-    } else if (message == kChineseUpdateMessage) {
-        setChinese(lParam != 0);
+    } else if (message == kTextsUpdateMessage) {
+        std::unique_ptr<TrayTexts> texts(
+            reinterpret_cast<TrayTexts *>(lParam));
+        if (texts)
+            setTexts(*texts);
+        return 0;
+    } else if (message == kDarkUpdateMessage) {
+        setDark(lParam != 0);
+        return 0;
+    } else if (message == WM_SETTINGCHANGE || message == WM_THEMECHANGED) {
+        if (m_themeChanged)
+            m_themeChanged();
+        applyDarkMode();
         return 0;
     } else if (message == WM_COMMAND) {
         switch (LOWORD(wParam)) {
@@ -216,6 +338,7 @@ void NativeTrayIcon::showContextMenu()
     POINT cursor{};
     GetCursorPos(&cursor);
     SetForegroundWindow(m_window);
+    applyDarkMode();
     const UINT command = TrackPopupMenuEx(
         m_menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
         cursor.x, cursor.y, m_window, nullptr);
@@ -231,18 +354,19 @@ void NativeTrayIcon::rebuildMenu()
     m_menu = CreatePopupMenu();
     if (!m_menu)
         return;
-    const bool chinese = useChinese();
     AppendMenuW(
         m_menu, MF_STRING, kOpenMainCommand,
-        chinese ? L"打开主界面" : L"Open main window");
+        m_texts.openMain.c_str());
     AppendMenuW(m_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(
         m_menu, MF_STRING, kToggleReceivingCommand,
-        chinese
-            ? (m_receivingEnabled ? L"暂停接收投送" : L"恢复接收投送")
-            : (m_receivingEnabled ? L"Pause receiving" : L"Resume receiving"));
+        (m_receivingEnabled
+             ? m_texts.pauseReceiving
+             : m_texts.resumeReceiving).c_str());
     AppendMenuW(m_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m_menu, MF_STRING, kQuitCommand, chinese ? L"退出" : L"Quit");
+    AppendMenuW(
+        m_menu, MF_STRING, kQuitCommand, m_texts.quit.c_str());
+    SetMenuDefaultItem(m_menu, kOpenMainCommand, FALSE);
 }
 
 bool NativeTrayIcon::addNotificationIcon(std::string &error)
@@ -256,7 +380,8 @@ bool NativeTrayIcon::addNotificationIcon(std::string &error)
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = kTrayMessage;
     data.hIcon = m_icon;
-    wcsncpy_s(data.szTip, L"Media Cast", _TRUNCATE);
+    wcsncpy_s(
+        data.szTip, m_texts.tooltipReceiving.c_str(), _TRUNCATE);
     if (!Shell_NotifyIconW(
             m_iconAdded ? NIM_MODIFY : NIM_ADD, &data)) {
         error = "Shell_NotifyIconW failed: "
@@ -282,9 +407,21 @@ void NativeTrayIcon::removeNotificationIcon()
     m_iconAdded = false;
 }
 
-bool NativeTrayIcon::useChinese() const
+void NativeTrayIcon::applyDarkMode()
 {
-    return m_chinese;
+    const bool highContrast = highContrastEnabled();
+    const bool useDark = m_dark && !highContrast;
+    const DarkModeApi api = darkModeApi();
+    if (api.setPreferredAppMode) {
+        api.setPreferredAppMode(
+            highContrast
+                ? DefaultMode
+                : (useDark ? ForceDarkMode : ForceLightMode));
+    }
+    if (m_window && api.allowDarkModeForWindow)
+        api.allowDarkModeForWindow(m_window, useDark);
+    if (api.flushMenuThemes)
+        api.flushMenuThemes();
 }
 
 } // namespace mcast::platform

@@ -216,8 +216,9 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 continue;
             }
             emit settingsReceived(
-                QByteArray::fromStdString(*json),
-                message.header.stateVersion);
+                QByteArray::fromStdString(json->json),
+                message.header.stateVersion,
+                QString::fromStdString(json->resolvedLanguage));
         } else if (
             message.header.type
             == ipc::MessageType::SettingsUpdateResult) {
@@ -234,11 +235,17 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 == ipc::SettingsUpdateStatus::Rejected) {
                 emit settingsUpdateRejected(
                     QString::fromStdString(result->error));
-            } else if (result->status
-                       == ipc::SettingsUpdateStatus::
-                           SavedRuntimeFailed) {
-                emit settingsRuntimeApplyFailed(
-                    QString::fromStdString(result->error));
+            } else {
+                if (result->status
+                    == ipc::SettingsUpdateStatus::
+                        SavedRuntimeFailed) {
+                    emit settingsRuntimeApplyFailed(
+                        QString::fromStdString(result->error));
+                }
+                emit settingsCommitted(
+                    message.header.stateVersion,
+                    QString::fromStdString(
+                        result->resolvedLanguage));
             }
         }
     }

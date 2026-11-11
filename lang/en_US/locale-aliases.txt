@@ -1,0 +1,7 @@
+# Windows GetUserPreferredUILanguages() may return any of these values.
+en-US
+en-GB
+en-AU
+en-CA
+en
+en_US

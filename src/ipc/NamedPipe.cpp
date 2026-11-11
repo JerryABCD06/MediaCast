@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -386,7 +387,12 @@ bool PipeConnection::readMessage(
 
     HeaderDecodeResult decodedHeader = decodeHeader(header);
     if (decodedHeader.status != DecodeStatus::Ok) {
-        error = "invalid IPC header";
+        std::ostringstream bytes;
+        for (const std::uint8_t byte : header) {
+            bytes << std::hex << std::uppercase
+                  << static_cast<unsigned int>(byte) << ' ';
+        }
+        error = "invalid IPC header: " + bytes.str();
         return false;
     }
 

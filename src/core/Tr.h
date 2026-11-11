@@ -13,8 +13,9 @@
 /**
  * Tr —— 语言：**有哪些、现在用哪个、哪个键对应哪句话。**
  *
- * 语言文件是 `lang/*.json`，明文，不编译（见 lang/README.md）。加一种语言只要
- * 往那个目录里丢一个文件，不用改代码、不用重新编译。
+ * 语言包是 `lang/<code>/` 目录，明文，不编译（见 lang/README.md）。
+ * 生产 Ui 不扫描语言目录，只接收 Shell 下发的语言目录，然后读取其中
+ * `ui.json`。
  *
  * ── 为什么它是 QTranslator ───────────────────────────────────────────────
  *
@@ -33,14 +34,10 @@
  *                     （也就是键名）。看到界面上一串 `ui_xxx` 就说明这个键
  *                     漏了 —— 不过缺键在装载语言表的时候已经报过日志了。
  *
- * ── 什么时候读文件 ───────────────────────────────────────────────────────
+ * ── 生产 Ui 和旧单体 Ui 的区别 ───────────────────────────────────────────
  *
- * 启动时扫目录**只读每个文件的 meta**（名字 + 对应哪些系统语言），字符串表当场
- * 丢掉；真正切到某个语言，才把那个文件完整读一遍。所以常驻内存里只有当前语言
- * 那一张表。
- *
- * 注意：JSON 是整篇解析的，"只读开头的几行"这件事格式上做不到 —— 扫的时候
- * 也得把文件整个读进来，只是读完只留 meta 而已。
+ * 生产 Ui 由 Shell 调用 applyCatalog()，语言列表和实际语言都由 Shell 决定。
+ * scan() 和 setLanguage() 只保留给旧单体 MCast.exe 兼容，不进入新三进程链路。
  */
 class Tr : public QTranslator
 {
@@ -53,19 +50,25 @@ public:
     /** 基准语言的代码。它的表跟着 exe 一起编进去，**永远可用**。 */
     static QString baseCode();
 
-    /** 扫 lang/ 目录。启动时调一次就够 —— 运行中加文件要重启才认。 */
+    /** 旧单体兼容：扫 lang/<code>/ 目录。 */
     void scan();
+
+    /** 生产 Ui：应用 Shell 下发的语言目录。 */
+    bool applyCatalog(
+        const QByteArray &json, QString *error = nullptr);
 
     /** 扫到的语言：`[{ code: "zh_CN", name: "简体中文" }, ...]`，按代码排序。 */
     Q_INVOKABLE QVariantList languages() const;
 
-    /**
-     * 用哪个语言。**空串 = 跟随系统。**
-     *
-     * 选的语言文件不存在、或者跟随系统没对上，都回落到基准语言 —— 不是让界面
-     * 空着，也不是显示键名。
-     */
+    /** 旧单体兼容：请求语言，空串表示跟随系统。 */
     void setLanguage(const QString &requested);
+
+    /** 生产 Ui：只记录用户请求，不自行解析 System。 */
+    void setRequestedLanguage(const QString &requested);
+
+    /** 生产 Ui：采用 Shell 已经解析好的实际语言。 */
+    bool setResolvedLanguage(
+        const QString &code, QString *error = nullptr);
 
     /** 用户选的那个（空串 = 跟随系统）。用于写回设置文件。 */
     QString requestedLanguage() const { return m_requested; }
@@ -86,10 +89,12 @@ private:
         QString code;              // 文件名去掉 .json，比如 "zh_CN"
         QString name;              // meta.name，比如 "简体中文"
         QStringList systemNames;   // meta.system，比如 ["zh_CN", "zh_Hans_CN"]
+        QString uiFile;            // 由 Shell 指定的 ui.json（或 :/lang/...）
     };
 
     QString langDir() const;
     bool find(const QString &code, LanguageInfo *out) const;
+    bool loadBaseTable();
 
     /** 系统的语言清单里，有没有对得上的。对不上返回空串。 */
     QString matchSystemLanguage() const;

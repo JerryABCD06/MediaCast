@@ -58,6 +58,8 @@ enum class FieldId : std::uint16_t {
     BroadcastIntervalMs = 90,
     SettingsAccepted = 91,
     SettingsUpdateStatus = 92,
+    LanguageCatalogJson = 93,
+    ResolvedLanguage = 94,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -132,7 +134,13 @@ enum class SettingsUpdateStatus : std::uint8_t {
 
 struct SettingsUpdateResultInfo {
     SettingsUpdateStatus status = SettingsUpdateStatus::Rejected;
+    std::string resolvedLanguage;
     std::string error;
+};
+
+struct SettingsSnapshotInfo {
+    std::string json;
+    std::string resolvedLanguage;
 };
 
 std::optional<std::vector<std::uint8_t>>
@@ -257,9 +265,17 @@ std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
 
 std::optional<Message> makeSettingsSnapshotMessage(
     std::uint64_t messageId, std::uint64_t stateVersion,
-    std::string_view json, std::string &error);
+    std::string_view json, std::string_view resolvedLanguage,
+    std::string &error);
 
-std::optional<std::string> decodeSettingsSnapshotMessage(
+std::optional<SettingsSnapshotInfo> decodeSettingsSnapshotMessage(
+    const Message &message, std::string &error);
+
+std::optional<Message> makeLanguageCatalogMessage(
+    std::uint64_t messageId, std::string_view json,
+    std::string &error);
+
+std::optional<std::string> decodeLanguageCatalogMessage(
     const Message &message, std::string &error);
 
 std::optional<Message> makeUiUpdateSettingsMessage(
@@ -271,6 +287,7 @@ std::optional<std::string> decodeUiUpdateSettingsMessage(
 
 std::optional<Message> makeSettingsUpdateResultMessage(
     std::uint64_t messageId, std::uint64_t correlationId,
+    std::uint64_t stateVersion,
     const SettingsUpdateResultInfo &result, std::string &error);
 
 std::optional<SettingsUpdateResultInfo>

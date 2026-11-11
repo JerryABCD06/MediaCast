@@ -69,8 +69,6 @@ int main(int argc, char *argv[])
 
     Tr tr;
     QObject::connect(&tr, &Tr::logMessage, writeLog);
-    tr.scan();
-    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Tr", &tr);
 
     UiSession uiSession;
     if (!uiSession.connectToPeers(uiSessionOptions, uiSessionError)) {
@@ -78,6 +76,18 @@ int main(int argc, char *argv[])
                      .arg(QString::fromStdString(uiSessionError)));
         return 4;
     }
+    QString languageError;
+    if (!tr.applyCatalog(
+            QByteArray::fromStdString(
+                uiSession.languageCatalogJson()),
+            &languageError)) {
+        writeLog(QStringLiteral("语言目录解析失败：%1")
+                     .arg(languageError));
+        return 5;
+    }
+    qmlRegisterSingletonInstance("MediaCast", 1, 0, "Tr", &tr);
+    QString resolvedLanguage =
+        QString::fromStdString(uiSession.resolvedLanguage());
 
     mcast::ui_process::UiSettingsModel settings;
     QString settingsError;
@@ -92,6 +102,7 @@ int main(int argc, char *argv[])
     UiState uiState(&tr);
     if (!uiState.applySettingsJson(
             QByteArray::fromStdString(uiSession.settingsJson()),
+            resolvedLanguage,
             &settingsError)) {
         writeLog(QStringLiteral("外观快照解析失败：%1")
                      .arg(settingsError));
@@ -126,7 +137,8 @@ int main(int argc, char *argv[])
     const auto applyAuthoritativeSettings = [&] {
         QString error;
         if (!uiState.applySettingsJson(
-                settings.snapshotJson(), &error)) {
+                settings.snapshotJson(),
+                resolvedLanguage, &error)) {
             writeLog(
                 QStringLiteral("外观设置回滚失败：%1").arg(error));
         }
@@ -341,7 +353,8 @@ int main(int argc, char *argv[])
         QObject::connect(
             confirmationBridge.get(),
             &mcast::ui_process::UiConfirmationBridge::settingsReceived,
-            &mainWindow, [&](const QByteArray &json, qulonglong version) {
+            &mainWindow, [&](const QByteArray &json, qulonglong version,
+                              const QString &newResolvedLanguage) {
                 QString error;
                 if (!settings.applySnapshot(
                         json, version, &error)) {
@@ -350,6 +363,7 @@ int main(int argc, char *argv[])
                             .arg(error));
                     return;
                 }
+                resolvedLanguage = newResolvedLanguage;
                 applyAuthoritativeSettings();
             });
         QObject::connect(
@@ -368,6 +382,8 @@ int main(int argc, char *argv[])
             &mcast::ui_process::UiConfirmationBridge::
                 settingsUpdateRejected,
             &mainWindow, [&](const QString &reason) {
+                settings.rejectPendingPatch();
+                applyAuthoritativeSettings();
                 writeLog(
                     QStringLiteral("设置更新被 Shell 拒绝：%1")
                         .arg(reason));
@@ -380,6 +396,26 @@ int main(int argc, char *argv[])
                 writeLog(
                     QStringLiteral("设置已保存但运行态应用失败：%1")
                         .arg(reason));
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::
+                settingsCommitted,
+            &mainWindow, [&](qulonglong version,
+                              const QString &newResolvedLanguage) {
+                settings.acceptPendingPatch(
+                    static_cast<std::uint64_t>(version));
+                if (newResolvedLanguage == resolvedLanguage)
+                    return;
+                resolvedLanguage = newResolvedLanguage;
+                QString error;
+                if (!uiState.applySettingsJson(
+                        settings.snapshotJson(),
+                        resolvedLanguage, &error)) {
+                    writeLog(
+                        QStringLiteral("语言切换失败：%1")
+                            .arg(error));
+                }
             });
         QObject::connect(
             &mainWindow, &MainWindow::castConfirmationResponded,

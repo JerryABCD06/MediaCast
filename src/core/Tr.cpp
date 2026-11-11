@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -17,12 +18,6 @@
 
 namespace {
 
-/**
- * 中划线换成下划线。
- *
- * 同一个语言有两种写法：Windows 和 Qt 说 `zh-Hans-CN`，我们文件里写
- * `zh_Hans_CN`。对的时候一律换成下划线，省得填 meta 的人还得记住该写哪种。
- */
 QString normalizeLocaleName(const QString &name)
 {
     QString out = name;
@@ -30,7 +25,6 @@ QString normalizeLocaleName(const QString &name)
     return out;
 }
 
-/** 读一个 JSON 对象出来。读不动就填 error 并返回 false。 */
 bool readJson(const QString &path, QJsonObject *out, QString *error)
 {
     QFile file(path);
@@ -40,27 +34,27 @@ bool readJson(const QString &path, QJsonObject *out, QString *error)
     }
 
     QJsonParseError parseError{};
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    const QJsonDocument document =
+        QJsonDocument::fromJson(file.readAll(), &parseError);
     if (parseError.error != QJsonParseError::NoError) {
         *error = QStringLiteral("不是合法的 JSON：%1（第 %2 个字符）")
                      .arg(parseError.errorString())
                      .arg(parseError.offset);
         return false;
     }
-    if (!doc.isObject()) {
+    if (!document.isObject()) {
         *error = QStringLiteral("最外层不是一个对象");
         return false;
     }
-
-    *out = doc.object();
+    *out = document.object();
     return true;
 }
 
-/** 从 {"strings": {...}} 里把那堆键值抠出来。 */
 QHash<QString, QString> stringsFrom(const QJsonObject &root)
 {
     QHash<QString, QString> out;
-    const QJsonObject strings = root.value(QStringLiteral("strings")).toObject();
+    const QJsonObject strings =
+        root.value(QStringLiteral("strings")).toObject();
     for (auto it = strings.constBegin(); it != strings.constEnd(); ++it) {
         if (it.value().isString())
             out.insert(it.key(), it.value().toString());
@@ -68,33 +62,34 @@ QHash<QString, QString> stringsFrom(const QJsonObject &root)
     return out;
 }
 
+QString readLocaleAliases(const QString &path, QStringList *aliases)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return file.errorString();
+    while (!file.atEnd()) {
+        QString line = QString::fromUtf8(file.readLine()).trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
+            continue;
+        aliases->append(normalizeLocaleName(line));
+    }
+    return {};
+}
+
 } // namespace
 
 Tr::Tr(QObject *parent)
     : QTranslator(parent)
 {
-    // 基准语言先装上 —— 后面不管怎么折腾，兜底的那份总是在手上。
-    //
-    // 磁盘上有就用磁盘上那份（改英文的错别字不用重新编译），没有就用编进
-    // exe 里的那份。这一条是"整个 lang 目录被删了也不会满屏键名"的保证。
-    const QString onDisk = langDir() + QStringLiteral("/") + baseCode() + QStringLiteral(".json");
-    const QString embedded = QStringLiteral(":/lang/") + baseCode() + QStringLiteral(".json");
-
-    QJsonObject root;
-    QString error;
-    if (readJson(onDisk, &root, &error)) {
-        m_base = stringsFrom(root);
-    } else if (readJson(embedded, &root, &error)) {
-        m_base = stringsFrom(root);
-    } else {
-        log(QStringLiteral("基准语言读不出来（%1）—— 界面上的文字会显示成键名")
-                .arg(error));
+    m_effective = baseCode();
+    if (!loadBaseTable()) {
+        log(QStringLiteral("内置英文语言表读取失败；界面可能显示键名"));
     }
+    m_active = m_base;
 }
 
 Tr::~Tr()
 {
-    // QCoreApplication 存的是裸指针，不摘的话它那儿留着一个已经没了的对象。
     QCoreApplication::removeTranslator(this);
 }
 
@@ -103,14 +98,96 @@ QString Tr::baseCode()
     return QStringLiteral("en_US");
 }
 
-QString Tr::langDir() const
+bool Tr::loadBaseTable()
 {
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/lang");
+    const QString onDisk =
+        langDir() + QStringLiteral("/en_US/ui.json");
+    const QString embedded =
+        QStringLiteral(":/lang/en_US/ui.json");
+
+    QJsonObject root;
+    QString error;
+    if (readJson(onDisk, &root, &error)) {
+        m_base = stringsFrom(root);
+        return true;
+    }
+    if (readJson(embedded, &root, &error)) {
+        m_base = stringsFrom(root);
+        return true;
+    }
+    log(QStringLiteral("基准语言读不出来（%1）").arg(error));
+    return false;
 }
 
-void Tr::log(const QString &text)
+QString Tr::langDir() const
 {
-    emit logMessage(text);
+    return QCoreApplication::applicationDirPath()
+        + QStringLiteral("/lang");
+}
+
+bool Tr::applyCatalog(const QByteArray &json, QString *error)
+{
+    QJsonParseError parseError{};
+    const QJsonDocument document =
+        QJsonDocument::fromJson(json, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        if (error)
+            *error = parseError.errorString();
+        return false;
+    }
+
+    const QJsonObject root = document.object();
+    const QString base =
+        root.value(QStringLiteral("baseLanguage")).toString();
+    const QString resolved =
+        root.value(QStringLiteral("resolvedLanguage")).toString();
+    const QJsonArray packs =
+        root.value(QStringLiteral("languages")).toArray();
+    if (base != baseCode() || resolved.isEmpty() || packs.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("语言目录字段不完整");
+        return false;
+    }
+
+    QList<LanguageInfo> candidate;
+    for (const QJsonValue &value : packs) {
+        const QJsonObject object = value.toObject();
+        LanguageInfo info;
+        info.code = object.value(QStringLiteral("code")).toString();
+        info.name = object.value(QStringLiteral("name")).toString().trimmed();
+        info.uiFile =
+            object.value(QStringLiteral("uiFile")).toString();
+        if (info.code.isEmpty() || info.name.isEmpty()
+            || info.uiFile.isEmpty()) {
+            if (error)
+                *error = QStringLiteral("语言目录里有不完整条目");
+            return false;
+        }
+        candidate.append(info);
+    }
+    if (std::none_of(
+            candidate.cbegin(), candidate.cend(),
+            [](const LanguageInfo &info) {
+                return info.code == QStringLiteral("en_US");
+            })) {
+        if (error)
+            *error = QStringLiteral("Shell 语言目录缺少 en_US");
+        return false;
+    }
+    std::sort(
+        candidate.begin(), candidate.end(),
+        [](const LanguageInfo &left, const LanguageInfo &right) {
+            return left.code < right.code;
+        });
+
+    m_languages = std::move(candidate);
+    log(QStringLiteral("Shell 语言目录：%1 个语言")
+            .arg(m_languages.size()));
+    QString resolveError;
+    if (!setResolvedLanguage(resolved, &resolveError) && error)
+        *error = resolveError;
+    return true;
 }
 
 void Tr::scan()
@@ -121,69 +198,89 @@ void Tr::scan()
     if (!dir.exists()) {
         log(QStringLiteral("语言目录不存在（%1）—— 只有基准语言 %2 可用")
                 .arg(dir.absolutePath(), baseCode()));
-        return;
+    } else {
+        static const QRegularExpression validCode(
+            QStringLiteral("^[A-Za-z][A-Za-z0-9_]*$"));
+        const QStringList directories = dir.entryList(
+            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString &code : directories) {
+            if (!validCode.match(code).hasMatch()) {
+                log(QStringLiteral("跳过语言目录 %1：名称不合法").arg(code));
+                continue;
+            }
+            const QDir packDir(dir.filePath(code));
+            const QString manifestPath =
+                packDir.filePath(QStringLiteral("manifest.json"));
+            const QString uiPath =
+                packDir.filePath(QStringLiteral("ui.json"));
+            const QString shellPath =
+                packDir.filePath(QStringLiteral("shell.json"));
+            const QString aliasesPath =
+                packDir.filePath(QStringLiteral("locale-aliases.txt"));
+            if (!QFileInfo::exists(manifestPath)
+                || !QFileInfo::exists(uiPath)
+                || !QFileInfo::exists(shellPath)
+                || !QFileInfo::exists(aliasesPath)) {
+                log(QStringLiteral("跳过 %1：语言包文件不完整").arg(code));
+                continue;
+            }
+
+            QJsonObject manifest;
+            QString error;
+            if (!readJson(manifestPath, &manifest, &error)) {
+                log(QStringLiteral("跳过 %1：manifest.json：%2")
+                        .arg(code, error));
+                continue;
+            }
+            if (manifest.value(QStringLiteral("type")).toString()
+                    != QStringLiteral("MediaCast.LanguagePack")
+                || manifest.value(QStringLiteral("schemaVersion")).toInt()
+                    != 1
+                || manifest.value(QStringLiteral("language")).toString()
+                    != code) {
+                log(QStringLiteral("跳过 %1：manifest 标识不匹配").arg(code));
+                continue;
+            }
+            const QString name =
+                manifest.value(QStringLiteral("name")).toString().trimmed();
+            QJsonObject unused;
+            if (name.isEmpty() || !readJson(uiPath, &unused, &error)
+                || !readJson(shellPath, &unused, &error)) {
+                log(QStringLiteral("跳过 %1：语言包 JSON 无效").arg(code));
+                continue;
+            }
+
+            LanguageInfo info;
+            info.code = code;
+            info.name = name;
+            info.uiFile = uiPath;
+            const QString aliasError =
+                readLocaleAliases(aliasesPath, &info.systemNames);
+            if (!aliasError.isEmpty()) {
+                log(QStringLiteral("跳过 %1：locale-aliases.txt：%2")
+                        .arg(code, aliasError));
+                continue;
+            }
+            m_languages.append(info);
+        }
     }
 
-    // 按文件名排序，列表的顺序就是稳的。
-    const QStringList files =
-        dir.entryList({ QStringLiteral("*.json") }, QDir::Files, QDir::Name);
-
-    // 文件名只允许英文字母和下划线 —— 这是唯一的格式要求。
-    //
-    // 为什么卡这一条：文件名会被拿来当语言代码用（写进设置文件、和系统语言
-    // 比对），里头混进空格、点、中文的时候，出问题的往往是别的地方而不是这里。
-    static const QRegularExpression validName(QStringLiteral("^[A-Za-z_]+$"));
-
-    for (const QString &fileName : files) {
-        const QString code = fileName.chopped(5);   // 去掉 ".json"
-        if (!validName.match(code).hasMatch()) {
-            log(QStringLiteral("跳过 %1：文件名只能有英文字母和下划线").arg(fileName));
-            continue;
-        }
-
-        QJsonObject root;
-        QString error;
-        if (!readJson(dir.filePath(fileName), &root, &error)) {
-            log(QStringLiteral("跳过 %1：%2").arg(fileName, error));
-            continue;
-        }
-
-        const QJsonObject meta = root.value(QStringLiteral("meta")).toObject();
-        const QString name = meta.value(QStringLiteral("name")).toString().trimmed();
-        if (name.isEmpty()) {
-            log(QStringLiteral("跳过 %1：meta.name 没写").arg(fileName));
-            continue;
-        }
-
-        LanguageInfo info;
-        info.code = code;
-        info.name = name;
-        const QJsonArray systemNames = meta.value(QStringLiteral("system")).toArray();
-        for (const QJsonValue &value : systemNames) {
-            if (value.isString())
-                info.systemNames.append(normalizeLocaleName(value.toString()));
-        }
-
-        m_languages.append(info);
-    }
-
-    std::sort(m_languages.begin(), m_languages.end(),
-              [](const LanguageInfo &a, const LanguageInfo &b) { return a.code < b.code; });
-
-    // 基准语言永远在列表里 —— 哪怕它的文件被删了，它也一直是能用的那个，
-    // 列表里少了它反而说不通。
-    LanguageInfo base;
-    if (!find(baseCode(), &base)) {
+    std::sort(
+        m_languages.begin(), m_languages.end(),
+        [](const LanguageInfo &left, const LanguageInfo &right) {
+            return left.code < right.code;
+        });
+    if (!find(baseCode(), nullptr)) {
+        LanguageInfo base;
         base.code = baseCode();
         base.name = QStringLiteral("English");
+        base.uiFile = QStringLiteral(":/lang/en_US/ui.json");
         m_languages.prepend(base);
     }
 
     QStringList names;
-    names.reserve(m_languages.size());
     for (const LanguageInfo &info : m_languages)
         names.append(info.code);
-
     log(QStringLiteral("语言目录：找到 %1 个语言（%2）")
             .arg(m_languages.size())
             .arg(names.join(QStringLiteral("、"))));
@@ -216,91 +313,105 @@ QVariantList Tr::languages() const
 
 QString Tr::matchSystemLanguage() const
 {
-    // 系统给的是一个**按用户偏好排过序**的候选清单，比如中文机器上是
-    //   zh-Hans-CN | zh-CN | zh-Hans | zh | en-Latn-US | en-US | ...
-    //
-    // 整串都要看，不能只看第一个：第一个是 "zh-Hans-CN"，而文件里多半写的是
-    // "zh_CN" —— 那是清单里的第二个。顺序本身有意义（用户把中文排第一），
-    // 所以按清单顺序找，谁先对上就用谁。
     const QStringList candidates = QLocale::system().uiLanguages();
-
     for (const QString &candidate : candidates) {
         const QString normalized = normalizeLocaleName(candidate);
         for (const LanguageInfo &info : m_languages) {
             for (const QString &systemName : info.systemNames) {
-                if (systemName.compare(normalized, Qt::CaseInsensitive) == 0)
+                if (systemName.compare(
+                        normalized, Qt::CaseInsensitive) == 0)
                     return info.code;
             }
         }
     }
-
-    return QString();
+    return {};
 }
 
 void Tr::setLanguage(const QString &requested)
 {
     m_requested = requested;
-
     QString code = requested;
-
     if (code.isEmpty()) {
-        // 跟随系统。对不上就用基准 —— 这时候说一声，因为用户多半会奇怪
-        // "我系统明明是中文"。原因通常是 meta.system 里没写他那个写法。
         code = matchSystemLanguage();
         if (code.isEmpty()) {
-            log(QStringLiteral("系统语言（%1）在语言目录里没有对应的文件，改用 %2")
-                    .arg(QLocale::system().uiLanguages().join(QStringLiteral("、")),
-                         baseCode()));
+            log(QStringLiteral("系统语言（%1）没有匹配语言包，改用 %2")
+                    .arg(QLocale::system().uiLanguages().join(
+                        QStringLiteral("、")), baseCode()));
         }
     } else if (!find(code, nullptr)) {
-        // 设置文件里选的那个语言，文件没了（被删了、改名了）。
-        log(QStringLiteral("设置里选的语言「%1」在语言目录里找不到，改用 %2")
+        log(QStringLiteral("设置里的语言「%1」不存在，改用 %2")
                 .arg(code, baseCode()));
     }
-
     if (code.isEmpty() || !find(code, nullptr))
         code = baseCode();
+    QString error;
+    if (!setResolvedLanguage(code, &error) && !error.isEmpty())
+        log(error);
+}
 
-    m_effective = code;
-    loadActiveTable(code);
+void Tr::setRequestedLanguage(const QString &requested)
+{
+    m_requested = requested;
+}
+
+bool Tr::setResolvedLanguage(const QString &code, QString *error)
+{
+    const QString requested =
+        code.isEmpty() ? baseCode() : code;
+    if (requested == m_effective && !m_active.isEmpty())
+        return true;
+    if (!find(requested, nullptr)) {
+        if (error)
+            *error = QStringLiteral("语言包不存在：%1").arg(requested);
+        loadActiveTable(baseCode());
+        return false;
+    }
+    loadActiveTable(requested);
+    if (m_effective != requested) {
+        if (error)
+            *error = QStringLiteral("无法读取语言包：%1").arg(requested);
+        return false;
+    }
+    return true;
 }
 
 void Tr::loadActiveTable(const QString &code)
 {
     m_active.clear();
-
-    // 基准语言就是基准语言，不用再读一遍文件 —— 常驻的那份就是它。
-    if (code == baseCode()) {
+    LanguageInfo info;
+    if (!find(code, &info)) {
         m_active = m_base;
-        log(QStringLiteral("语言 -> %1（基准）").arg(code));
+        m_effective = baseCode();
         return;
     }
 
     QJsonObject root;
     QString error;
-    const QString path = langDir() + QStringLiteral("/") + code + QStringLiteral(".json");
-    if (!readJson(path, &root, &error)) {
-        // 刚才扫的时候还在，现在读不到 —— 文件被删了或者改坏了。
-        // 不把界面弄成空的：落回基准，如实说一声。
+    if (!readJson(info.uiFile, &root, &error)) {
+        if (code == baseCode()
+            && readJson(
+                QStringLiteral(":/lang/en_US/ui.json"),
+                &root, &error)) {
+            m_active = stringsFrom(root);
+            m_effective = baseCode();
+            return;
+        }
         log(QStringLiteral("读不到 %1（%2），先用 %3 顶上")
-                .arg(code + QStringLiteral(".json"), error, baseCode()));
+                .arg(info.uiFile, error, baseCode()));
         m_active = m_base;
         m_effective = baseCode();
         return;
     }
 
     m_active = stringsFrom(root);
+    m_effective = code;
     reportTableDifferences();
-    log(QStringLiteral("语言 -> %1（%2 条）").arg(code).arg(m_active.size()));
+    log(QStringLiteral("语言 -> %1（%2 条）")
+            .arg(code).arg(m_active.size()));
 }
 
 void Tr::reportTableDifferences()
 {
-    // 缺的键：会落回英文，界面不会空着，但多半不是想要的结果。
-    // 多的键：拼错了，或者语言文件比基准旧 —— 两种都值得看一眼。
-    //
-    // 只在这儿报一次，不在 translate() 里报：那边是每查一句都要走的路径，
-    // 而且同一个键会因为界面重画被反复查到，日志会被刷爆。
     QStringList missing;
     for (auto it = m_base.constBegin(); it != m_base.constEnd(); ++it) {
         if (!m_active.contains(it.key()))
@@ -313,25 +424,27 @@ void Tr::reportTableDifferences()
             extra.append(it.key());
     }
 
-    // 列表可能很长，日志里只摆前几条。
     const auto preview = [](const QStringList &list) {
         constexpr int kMaxShown = 8;
         if (list.size() <= kMaxShown)
             return list.join(QStringLiteral("、"));
         return list.mid(0, kMaxShown).join(QStringLiteral("、"))
-             + QStringLiteral(" …（共 %1 条）").arg(list.size());
+            + QStringLiteral(" …（共 %1 条）").arg(list.size());
     };
 
-    if (!missing.isEmpty())
-        log(QStringLiteral("有 %1 条没翻（会用英文）：%2").arg(missing.size()).arg(preview(missing)));
-    if (!extra.isEmpty())
+    if (!missing.isEmpty()) {
+        log(QStringLiteral("有 %1 条没翻（会用英文）：%2")
+                .arg(missing.size()).arg(preview(missing)));
+    }
+    if (!extra.isEmpty()) {
         log(QStringLiteral("有 %1 条是英文基准里没有的键（已忽略）：%2")
-                .arg(extra.size())
-                .arg(preview(extra)));
+                .arg(extra.size()).arg(preview(extra)));
+    }
 }
 
-QString Tr::translate(const char *context, const char *sourceText,
-                      const char *disambiguation, int n) const
+QString Tr::translate(
+    const char *context, const char *sourceText,
+    const char *disambiguation, int n) const
 {
     Q_UNUSED(context);
     Q_UNUSED(disambiguation);
@@ -341,7 +454,6 @@ QString Tr::translate(const char *context, const char *sourceText,
         return QString();
 
     const QString key = QString::fromUtf8(sourceText);
-
     const auto active = m_active.constFind(key);
     if (active != m_active.constEnd())
         return active.value();
@@ -349,11 +461,10 @@ QString Tr::translate(const char *context, const char *sourceText,
     const auto base = m_base.constFind(key);
     if (base != m_base.constEnd())
         return base.value();
-
-    // 两边都没有就返回空串，让 Qt 继续往下走（别的翻译器、最后是源码原文）。
-    //
-    // 这里**不能**返回 key 本身：旧界面那些还没搬过来的中文（`tr("退出")` 之类）
-    // 就是靠"查不到 -> 显示源码原文"这条路保持原样的。迁移期间这两类字符串
-    // 混在一起，全靠这个返回值区分。
     return QString();
+}
+
+void Tr::log(const QString &text)
+{
+    emit logMessage(text);
 }

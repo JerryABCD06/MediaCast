@@ -141,6 +141,8 @@ target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
 # 真正的协议与 QML 会在后续阶段替换这些 skeleton 入口；原生托盘已进入 Shell。
 add_executable(
     MCast.Shell
+    src/shell/ShellLanguage.h
+    src/shell/ShellLanguage.cpp
     src/shell/ShellSettings.h
     src/shell/ShellSettings.cpp
     src/shell/ShellMain.cpp
@@ -455,6 +457,24 @@ if(BUILD_TESTING)
             -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
             -UiExe "$<TARGET_FILE:MCast.Ui>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(
+        mcast_shell_language_tests
+        tests/shell_language_tests.cpp
+        src/shell/ShellLanguage.cpp
+        src/shell/ShellLanguage.h)
+    target_include_directories(
+        mcast_shell_language_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(
+        mcast_shell_language_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_shell_language_tests PRIVATE windowsapp.lib)
+    add_test(
+        NAME mcast_shell_language_tests
+        COMMAND mcast_shell_language_tests)
+    set_tests_properties(
+        mcast_shell_language_tests PROPERTIES TIMEOUT 10)
     set_tests_properties(
         mcast_dlna_shadow_e2e
         PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
@@ -816,22 +836,24 @@ add_custom_command(TARGET MCast.Ui POST_BUILD
 
 # ── 语言 ─────────────────────────────────────────────────────────────────
 #
-# 语言文件是 lang/*.json，明文，**不编译** —— 加一种语言就是往那个目录里丢一个
-# 文件，程序启动时自己扫。所以这里没有 lupdate / lrelease 那一套（.ts / .qm /
-# qt_add_translations 全都不用了），只做一件事：把整个目录拷到 exe 旁边。
+# 一种语言是 lang/<code>/ 下的一个完整语言包。Shell 扫描并下发语言目录，
+# Ui 只读取 Shell 指定的 ui.json。这里没有 lupdate / lrelease 那一套
+# （.ts / .qm / qt_add_translations 全都不用了），只负责把整个目录拷到
+# exe 旁边。
 #
 # 规矩（文件格式、meta 两个字段、键名怎么起、怎么加一种语言）写在
 # lang/README.md 里。
 #
-# 唯一编进 exe 的是基准语言 en_US.json（见 res/Lang.qrc）：lang 目录被删了、
+# 唯一编进 exe 的是基准界面表 en_US/ui.json（见 res/Lang.qrc）：lang 目录被删了、
 # 或者发布时漏拷的时候靠它兜底 —— 界面最坏是英文，不会是满屏键名。
 # 和上面的 FluentUI QML 一样，不能挂成 MCast 的 POST_BUILD：只改语言 JSON
 # 时 MCast 没有理由重新链接，POST_BUILD 不跑，程序就会继续读上一次的文案。
 add_custom_target(mcast_copy_lang ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/lang"
-            "$<TARGET_FILE_DIR:MCast>/lang"
+            "$<TARGET_FILE_DIR:MCast.Shell>/lang"
     COMMENT "复制语言文件到构建目录")
+add_dependencies(MCast.Shell mcast_copy_lang)
 
 # ── 法律文本与第三方许可 ────────────────────────────────────────────────
 #

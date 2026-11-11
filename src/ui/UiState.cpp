@@ -140,6 +140,16 @@ void UiState::setLanguage(const QString &code)
         return;
 
     m_language = code;
+    if (m_tr) {
+        m_tr->setRequestedLanguage(code);
+        if (!code.isEmpty()) {
+            QString error;
+            if (!m_tr->setResolvedLanguage(code, &error)
+                && !error.isEmpty()) {
+                m_tr->logMessage(error);
+            }
+        }
+    }
     applyLanguage();
     emit languageChanged();
 
@@ -149,17 +159,31 @@ void UiState::setLanguage(const QString &code)
 }
 
 void UiState::applyAppearance(
-    int themeMode, int accentMode, const QString &language)
+    int themeMode, int accentMode,
+    const QString &requestedLanguage,
+    const QString &resolvedLanguage)
 {
     m_applying = true;
     setThemeMode(themeMode);
     setAccentMode(accentMode);
-    setLanguage(language);
+    m_language = requestedLanguage;
+    if (m_tr) {
+        m_tr->setRequestedLanguage(requestedLanguage);
+        QString error;
+        if (!m_tr->setResolvedLanguage(
+                resolvedLanguage, &error)
+            && !error.isEmpty()) {
+            m_tr->logMessage(error);
+        }
+    }
+    applyLanguage();
+    emit languageChanged();
     m_applying = false;
 }
 
 bool UiState::applySettingsJson(
-    const QByteArray &json, QString *error)
+    const QByteArray &json, const QString &resolvedLanguage,
+    QString *error)
 {
     QJsonParseError parseError{};
     const QJsonDocument document =
@@ -184,7 +208,8 @@ bool UiState::applySettingsJson(
     applyAppearance(
         themeMode, accentMode,
         language == QLatin1String("System")
-            ? QString() : language);
+            ? QString() : language,
+        resolvedLanguage);
     return true;
 }
 
@@ -201,15 +226,9 @@ void UiState::applyLanguage()
         m_qtTranslator = nullptr;
     }
 
-    // 一、我们自己的字符串，也就是界面和托盘上那些。
-    //
-    //     Tr 本身就是个 QTranslator，查的是 lang/*.json。先让它把表换成
-    //     当前语言，再装上 —— 顺序反了的话，装上去的会是上一张表。
-    //
-    //     装成"空表"也要装：查不到的键它返回空串，Qt 会继续往下走到源码原文。
-    //     旧界面那些还没搬过来的中文就是靠这条路保持原样的。
+    // Tr 的表已经由 setResolvedLanguage() 换好。这里只负责把翻译器
+    // 安装给 Qt，不再自行解析 System 或扫描语言目录。
     if (m_tr) {
-        m_tr->setLanguage(m_language);
         QCoreApplication::installTranslator(m_tr);
     }
 

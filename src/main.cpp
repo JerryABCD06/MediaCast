@@ -214,10 +214,13 @@ int main(int argc, char *argv[])
         return settings.accentMode() == QLatin1String("System")
             ? UiState::SystemAccent : UiState::WindowsBlue;
     };
+    const QString requestedLanguage =
+        settings.language() == QLatin1String("System")
+        ? QString() : settings.language();
+    tr.setLanguage(requestedLanguage);
     uiState.applyAppearance(
         themeFromSettings(), accentFromSettings(),
-        settings.language() == QLatin1String("System")
-            ? QString() : settings.language());
+        requestedLanguage, tr.effectiveLanguage());
     QObject::connect(
         &uiState, &UiState::themeModeChangeRequested,
         &settings, [&settings](int mode) {

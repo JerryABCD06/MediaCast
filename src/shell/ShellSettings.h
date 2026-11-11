@@ -26,7 +26,6 @@ public:
     std::string accentMode() const;
     std::string deviceName() const;
     std::string deviceUdn() const;
-    bool chineseUi() const;
     bool acceptNewCast() const;
     bool broadcast() const;
     int broadcastIntervalMs() const;

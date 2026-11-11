@@ -411,16 +411,6 @@ std::string ShellSettings::deviceUdn() const
         objectMember(m_root, L"device"), L"udn", "uuid:");
 }
 
-bool ShellSettings::chineseUi() const
-{
-    const std::string value = language();
-    if (value == "zh_CN")
-        return true;
-    if (value == "en_US")
-        return false;
-    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
-}
-
 bool ShellSettings::acceptNewCast() const
 {
     return boolMember(

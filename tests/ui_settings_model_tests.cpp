@@ -104,6 +104,24 @@ int main(int argc, char **argv)
               && model.broadcastIntervalMs() == 10000,
           "rejection restores authority while preserving newer unsent edits");
 
+    mcast::ui_process::UiSettingsModel acceptedModel;
+    error.clear();
+    check(acceptedModel.applySnapshot(initial, 5, &error),
+          "accepted-patch model loads initial snapshot");
+    QEventLoop acceptedLoop;
+    QObject::connect(
+        &acceptedModel,
+        &mcast::ui_process::UiSettingsModel::settingsPatchReady,
+        &acceptedLoop, [&](const QByteArray &) {
+            acceptedLoop.quit();
+        });
+    acceptedModel.setMica(false);
+    QTimer::singleShot(2000, &acceptedLoop, &QEventLoop::quit);
+    acceptedLoop.exec();
+    acceptedModel.acceptPendingPatch(6);
+    check(acceptedModel.version() == 6 && !acceptedModel.mica(),
+          "accepted patch advances authority without a full snapshot");
+
     std::cout << "UI settings model tests passed\n";
     return 0;
 }

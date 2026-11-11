@@ -12,6 +12,7 @@
 #include "ipc/NamedPipe.h"
 #include "platform/windows/SplashWindow.h"
 #include "platform/windows/TrayIcon.h"
+#include "shell/ShellLanguage.h"
 #include "shell/ShellSettings.h"
 #include "supervisor/ChildProcess.h"
 #include "supervisor/ProcessIdentity.h"
@@ -144,6 +145,43 @@ std::wstring quoteWindowsArgument(std::wstring_view value)
     result.append(backslashes * 2, L'\\');
     result.push_back(L'"');
     return result;
+}
+
+bool systemUsesDarkTheme()
+{
+    DWORD light = 1;
+    DWORD size = sizeof(light);
+    if (RegGetValueW(
+            HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr,
+            &light, &size)
+        != ERROR_SUCCESS) {
+        return false;
+    }
+    return light == 0;
+}
+
+bool effectiveDarkMode(const std::string &configured)
+{
+    if (configured == "Dark")
+        return true;
+    if (configured == "Light")
+        return false;
+    return systemUsesDarkTheme();
+}
+
+mcast::platform::TrayTexts toWideTrayTexts(
+    const mcast::shell::TrayTexts &texts)
+{
+    return {
+        widen(texts.openMain),
+        widen(texts.pauseReceiving),
+        widen(texts.resumeReceiving),
+        widen(texts.quit),
+        widen(texts.tooltipReceiving),
+        widen(texts.tooltipPaused),
+    };
 }
 
 bool safeInstanceId(const std::string &value)
@@ -574,6 +612,30 @@ public:
             std::cerr << "Settings initial save failed: "
                       << initialSettingsSaveError << '\n';
         }
+        m_language = std::make_unique<mcast::shell::ShellLanguage>(
+            settingsDirectory / L"lang",
+            [](const std::string &message) {
+                std::cerr << "Language: " << message << '\n';
+            });
+        std::string languageError;
+        if (!m_language->scan(languageError))
+            std::cerr << "Language scan failed: "
+                      << languageError << '\n';
+        m_resolvedLanguage = m_language->resolve(
+            m_settings->language(), languageError);
+        if (!languageError.empty()) {
+            std::cerr << "Language resolution: "
+                      << languageError << '\n';
+        }
+        mcast::shell::TrayTexts shellTexts;
+        if (!m_language->loadTrayTexts(
+                m_resolvedLanguage, shellTexts, languageError)) {
+            std::cerr << "Tray language load failed: "
+                      << languageError << '\n';
+            m_resolvedLanguage = "en_US";
+            shellTexts = m_language->builtInEnglish();
+        }
+        m_trayTexts = toWideTrayTexts(shellTexts);
         m_receivingEnabled = m_settings->acceptNewCast();
         m_broadcasting = m_settings->broadcast();
         m_broadcastIntervalMs =
@@ -621,13 +683,16 @@ public:
             return false;
         }
 
-        if (!launchProtocol(error))
+        if (!launchProtocol(error)) {
+            std::cerr << "Protocol launch failed: " << error << '\n';
             return false;
+        }
 
         m_commandListener = std::make_unique<mcast::ipc::PipeListener>(
             mcast::ipc::makeShellCommandPipeName(instance), 1);
         if (!m_commandListener->valid()) {
             error = "Shell command pipe listener failed";
+            std::cerr << error << '\n';
             return false;
         }
         m_commandThread = std::jthread([this](std::stop_token stop) {
@@ -642,8 +707,18 @@ public:
                                   << error << '\n';
                 },
                 [this] { toggleReceiving(); },
-                [this] { requestQuit(); });
-            m_tray->setChinese(m_settings->chineseUi());
+                [this] { requestQuit(); },
+                [this] {
+                    std::lock_guard lock(m_settingsMutex);
+                    const bool dark = effectiveDarkMode(
+                        m_settings->darkMode());
+                    m_tray->setDark(dark);
+                    m_splash.setTheme(
+                        m_settings->darkMode() == "System",
+                        m_settings->darkMode() == "Dark");
+                });
+            m_tray->setTexts(m_trayTexts);
+            m_tray->setDark(effectiveDarkMode(m_settings->darkMode()));
             m_tray->setReceivingEnabled(m_receivingEnabled);
             if (!m_tray->initialize(error))
                 std::cerr << "Tray initialization failed: "
@@ -1688,14 +1763,36 @@ private:
             return false;
         std::uint64_t version = 0;
         std::string snapshot;
+        std::string resolvedLanguage;
         {
             std::lock_guard lock(m_settingsMutex);
             version = m_settingsStateVersion.load();
             snapshot = m_settings->snapshotJson();
+            resolvedLanguage = m_resolvedLanguage;
         }
         auto message = mcast::ipc::makeSettingsSnapshotMessage(
             nextMessageId(), version,
-            snapshot, error);
+            snapshot, resolvedLanguage, error);
+        return message
+            && connection->writeMessage(*message, 2000ms, error);
+    }
+
+    bool sendLanguageCatalog(
+        const std::shared_ptr<mcast::ipc::PipeConnection> &connection,
+        std::string &error)
+    {
+        if (!connection || !m_language)
+            return false;
+        std::string catalog;
+        {
+            std::lock_guard lock(m_settingsMutex);
+            catalog = m_language->catalogJson(
+                m_resolvedLanguage, error);
+        }
+        if (catalog.empty())
+            return false;
+        auto message = mcast::ipc::makeLanguageCatalogMessage(
+            nextMessageId(), catalog, error);
         return message
             && connection->writeMessage(*message, 2000ms, error);
     }
@@ -1718,13 +1815,15 @@ private:
     bool sendSettingsUpdateResult(
         const std::shared_ptr<mcast::ipc::PipeConnection> &connection,
         std::uint64_t correlationId,
+        std::uint64_t stateVersion,
+        const std::string &resolvedLanguage,
         mcast::ipc::SettingsUpdateStatus status,
         const std::string &errorText, std::string &error)
     {
         const auto result = mcast::ipc::makeSettingsUpdateResultMessage(
-            nextMessageId(), correlationId,
+            nextMessageId(), correlationId, stateVersion,
             mcast::ipc::SettingsUpdateResultInfo{
-                status, errorText},
+                status, resolvedLanguage, errorText},
             error);
         return result
             && connection
@@ -1843,11 +1942,31 @@ private:
         effect.currentBroadcastInterval =
             static_cast<std::uint32_t>(
                 m_settings->broadcastIntervalMs());
-        if (m_tray)
-            m_tray->requestChinese(m_settings->chineseUi());
+        const std::string previousLanguage = m_resolvedLanguage;
+        std::string languageError;
+        m_resolvedLanguage = m_language->resolve(
+            m_settings->language(), languageError);
+        if (!languageError.empty()) {
+            std::cerr << "Language resolution: "
+                      << languageError << '\n';
+        }
+        mcast::shell::TrayTexts shellTexts;
+        if (!m_language->loadTrayTexts(
+                m_resolvedLanguage, shellTexts, languageError)) {
+            std::cerr << "Tray language load failed: "
+                      << languageError << '\n';
+            m_resolvedLanguage = "en_US";
+            shellTexts = m_language->builtInEnglish();
+        }
+        m_trayTexts = toWideTrayTexts(shellTexts);
+        if (m_tray && previousLanguage != m_resolvedLanguage) {
+            m_tray->requestTexts(m_trayTexts);
+        }
         const std::string darkMode = m_settings->darkMode();
         m_splash.setTheme(
             darkMode == "System", darkMode == "Dark");
+        if (m_tray)
+            m_tray->requestDark(effectiveDarkMode(darkMode));
         return true;
     }
 
@@ -2230,11 +2349,17 @@ private:
             return;
         }
 
-        if (helloMessage.header.source == ProcessRole::Ui
-            && !sendSettingsSnapshot(connection, error)) {
-            std::cerr << "settings snapshot send: "
-                      << error << '\n';
-            return;
+        if (helloMessage.header.source == ProcessRole::Ui) {
+            if (!sendLanguageCatalog(connection, error)) {
+                std::cerr << "language catalog send: "
+                          << error << '\n';
+                return;
+            }
+            if (!sendSettingsSnapshot(connection, error)) {
+                std::cerr << "settings snapshot send: "
+                          << error << '\n';
+                return;
+            }
         }
 
         std::unique_ptr<ProtocolConnectionGuard> protocolGuard;
@@ -2512,8 +2637,15 @@ private:
                     std::cerr << "UI settings update failed: "
                               << error << '\n';
                     std::string resultError;
+                    std::string resolvedLanguage;
+                    {
+                        std::lock_guard settingsLock(m_settingsMutex);
+                        resolvedLanguage = m_resolvedLanguage;
+                    }
                     if (!sendSettingsUpdateResult(
                             connection, message.header.messageId,
+                            m_settingsStateVersion.load(),
+                            resolvedLanguage,
                             mcast::ipc::SettingsUpdateStatus::Rejected,
                             error, resultError)) {
                         std::cerr
@@ -2574,8 +2706,15 @@ private:
                 }
                 std::string resultError;
                 const bool runtimeApplied = runtimeError.empty();
+                std::string resolvedLanguage;
+                {
+                    std::lock_guard settingsLock(m_settingsMutex);
+                    resolvedLanguage = m_resolvedLanguage;
+                }
                 if (!sendSettingsUpdateResult(
                         connection, message.header.messageId,
+                        m_settingsStateVersion.load(),
+                        resolvedLanguage,
                         runtimeApplied
                             ? mcast::ipc::SettingsUpdateStatus::Applied
                             : mcast::ipc::SettingsUpdateStatus::
@@ -2586,11 +2725,6 @@ private:
                         resultError)) {
                     std::cerr << "Settings success result failed: "
                               << resultError << '\n';
-                }
-                if (!sendSettingsSnapshot(connection, error)) {
-                    std::cerr << "settings snapshot send: "
-                              << error << '\n';
-                    return;
                 }
             } else if (message.header.type == MessageType::UiFirstFrame
                        && helloMessage.header.source == ProcessRole::Ui) {
@@ -2749,6 +2883,9 @@ private:
     std::unordered_set<std::uint64_t> m_completedHandoffs;
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
     std::unique_ptr<mcast::shell::ShellSettings> m_settings;
+    std::unique_ptr<mcast::shell::ShellLanguage> m_language;
+    std::string m_resolvedLanguage = "en_US";
+    mcast::platform::TrayTexts m_trayTexts;
     std::atomic_bool m_receivingEnabled{true};
     std::atomic_bool m_broadcasting{true};
     std::atomic_uint32_t m_broadcastIntervalMs{10000};

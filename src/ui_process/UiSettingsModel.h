@@ -48,6 +48,7 @@ public:
     bool applySnapshot(
         const QByteArray &json, std::uint64_t version = 0,
         QString *error = nullptr);
+    void acceptPendingPatch(std::uint64_t version);
     void rejectPendingPatch();
     QByteArray snapshotJson() const;
     std::uint64_t version() const noexcept { return m_version; }
@@ -76,6 +77,7 @@ private:
     QJsonObject m_root;
     QJsonObject m_authoritativeRoot;
     QJsonObject m_patch;
+    QJsonObject m_inFlightPatch;
     QTimer m_patchTimer;
     std::uint64_t m_version = 0;
 };

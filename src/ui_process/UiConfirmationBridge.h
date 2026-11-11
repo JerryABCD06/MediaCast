@@ -44,10 +44,13 @@ signals:
     void cancelReceived(qulonglong requestId);
     void playbackReconnectRequested(qulonglong requestId);
     void settingsReceived(
-        const QByteArray &json, qulonglong version);
+        const QByteArray &json, qulonglong version,
+        const QString &resolvedLanguage);
     void settingsSubmitFailed(const QString &reason);
     void settingsUpdateRejected(const QString &reason);
     void settingsRuntimeApplyFailed(const QString &reason);
+    void settingsCommitted(
+        qulonglong version, const QString &resolvedLanguage);
     void connectionLost(const QString &reason);
     void logMessage(const QString &message);
 

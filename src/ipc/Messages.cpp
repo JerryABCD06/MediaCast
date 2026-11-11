@@ -551,6 +551,7 @@ bool validateMessageDirection(
             return true;
         break;
     case MessageType::SettingsSnapshot:
+    case MessageType::LanguageCatalog:
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Shell
             && header.destination == ProcessRole::Ui)
@@ -1326,17 +1327,22 @@ std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
 
 std::optional<Message> makeSettingsSnapshotMessage(
     std::uint64_t messageId, std::uint64_t stateVersion,
-    std::string_view json, std::string &error)
+    std::string_view json, std::string_view resolvedLanguage,
+    std::string &error)
 {
     error.clear();
-    if (messageId == 0 || stateVersion == 0 || json.empty()) {
+    if (messageId == 0 || stateVersion == 0 || json.empty()
+        || resolvedLanguage.empty()) {
         error = "invalid settings snapshot";
         return std::nullopt;
     }
     PayloadBuilder builder;
     if (!builder.addString(
             static_cast<std::uint16_t>(FieldId::SettingsJson),
-            json)) {
+            json)
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::ResolvedLanguage),
+            resolvedLanguage)) {
         error = "settings snapshot payload is too large";
         return std::nullopt;
     }
@@ -1355,7 +1361,7 @@ std::optional<Message> makeSettingsSnapshotMessage(
     return message;
 }
 
-std::optional<std::string> decodeSettingsSnapshotMessage(
+std::optional<SettingsSnapshotInfo> decodeSettingsSnapshotMessage(
     const Message &message, std::string &error)
 {
     error.clear();
@@ -1370,8 +1376,64 @@ std::optional<std::string> decodeSettingsSnapshotMessage(
     const PayloadReader reader(message.payload);
     const auto json = reader.getString(
         static_cast<std::uint16_t>(FieldId::SettingsJson));
-    if (!reader.valid() || !json || json->empty()) {
+    const auto resolvedLanguage = reader.getString(
+        static_cast<std::uint16_t>(FieldId::ResolvedLanguage));
+    if (!reader.valid() || !json || json->empty()
+        || !resolvedLanguage || resolvedLanguage->empty()) {
         error = "invalid settings snapshot payload";
+        return std::nullopt;
+    }
+    return SettingsSnapshotInfo{*json, *resolvedLanguage};
+}
+
+std::optional<Message> makeLanguageCatalogMessage(
+    std::uint64_t messageId, std::string_view json,
+    std::string &error)
+{
+    error.clear();
+    if (messageId == 0 || json.empty()) {
+        error = "invalid language catalog";
+        return std::nullopt;
+    }
+    PayloadBuilder builder;
+    if (!builder.addString(
+            static_cast<std::uint16_t>(
+                FieldId::LanguageCatalogJson),
+            json)) {
+        error = "language catalog payload is too large";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::LanguageCatalog;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Ui;
+    message.header.messageId = messageId;
+    message.header.sessionId = 1;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<std::string> decodeLanguageCatalogMessage(
+    const Message &message, std::string &error)
+{
+    error.clear();
+    if (message.header.type != MessageType::LanguageCatalog
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        if (error.empty())
+            error = "not a language catalog";
+        return std::nullopt;
+    }
+    const PayloadReader reader(message.payload);
+    const auto json = reader.getString(
+        static_cast<std::uint16_t>(
+            FieldId::LanguageCatalogJson));
+    if (!reader.valid() || !json || json->empty()) {
+        error = "invalid language catalog payload";
         return std::nullopt;
     }
     return json;
@@ -1430,10 +1492,12 @@ std::optional<std::string> decodeUiUpdateSettingsMessage(
 
 std::optional<Message> makeSettingsUpdateResultMessage(
     std::uint64_t messageId, std::uint64_t correlationId,
+    std::uint64_t stateVersion,
     const SettingsUpdateResultInfo &result, std::string &error)
 {
     error.clear();
-    if (messageId == 0 || correlationId == 0) {
+    if (messageId == 0 || correlationId == 0 || stateVersion == 0
+        || result.resolvedLanguage.empty()) {
         error = "invalid settings update result";
         return std::nullopt;
     }
@@ -1445,7 +1509,10 @@ std::optional<Message> makeSettingsUpdateResultMessage(
             accepted)
         || !builder.addUInt64(
             static_cast<std::uint16_t>(FieldId::SettingsUpdateStatus),
-            static_cast<std::uint8_t>(result.status))) {
+            static_cast<std::uint8_t>(result.status))
+        || !builder.addString(
+            static_cast<std::uint16_t>(FieldId::ResolvedLanguage),
+            result.resolvedLanguage)) {
         error = "settings result payload is invalid";
         return std::nullopt;
     }
@@ -1464,6 +1531,7 @@ std::optional<Message> makeSettingsUpdateResultMessage(
     message.header.messageId = messageId;
     message.header.correlationId = correlationId;
     message.header.sessionId = 1;
+    message.header.stateVersion = stateVersion;
     message.payload = std::move(builder).finish().value_or(
         std::vector<std::uint8_t>{});
     if (!validateMessageDirection(
@@ -1492,7 +1560,10 @@ decodeSettingsUpdateResultMessage(
         static_cast<std::uint16_t>(FieldId::SettingsAccepted));
     const auto status = reader.getUInt64(
         static_cast<std::uint16_t>(FieldId::SettingsUpdateStatus));
-    if (!reader.valid() || !accepted || !status
+    const auto resolvedLanguage = reader.getString(
+        static_cast<std::uint16_t>(FieldId::ResolvedLanguage));
+    if (!reader.valid() || !accepted || !status || !resolvedLanguage
+        || resolvedLanguage->empty()
         || *status
             > static_cast<std::uint8_t>(
                 SettingsUpdateStatus::SavedRuntimeFailed)
@@ -1506,6 +1577,7 @@ decodeSettingsUpdateResultMessage(
     SettingsUpdateResultInfo result;
     result.status =
         static_cast<SettingsUpdateStatus>(*status);
+    result.resolvedLanguage = *resolvedLanguage;
     result.error = reader.getString(
         static_cast<std::uint16_t>(FieldId::ErrorText)).value_or("");
     return result;

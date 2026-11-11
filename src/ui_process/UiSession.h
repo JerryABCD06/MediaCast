@@ -41,6 +41,14 @@ public:
     {
         return m_settingsJson;
     }
+    const std::string &languageCatalogJson() const noexcept
+    {
+        return m_languageCatalogJson;
+    }
+    const std::string &resolvedLanguage() const noexcept
+    {
+        return m_resolvedLanguage;
+    }
     std::uint64_t settingsVersion() const noexcept
     {
         return m_settingsVersion;
@@ -52,6 +60,8 @@ private:
     std::unique_ptr<mcast::ipc::PipeConnection> m_playback;
     mcast::ipc::PeerIdentityGrant m_protocolGrant;
     bool m_hasProtocolGrant = false;
+    std::string m_languageCatalogJson;
     std::string m_settingsJson;
+    std::string m_resolvedLanguage;
     std::uint64_t m_settingsVersion = 0;
 };

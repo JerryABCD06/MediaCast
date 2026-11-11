@@ -373,6 +373,12 @@ void testHelloSchema()
     check(validateMessageDirection(
               ConnectionChannel::Control, direction, error),
           "SettingsSnapshot accepted on control pipe");
+    direction.type = MessageType::LanguageCatalog;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "LanguageCatalog accepted on control pipe");
     direction.type = MessageType::UiUpdateSettings;
     direction.source = ProcessRole::Ui;
     direction.destination = ProcessRole::Shell;
@@ -721,15 +727,31 @@ void testCastConfirmationSchema()
     error.clear();
     const std::string settingsJson = R"({"ui":{"language":"en_US"}})";
     const auto settingsSnapshot =
-        makeSettingsSnapshotMessage(901, 7, settingsJson, error);
+        makeSettingsSnapshotMessage(
+            901, 7, settingsJson, "en_US", error);
     check(settingsSnapshot.has_value(),
           "settings snapshot encodes: " + error);
     const auto decodedSettings =
         settingsSnapshot
         ? decodeSettingsSnapshotMessage(*settingsSnapshot, error)
         : std::nullopt;
-    check(decodedSettings && *decodedSettings == settingsJson,
+    check(decodedSettings && decodedSettings->json == settingsJson
+              && decodedSettings->resolvedLanguage == "en_US",
           "settings snapshot decodes");
+
+    error.clear();
+    const std::string languageCatalog =
+        R"({"baseLanguage":"en_US","resolvedLanguage":"en_US","languages":[]})";
+    const auto catalogMessage =
+        makeLanguageCatalogMessage(900, languageCatalog, error);
+    check(catalogMessage.has_value(),
+          "language catalog encodes: " + error);
+    const auto decodedCatalog =
+        catalogMessage
+        ? decodeLanguageCatalogMessage(*catalogMessage, error)
+        : std::nullopt;
+    check(decodedCatalog && *decodedCatalog == languageCatalog,
+          "language catalog decodes");
 
     error.clear();
     const auto settingsUpdate =
@@ -744,11 +766,14 @@ void testCastConfirmationSchema()
           "settings update decodes");
     error.clear();
     const auto updateResult = makeSettingsUpdateResultMessage(
-        903, 902,
-        {SettingsUpdateStatus::SavedRuntimeFailed, "runtime unavailable"},
+        903, 902, 8,
+        {SettingsUpdateStatus::SavedRuntimeFailed, "en_US",
+         "runtime unavailable"},
         error);
     check(updateResult.has_value(),
           "settings update result encodes: " + error);
+    check(updateResult && updateResult->header.stateVersion == 8,
+          "settings update result carries the new version");
     const auto decodedResult =
         updateResult
         ? decodeSettingsUpdateResultMessage(
@@ -757,6 +782,7 @@ void testCastConfirmationSchema()
     check(decodedResult
               && decodedResult->status
                   == SettingsUpdateStatus::SavedRuntimeFailed
+              && decodedResult->resolvedLanguage == "en_US"
               && decodedResult->error == "runtime unavailable",
           "settings update result decodes");
 }
