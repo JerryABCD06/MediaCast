@@ -19,6 +19,8 @@
 
 #include <windows.h>
 
+#include <winrt/Windows.UI.ViewManagement.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -49,6 +51,8 @@ using mcast::ipc::ConnectionChannel;
 using mcast::ipc::Message;
 using mcast::ipc::MessageType;
 using mcast::ipc::ProcessRole;
+
+namespace WView = winrt::Windows::UI::ViewManagement;
 
 struct Options {
     std::string instance = "default";
@@ -169,6 +173,34 @@ bool effectiveDarkMode(const std::string &configured)
     if (configured == "Light")
         return false;
     return systemUsesDarkTheme();
+}
+
+struct AccentPair {
+    unsigned int light = 0x0067c0;
+    unsigned int dark = 0x4cc2ff;
+};
+
+AccentPair splashAccentColors(const std::string &configured)
+{
+    AccentPair result;
+    if (configured != "System")
+        return result;
+    try {
+        WView::UISettings settings;
+        const auto light = settings.GetColorValue(
+            WView::UIColorType::AccentDark1);
+        const auto dark = settings.GetColorValue(
+            WView::UIColorType::AccentLight2);
+        result.light = (static_cast<unsigned int>(light.R) << 16)
+            | (static_cast<unsigned int>(light.G) << 8)
+            | static_cast<unsigned int>(light.B);
+        result.dark = (static_cast<unsigned int>(dark.R) << 16)
+            | (static_cast<unsigned int>(dark.G) << 8)
+            | static_cast<unsigned int>(dark.B);
+    } catch (const winrt::hresult_error &) {
+        // Keep the Windows Blue fallback when Windows returns no palette.
+    }
+    return result;
 }
 
 mcast::platform::TrayTexts toWideTrayTexts(
@@ -644,8 +676,11 @@ public:
         if (m_options.testForceReceivingEnabled)
             m_receivingEnabled = true;
         const std::string darkMode = m_settings->darkMode();
+        const AccentPair accent =
+            splashAccentColors(m_settings->accentMode());
         m_splash.setTheme(
             darkMode == "System", darkMode == "Dark");
+        m_splash.setAccent(accent.light, accent.dark);
 
         m_nonce = mcast::supervisor::randomHexToken(16);
         if (!m_nonce) {
@@ -712,10 +747,13 @@ public:
                     std::lock_guard lock(m_settingsMutex);
                     const bool dark = effectiveDarkMode(
                         m_settings->darkMode());
+                    const AccentPair accent =
+                        splashAccentColors(m_settings->accentMode());
                     m_tray->setDark(dark);
                     m_splash.setTheme(
                         m_settings->darkMode() == "System",
                         m_settings->darkMode() == "Dark");
+                    m_splash.setAccent(accent.light, accent.dark);
                 });
             m_tray->setTexts(m_trayTexts);
             m_tray->setDark(effectiveDarkMode(m_settings->darkMode()));
@@ -1963,8 +2001,11 @@ private:
             m_tray->requestTexts(m_trayTexts);
         }
         const std::string darkMode = m_settings->darkMode();
+        const AccentPair accent =
+            splashAccentColors(m_settings->accentMode());
         m_splash.setTheme(
             darkMode == "System", darkMode == "Dark");
+        m_splash.setAccent(accent.light, accent.dark);
         if (m_tray)
             m_tray->requestDark(effectiveDarkMode(darkMode));
         return true;

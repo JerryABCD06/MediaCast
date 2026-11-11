@@ -168,7 +168,8 @@ add_executable(
     src/skeleton/ProtocolMain.cpp
     src/skeleton/SkeletonClient.cpp
     src/skeleton/ProtocolDlnaConfirmationPort.cpp
-    src/skeleton/ProtocolDlnaConfirmationPort.h)
+    src/skeleton/ProtocolDlnaConfirmationPort.h
+    res/MCast.Protocol.rc)
 target_link_libraries(
     MCast.Protocol PRIVATE mcast_ipc mcast_dlna_protocol)
 set_target_properties(MCast.Protocol PROPERTIES WIN32_EXECUTABLE TRUE)

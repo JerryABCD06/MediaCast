@@ -561,11 +561,28 @@ FluWindow {
         }
 
         onPositiveClicked: {
-            // 顺序要紧：先让协议层把这次投送收干净（结束会话、推事件、让设备在
-            // 网络里消失一下再回来），再把窗口关掉。反过来的话，窗口一没，
-            // 界面上就没有东西去触发这一句了。
+            // 先让协议层处理断开；等 peerConnected 真正落下再销毁 UI。
+            // Ui 进程一退出，PlaybackPipe 也会被带走，所以不能在同一轮里
+            // 刚写完断开请求就立刻销毁窗口。
+            dialog_end_cast.close()
+            closeAfterDisconnect.attempts = 0
             Shell.endCasting()
-            FluRouter.removeWindow(window)
+            closeAfterDisconnect.restart()
+        }
+    }
+
+    Timer {
+        id: closeAfterDisconnect
+        interval: 50
+        repeat: true
+        property int attempts: 0
+
+        onTriggered: {
+            ++attempts
+            if (!Playback.peerConnected || attempts >= 40) {
+                stop()
+                FluRouter.removeWindow(window)
+            }
         }
     }
 }
