@@ -152,6 +152,7 @@ private:
     bool m_openInFlight = false;
     bool m_openIntentInProgress = false;
     bool m_flushingDeferred = false;
+    bool m_endSubmitInProgress = false;
     bool m_transitionInProgress = false;
     bool m_desiredPeerConnected = false;
     bool m_peerSyncPending = false;

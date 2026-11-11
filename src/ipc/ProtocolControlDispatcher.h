@@ -55,6 +55,8 @@ public:
         const CastConfirmationRequestInfo &request,
         std::chrono::milliseconds timeout, bool &accepted,
         std::string &error);
+    bool cancelCastConfirmation() noexcept;
+    void clearCastConfirmationCancel() noexcept;
 
 private:
     enum class ActivationPhase {
@@ -78,6 +80,7 @@ private:
         std::uint64_t claimId = 0;
         bool done = false;
         bool accepted = false;
+        bool cancelled = false;
     };
 
     void readLoop(std::stop_token stop);
@@ -85,13 +88,17 @@ private:
     bool sendMessage(Message message, std::string &error);
     std::uint64_t nextMessageId() noexcept;
     void terminate(std::string error) noexcept;
+    void sendCastConfirmationCancel(
+        std::uint64_t requestMessageId) noexcept;
 
     std::unique_ptr<PipeConnection> m_connection;
     mutable std::mutex m_mutex;
+    std::mutex m_confirmationTransportMutex;
     std::condition_variable m_condition;
     std::jthread m_reader;
     std::optional<ActivationWait> m_activation;
     std::optional<ConfirmationWait> m_confirmation;
+    bool m_confirmationCancelRequested = false;
     std::string m_terminalError;
     std::uint64_t m_openRequestCount = 0;
     std::atomic_uint64_t m_nextMessageId{1};

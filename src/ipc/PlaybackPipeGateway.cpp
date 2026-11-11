@@ -29,6 +29,11 @@ PlaybackPipeGateway::PlaybackPipeGateway(
         m_snapshot.playerAvailable = false;
         return;
     }
+    // No authoritative Ui snapshot has arrived yet. In particular, generation
+    // 1 is not a valid default once the Ui activation ID advances.
+    m_snapshot = {};
+    m_snapshot.playerAvailable = false;
+    m_snapshot.stateVersion = 0;
     m_readThread = std::jthread(
         [this](std::stop_token stop) { readLoop(stop); });
     m_timeoutThread = std::jthread(
@@ -64,7 +69,7 @@ PlaybackCommandSubmission PlaybackPipeGateway::submit(
         current = m_snapshot;
         hasSnapshot = m_hasSnapshot;
     }
-    if (!m_connected || !current.playerAvailable) {
+    if (!m_connected) {
         return {false, PlaybackSubmissionStatus::PlayerUnavailable, 0,
                 current.generation, "playback pipe is unavailable",
                 current.stateVersion};
@@ -72,6 +77,11 @@ PlaybackCommandSubmission PlaybackPipeGateway::submit(
     if (!hasSnapshot) {
         return {false, PlaybackSubmissionStatus::WaitingForPlayer, 0,
                 current.generation, "playback snapshot is not ready",
+                current.stateVersion};
+    }
+    if (!current.playerAvailable) {
+        return {false, PlaybackSubmissionStatus::PlayerUnavailable, 0,
+                current.generation, "playback player is unavailable",
                 current.stateVersion};
     }
     if (bound.expectedGeneration == 0)

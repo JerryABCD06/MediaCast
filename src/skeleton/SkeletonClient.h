@@ -17,6 +17,7 @@ struct ClientOptions {
     std::uint64_t activationId = 0;
     bool requestUi = false;
     bool persistent = false;
+    std::uint16_t dlnaHttpPort = 0;
     std::uint32_t uiRequestRounds = 1;
 };
 

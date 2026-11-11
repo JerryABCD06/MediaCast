@@ -204,8 +204,14 @@ bool ProtocolControlDispatcher::requestCastConfirmation(
     if (!message)
         return false;
 
+    std::unique_lock transportLock(m_confirmationTransportMutex);
     {
         std::lock_guard lock(m_mutex);
+        if (m_confirmationCancelRequested) {
+            m_confirmationCancelRequested = false;
+            error = "cast confirmation cancelled";
+            return false;
+        }
         if (m_confirmation) {
             error = "cast confirmation is already pending";
             return false;
@@ -221,6 +227,7 @@ bool ProtocolControlDispatcher::requestCastConfirmation(
     }
     if (!sendMessage(std::move(*message), error))
         return false;
+    transportLock.unlock();
 
     std::unique_lock lock(m_mutex);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -230,6 +237,8 @@ bool ProtocolControlDispatcher::requestCastConfirmation(
             == std::cv_status::timeout) {
             m_confirmation.reset();
             error = "cast confirmation timed out";
+            lock.unlock();
+            sendCastConfirmationCancel(messageId);
             return false;
         }
     }
@@ -239,9 +248,59 @@ bool ProtocolControlDispatcher::requestCastConfirmation(
             : m_terminalError;
         return false;
     }
+    if (m_confirmation->cancelled) {
+        m_confirmation.reset();
+        error = "cast confirmation cancelled";
+        return false;
+    }
     accepted = m_confirmation->accepted;
     m_confirmation.reset();
     return true;
+}
+
+bool ProtocolControlDispatcher::cancelCastConfirmation() noexcept
+{
+    std::optional<std::uint64_t> requestMessageId;
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_confirmation && !m_confirmation->done) {
+            m_confirmation->cancelled = true;
+            m_confirmation->accepted = false;
+            m_confirmation->done = true;
+            requestMessageId = m_confirmation->requestMessageId;
+        } else {
+            m_confirmationCancelRequested = true;
+        }
+    }
+    m_condition.notify_all();
+    if (requestMessageId)
+        sendCastConfirmationCancel(*requestMessageId);
+    return true;
+}
+
+void ProtocolControlDispatcher::clearCastConfirmationCancel() noexcept
+{
+    std::lock_guard lock(m_mutex);
+    if (!m_confirmation)
+        m_confirmationCancelRequested = false;
+}
+
+void ProtocolControlDispatcher::sendCastConfirmationCancel(
+    std::uint64_t requestMessageId) noexcept
+{
+    std::lock_guard transportLock(m_confirmationTransportMutex);
+    try {
+        if (!m_connection || !m_connected.load())
+            return;
+        std::string error;
+        const auto cancel = makeCastConfirmationCancelMessage(
+            nextMessageId(), requestMessageId, error);
+        if (!cancel)
+            return;
+        static_cast<void>(m_connection->writeMessage(
+            *cancel, kWriteTimeout, error));
+    } catch (...) {
+    }
 }
 
 void ProtocolControlDispatcher::readLoop(std::stop_token stop)
@@ -367,6 +426,7 @@ bool ProtocolControlDispatcher::sendMessage(
     Message message, std::string &error)
 {
     if (!m_connected.load() || !m_connection) {
+        std::lock_guard lock(m_mutex);
         error = m_terminalError.empty()
             ? "control connection is closed"
             : m_terminalError;
@@ -396,6 +456,7 @@ void ProtocolControlDispatcher::terminate(std::string error) noexcept
         m_terminalError = std::move(error);
         m_activation.reset();
         m_confirmation.reset();
+        m_confirmationCancelRequested = false;
     }
     if (m_connection)
         m_connection->close();

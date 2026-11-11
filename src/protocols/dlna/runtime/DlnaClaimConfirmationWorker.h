@@ -26,6 +26,7 @@ public:
         const cast::ConfirmationPrompt &prompt,
         bool &accepted, std::string &error) = 0;
     virtual void cancel() noexcept {}
+    virtual void reset() noexcept {}
 };
 
 // Serializes DLNA confirmation traffic away from the HTTP owner thread.

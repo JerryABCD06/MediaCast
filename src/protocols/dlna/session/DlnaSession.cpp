@@ -670,6 +670,11 @@ PlaybackCommandSubmission DlnaSession::requestEnd(
         mode, endToken, 0, now + SessionTime{5000}, false, false};
     PlaybackCommand command;
     command.type = PlaybackCommandType::EndSession;
+    struct SubmitGuard {
+        bool &value;
+        ~SubmitGuard() { value = false; }
+    } submitGuard{m_endSubmitInProgress};
+    m_endSubmitInProgress = true;
     const auto submission =
         submitLocked(std::move(command), lock);
     const auto operationStillActive = [&] {
@@ -696,6 +701,7 @@ void DlnaSession::retryPendingEnd(Lock &lock)
 {
     if (!m_endOperation || m_endOperation->commandId != 0
         || m_openIntentInProgress || m_openInFlight
+        || m_endSubmitInProgress
         || m_transitionInProgress) {
         return;
     }

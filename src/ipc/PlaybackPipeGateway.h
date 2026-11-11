@@ -40,6 +40,7 @@ public:
     void removeEventListener(std::uint64_t listenerId) override;
 
     bool requestSnapshot(std::string &error);
+    bool connected() const noexcept { return m_connected.load(); }
 
 private:
     void readLoop(std::stop_token stop);

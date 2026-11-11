@@ -32,6 +32,7 @@ DlnaClaimConfirmationWorker::DlnaClaimConfirmationWorker(
     , m_tickThread(
           [this](std::stop_token stop) { tickLoop(stop); })
 {
+    m_port.reset();
 }
 
 DlnaClaimConfirmationWorker::~DlnaClaimConfirmationWorker()

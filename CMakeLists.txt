@@ -34,6 +34,8 @@ add_library(mcast_ipc STATIC
     src/ipc/PlaybackCodec.cpp
     src/ipc/PlaybackPipeGateway.h
     src/ipc/PlaybackPipeGateway.cpp
+    src/playback/LateBindingPlaybackGateway.h
+    src/playback/LateBindingPlaybackGateway.cpp
     src/supervisor/RestartController.h
     src/supervisor/RestartController.cpp
     src/supervisor/ProcessIdentity.h
@@ -101,6 +103,8 @@ add_library(mcast_dlna_protocol STATIC
     src/protocols/dlna/runtime/DlnaHttpFrontend.cpp
     src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.h
     src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.cpp
+    src/protocols/dlna/runtime/DlnaProtocolRuntime.h
+    src/protocols/dlna/runtime/DlnaProtocolRuntime.cpp
     src/protocols/dlna/session/DlnaSession.h
     src/protocols/dlna/session/DlnaSession.cpp
     src/protocols/dlna/soap/SoapRouter.h
@@ -152,8 +156,14 @@ target_link_libraries(
     windowscodecs.lib advapi32.lib ole32.lib shell32.lib windowsapp.lib)
 set_target_properties(MCast.Shell PROPERTIES WIN32_EXECUTABLE TRUE)
 
-add_executable(MCast.Protocol src/skeleton/ProtocolMain.cpp src/skeleton/SkeletonClient.cpp)
-target_link_libraries(MCast.Protocol PRIVATE mcast_ipc)
+add_executable(
+    MCast.Protocol
+    src/skeleton/ProtocolMain.cpp
+    src/skeleton/SkeletonClient.cpp
+    src/skeleton/ProtocolDlnaConfirmationPort.cpp
+    src/skeleton/ProtocolDlnaConfirmationPort.h)
+target_link_libraries(
+    MCast.Protocol PRIVATE mcast_ipc mcast_dlna_protocol)
 set_target_properties(MCast.Protocol PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_dependencies(MCast.Shell MCast.Protocol)
@@ -161,8 +171,11 @@ add_dependencies(MCast.Shell MCast.Protocol)
 if(BUILD_TESTING)
     add_executable(
         MCast.UiSkeleton
-        src/skeleton/UiMain.cpp src/skeleton/SkeletonClient.cpp)
-    target_link_libraries(MCast.UiSkeleton PRIVATE mcast_ipc)
+        src/skeleton/UiMain.cpp
+        src/skeleton/SkeletonClient.cpp
+        src/skeleton/ProtocolDlnaConfirmationPort.cpp)
+    target_link_libraries(
+        MCast.UiSkeleton PRIVATE mcast_ipc mcast_dlna_protocol)
     add_dependencies(MCast.Shell MCast.UiSkeleton)
 
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
@@ -180,6 +193,19 @@ if(BUILD_TESTING)
         COMMAND mcast_protocol_control_dispatcher_tests)
     set_tests_properties(
         mcast_protocol_control_dispatcher_tests PROPERTIES TIMEOUT 15)
+
+    add_executable(
+        mcast_protocol_dlna_confirmation_port_tests
+        tests/protocol_dlna_confirmation_port_tests.cpp
+        src/skeleton/ProtocolDlnaConfirmationPort.cpp)
+    target_link_libraries(
+        mcast_protocol_dlna_confirmation_port_tests
+        PRIVATE mcast_ipc mcast_dlna_protocol)
+    add_test(
+        NAME mcast_protocol_dlna_confirmation_port_tests
+        COMMAND mcast_protocol_dlna_confirmation_port_tests)
+    set_tests_properties(
+        mcast_protocol_dlna_confirmation_port_tests PROPERTIES TIMEOUT 15)
 
     add_executable(
         mcast_net_tests
@@ -228,6 +254,15 @@ if(BUILD_TESTING)
     add_test(
         NAME mcast_playback_pipe_gateway_tests
         COMMAND mcast_playback_pipe_gateway_tests)
+
+    add_executable(
+        mcast_late_binding_playback_gateway_tests
+        tests/late_binding_playback_gateway_tests.cpp)
+    target_link_libraries(
+        mcast_late_binding_playback_gateway_tests PRIVATE mcast_ipc)
+    add_test(
+        NAME mcast_late_binding_playback_gateway_tests
+        COMMAND mcast_late_binding_playback_gateway_tests)
 
     add_executable(
         mcast_playback_bridge_tests
@@ -365,6 +400,17 @@ if(BUILD_TESTING)
         COMMAND mcast_dlna_http_frontend_tests)
     set_tests_properties(
         mcast_dlna_http_frontend_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_dlna_protocol_runtime_tests
+        tests/dlna_protocol_runtime_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_protocol_runtime_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_protocol_runtime_tests
+        COMMAND mcast_dlna_protocol_runtime_tests)
+    set_tests_properties(
+        mcast_dlna_protocol_runtime_tests PROPERTIES TIMEOUT 15)
 
     add_executable(
         mcast_dlna_claim_confirmation_worker_tests

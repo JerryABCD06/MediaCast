@@ -5,7 +5,11 @@
 
 #include "ipc/Messages.h"
 #include "ipc/NamedPipe.h"
+#include "ipc/PlaybackPipeGateway.h"
 #include "ipc/ProtocolControlDispatcher.h"
+#include "playback/LateBindingPlaybackGateway.h"
+#include "protocols/dlna/runtime/DlnaProtocolRuntime.h"
+#include "skeleton/ProtocolDlnaConfirmationPort.h"
 #include "supervisor/ProcessIdentity.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -265,35 +269,34 @@ private:
     std::jthread m_thread;
 };
 
-bool protocolPlaybackServer(
+std::unique_ptr<PipeConnection> protocolPlaybackServer(
     const ClientOptions &options,
     const mcast::ipc::PeerIdentityGrant &expectedUi,
-    mcast::ipc::ProtocolControlDispatcher &dispatcher,
     std::string &error)
 {
     mcast::ipc::PipeListener listener(
         mcast::ipc::makePlaybackPipeName(widen(options.instance)), 2);
     if (!listener.valid()) {
         error = "playback pipe listener failed";
-        return false;
+        return nullptr;
     }
 
     auto connection = listener.accept(8000ms, error);
     if (!connection)
-        return false;
+        return nullptr;
 
     Message helloMessage;
     if (!connection->readMessage(helloMessage, 3000ms, error))
-        return false;
+        return nullptr;
     const auto hello = mcast::ipc::decodeHelloMessage(
         helloMessage, ConnectionChannel::Playback, error);
     if (!hello)
-        return false;
+        return nullptr;
 
     if (connection->peerProcessId() != expectedUi.processId
         || hello->processId != expectedUi.processId) {
         error = "playback peer PID does not match Shell grant";
-        return false;
+        return nullptr;
     }
     const HelloExpectation expectation{
         expectedUi.processId,
@@ -303,7 +306,7 @@ bool protocolPlaybackServer(
         0x7,
     };
     if (!mcast::ipc::validateHello(*hello, expectation, error))
-        return false;
+        return nullptr;
 
     const mcast::ipc::HelloAckInfo ack{
         true,
@@ -318,14 +321,14 @@ bool protocolPlaybackServer(
         ProcessRole::Ui, 2, helloMessage.header.messageId, ack, error);
     if (!ackMessage
         || !connection->writeMessage(*ackMessage, 2000ms, error))
-        return false;
+        return nullptr;
 
     Message snapshotRequest;
     if (!connection->readMessage(snapshotRequest, 3000ms, error)
         || snapshotRequest.header.type != MessageType::SessionSnapshotRequest
         || !mcast::ipc::validateMessageDirection(
             ConnectionChannel::Playback, snapshotRequest.header, error))
-        return false;
+        return nullptr;
 
     Message snapshot;
     snapshot.header.type = MessageType::SessionSnapshot;
@@ -337,33 +340,42 @@ bool protocolPlaybackServer(
     snapshot.header.sessionId = snapshotRequest.header.sessionId;
     snapshot.header.stateVersion = 1;
     if (!connection->writeMessage(snapshot, 2000ms, error))
-        return false;
+        return nullptr;
 
     std::cout << "PLAYBACK_SNAPSHOT_SERVED\n";
-    std::atomic_bool controlLost{false};
-    std::jthread controlMonitor([&](std::stop_token stop) {
-        while (!stop.stop_requested()) {
-            std::string monitorError;
-            if (dispatcher.waitForTermination(200ms, monitorError)) {
-                controlLost = true;
-                connection->close();
-                return;
-            }
+    return connection;
+}
+
+bool waitForUiOrPlaybackEnd(
+    std::uint32_t processId,
+    const mcast::playback::PlaybackPipeGateway &playback,
+    std::stop_token stop, std::string &reason)
+{
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId);
+    if (!process) {
+        reason = "Ui process exited";
+        return true;
+    }
+    while (!stop.stop_requested()) {
+        if (!playback.connected()) {
+            reason = "PlaybackPipe disconnected";
+            CloseHandle(process);
+            return true;
         }
-    });
-    // Keep the PlaybackPipe alive for the Ui lifetime. The current skeleton
-    // does not consume the new playback command/state stream yet, but must not
-    // tear the connection down immediately after the legacy snapshot.
-    while (true) {
-        Message trailing;
-        if (!connection->readMessage(trailing, 24h, error))
-            break;
+        const DWORD result = WaitForSingleObject(process, 100);
+        if (result == WAIT_OBJECT_0) {
+            reason = "Ui exited";
+            CloseHandle(process);
+            return true;
+        }
+        if (result != WAIT_TIMEOUT) {
+            CloseHandle(process);
+            reason = "Ui process wait failed";
+            return false;
+        }
     }
-    if (controlLost.load()) {
-        error = "ControlPipe was lost while PlaybackPipe was active";
-        return false;
-    }
-    return true;
+    CloseHandle(process);
+    return false;
 }
 
 bool uiPlaybackClient(
@@ -454,6 +466,8 @@ bool parseClientOptions(
         constexpr std::wstring_view noncePrefix = L"--nonce=";
         constexpr std::wstring_view shellPidPrefix = L"--shell-pid=";
         constexpr std::wstring_view activationPrefix = L"--activation-id=";
+        constexpr std::wstring_view dlnaPortPrefix =
+            L"--dlna-http-port=";
         constexpr std::wstring_view requestRoundsPrefix =
             L"--request-ui-rounds=";
         if (argument.starts_with(instancePrefix)) {
@@ -482,6 +496,19 @@ bool parseClientOptions(
                 options.activationId = std::stoull(value);
             } catch (...) {
                 error = "invalid --activation-id";
+                return false;
+            }
+        } else if (argument.starts_with(dlnaPortPrefix)) {
+            const std::wstring value =
+                argument.substr(dlnaPortPrefix.size());
+            try {
+                const unsigned long parsed = std::stoul(value);
+                if (parsed > std::numeric_limits<std::uint16_t>::max())
+                    throw std::out_of_range("port");
+                options.dlnaHttpPort =
+                    static_cast<std::uint16_t>(parsed);
+            } catch (...) {
+                error = "invalid --dlna-http-port";
                 return false;
             }
         } else if (argument == L"--request-ui") {
@@ -548,6 +575,124 @@ int runClient(const ClientOptions &options)
             return 3;
         }
 
+        auto playbackGateway =
+            std::make_shared<
+                mcast::playback::LateBindingPlaybackGateway>();
+        ProtocolDlnaConfirmationPort dlnaConfirmationPort(
+            *dispatcher);
+        const bool persistent = options.persistent;
+        std::mutex activationMutex;
+        std::mutex playbackMutex;
+        std::shared_ptr<mcast::playback::PlaybackPipeGateway>
+            activePlayback;
+        std::jthread playbackWatcher;
+
+        const auto activateUi =
+            [&](mcast::ipc::UiActivationOutcome &activation,
+                std::string &activationError) {
+                std::lock_guard activationLock(activationMutex);
+                if (!dispatcher->requestUiActivation(
+                        activation, 3s, activationError)) {
+                    return false;
+                }
+                if (!activation.started)
+                    return true;
+                if (!activation.grant) {
+                    activationError =
+                        "UI activation has no identity grant";
+                    return false;
+                }
+                auto connection = protocolPlaybackServer(
+                    options, *activation.grant, activationError);
+                if (!connection)
+                    return false;
+                auto playback =
+                    std::make_shared<
+                        mcast::playback::PlaybackPipeGateway>(
+                        std::move(connection), protocolLog);
+                if (playbackWatcher.joinable()) {
+                    playbackWatcher.request_stop();
+                    playbackWatcher.join();
+                }
+                playbackGateway->detach(
+                    "Ui playback connection replaced");
+                if (!playbackGateway->attach(
+                        playback, activationError))
+                    return false;
+                {
+                    std::lock_guard playbackLock(playbackMutex);
+                    activePlayback = playback;
+                }
+                const std::uint32_t processId =
+                    activation.grant->processId;
+                playbackWatcher = std::jthread(
+                    [&, playback, processId](
+                        std::stop_token stop) {
+                        std::string waitReason;
+                        const bool exited =
+                            waitForUiOrPlaybackEnd(
+                                processId, *playback, stop,
+                                waitReason);
+                        if (stop.stop_requested())
+                            return;
+                        if (!exited) {
+                            protocolLog(
+                                "Ui playback wait failed: "
+                                + waitReason);
+                            return;
+                        }
+                        bool current = false;
+                        {
+                            std::lock_guard playbackLock(
+                                playbackMutex);
+                            current =
+                                activePlayback.get()
+                                == playback.get();
+                            if (current)
+                                activePlayback.reset();
+                        }
+                        if (!current)
+                            return;
+                        playbackGateway->detach(waitReason);
+                        if (persistent) {
+                            std::string readyError;
+                            if (!dispatcher->sendUiOpenReady(
+                                    readyError)) {
+                                protocolLog(
+                                    "UiOpenReady after Ui exit failed: "
+                                    + readyError);
+                            }
+                        }
+                    });
+                return true;
+            };
+
+        mcast::dlna::runtime::DlnaProtocolRuntime dlnaRuntime(
+            *playbackGateway, dlnaConfirmationPort,
+            mcast::dlna::runtime::DlnaProtocolRuntimeOptions{
+                "Media Cast Receiver",
+                "uuid:mcast-" + options.instance,
+                options.dlnaHttpPort,
+                false,
+                [&] {
+                    mcast::ipc::UiActivationOutcome activation;
+                    std::string activationError;
+                    const bool succeeded =
+                        activateUi(activation, activationError);
+                    if (!succeeded) {
+                        protocolLog(
+                            "Ui activation from DLNA failed: "
+                            + activationError);
+                    }
+                    return succeeded;
+                },
+                protocolLog,
+            });
+        if (!dlnaRuntime.start(error)) {
+            std::cerr << "DLNA runtime failed: " << error << '\n';
+            return 4;
+        }
+
         std::atomic_bool receivingEnabled = true;
         ProtocolCommandServer commandServer(options, receivingEnabled);
         std::atomic_bool heartbeatFailed = false;
@@ -570,62 +715,79 @@ int runClient(const ClientOptions &options)
             }
         });
 
-        const bool persistent = options.persistent;
-        bool waitForUiOpenBeforeRound = !options.requestUi;
-        std::uint32_t round = 0;
-        while (true) {
-            if (waitForUiOpenBeforeRound
-                && (!dispatcher->sendUiOpenReady(error)
-                    || !dispatcher->waitForUiOpenRequest(
-                        24h, error))) {
-                std::cerr << "UiOpenRequest wait failed: "
+        if (persistent) {
+            mcast::ipc::UiActivationOutcome activation;
+            if (options.requestUi) {
+                std::string activationError;
+                if (!activateUi(activation, activationError)) {
+                    std::cerr << "UI activation failed: "
+                              << activationError << '\n';
+                    return 3;
+                }
+            } else if (!dispatcher->sendUiOpenReady(error)) {
+                std::cerr << "UiOpenReady failed: "
                           << error << '\n';
                 return 3;
             }
-            if (heartbeatFailed) {
-                std::lock_guard lock(heartbeatMutex);
-                error = heartbeatError.empty()
-                    ? "Protocol heartbeat failed" : heartbeatError;
-                std::cerr << error << '\n';
-                return 3;
-            }
 
-            mcast::ipc::UiActivationOutcome activation;
-            if (!dispatcher->requestUiActivation(
-                    activation, 3s, error)) {
-                std::cerr << "UI activation failed: " << error << '\n';
-                return 3;
-            }
-            if (activation.started
-                && (!activation.grant
-                    || !protocolPlaybackServer(
-                        options, *activation.grant, *dispatcher, error))) {
-                std::cerr << "playback server failed: " << error << '\n';
-                return 4;
-            }
-            if (persistent) {
-                if (activation.started
-                    && !waitForUiExit(
-                        activation.grant->processId, 24h, error)) {
-                    std::cerr << "Ui lifetime wait failed: "
+            while (dispatcher->connected()) {
+                if (!dispatcher->waitForUiOpenRequest(24h, error)) {
+                    if (heartbeatFailed) {
+                        std::lock_guard lock(heartbeatMutex);
+                        error = heartbeatError.empty()
+                            ? "Protocol heartbeat failed"
+                            : heartbeatError;
+                    }
+                    std::cerr << "UiOpenRequest wait failed: "
                               << error << '\n';
-                    return 5;
+                    return 3;
                 }
-                waitForUiOpenBeforeRound = true;
-                ++round;
-                continue;
-            }
-            if (round + 1 < options.uiRequestRounds) {
-                if (!activation.started
-                    || !waitForUiExit(
-                        activation.grant->processId, 5000ms, error)) {
-                    std::cerr << "Ui round barrier failed: "
-                              << error << '\n';
-                    return 5;
+                std::string activationError;
+                if (!activateUi(activation, activationError)) {
+                    std::cerr << "UI activation failed: "
+                              << activationError << '\n';
+                    return 3;
                 }
             }
-            if (++round >= options.uiRequestRounds)
-                break;
+        } else {
+            bool waitForUiOpenBeforeRound = !options.requestUi;
+            std::uint32_t round = 0;
+            while (true) {
+                if (waitForUiOpenBeforeRound
+                    && (!dispatcher->sendUiOpenReady(error)
+                        || !dispatcher->waitForUiOpenRequest(
+                            24h, error))) {
+                    std::cerr << "UiOpenRequest wait failed: "
+                              << error << '\n';
+                    return 3;
+                }
+                if (heartbeatFailed) {
+                    std::lock_guard lock(heartbeatMutex);
+                    error = heartbeatError.empty()
+                        ? "Protocol heartbeat failed" : heartbeatError;
+                    std::cerr << error << '\n';
+                    return 3;
+                }
+                mcast::ipc::UiActivationOutcome activation;
+                std::string activationError;
+                if (!activateUi(activation, activationError)) {
+                    std::cerr << "UI activation failed: "
+                              << activationError << '\n';
+                    return 3;
+                }
+                if (round + 1 < options.uiRequestRounds) {
+                    if (!activation.started
+                        || !waitForUiExit(
+                            activation.grant->processId,
+                            5000ms, error)) {
+                        std::cerr << "Ui round barrier failed: "
+                                  << error << '\n';
+                        return 5;
+                    }
+                }
+                if (++round >= options.uiRequestRounds)
+                    break;
+            }
         }
         dispatcher->stop();
     } else if (options.role == ProcessRole::Ui) {

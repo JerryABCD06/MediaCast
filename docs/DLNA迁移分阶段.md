@@ -142,8 +142,14 @@ DIDL-Lite 元数据已提取为与 DLNA 协议层绑定的播放项描述。
 普通命令与 `EndSession` 的提交顺序串行化，并通过 command ID、deadline、
 pending Open 和 generation 跟踪处理排队、超时、取消与重连。排队 Open 后的
 Play/Pause，以及 `WaitingForPlayer` 期间的 deferred 调优命令均有回归测试。
-HTTP 到 SOAP router 的组件已齐，但尚未由 Protocol 入口实例化；播放器打开完成
-事件回填 `mediaReady()`、ControlPipe 确认 Port 和真实入口切换仍未完成。
+HTTP 到 SOAP router 已由 `DlnaProtocolRuntime` 组合并由 `MCast.Protocol.exe`
+实例化。Runtime 自己持有 HTTP 轮询线程和播放任务串行线程，播放器打开完成/失败
+会回填 `mediaReady()`；ControlPipe 通过 `ProtocolDlnaConfirmationPort` 回传
+确认结果。Ui 不存在时，`LateBindingPlaybackGateway` 让播放命令失败关闭，Ui
+PlaybackPipe 建立后透明挂接。
+
+SSDP 发现、GENA 订阅和“暂停接收”的生产启停尚未迁入该 runtime；当前 HTTP 端口
+虽已由 Protocol 监听，但还没有广播可发现描述。
 
 ### 7. SSDP
 

@@ -499,6 +499,12 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Protocol)
             return true;
         break;
+    case MessageType::CastConfirmationCancel:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
     case MessageType::UiCastConfirmationRequest:
     case MessageType::UiCastConfirmationCancel:
         if (channel == ConnectionChannel::Control
@@ -1012,6 +1018,46 @@ decodeCastConfirmationDecisionMessage(
         *claimId,
         *accepted,
     };
+}
+
+std::optional<Message> makeCastConfirmationCancelMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    std::string &error)
+{
+    if (messageId == 0 || correlationId == 0) {
+        error = "cast confirmation cancel contains invalid ids";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::CastConfirmationCancel;
+    message.header.source = ProcessRole::Protocol;
+    message.header.destination = ProcessRole::Shell;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        return std::nullopt;
+    }
+    return message;
+}
+
+std::optional<std::uint64_t>
+decodeCastConfirmationCancelMessage(
+    const Message &message, std::string &error)
+{
+    if (message.header.type != MessageType::CastConfirmationCancel
+        || message.header.versionMinor < 1
+        || message.header.messageId == 0
+        || message.header.correlationId == 0
+        || message.header.sessionId != 0
+        || message.header.stateVersion != 0
+        || !message.payload.empty()
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        error = "message is not a valid cast confirmation cancel";
+        return std::nullopt;
+    }
+    return message.header.correlationId;
 }
 
 std::optional<Message> makeUiCastConfirmationRequestMessage(

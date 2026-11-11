@@ -20,6 +20,7 @@ public:
         const PlaybackCommand &command) = 0;
     virtual std::uint64_t addEventListener(
         std::function<void(const PlaybackEvent &)> listener) = 0;
+    // Implementations must not invoke listenerId again after this returns.
     virtual void removeEventListener(std::uint64_t listenerId) = 0;
 };
 

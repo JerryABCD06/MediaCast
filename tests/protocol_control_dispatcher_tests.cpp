@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -295,6 +296,62 @@ void testConfirmationTimeout()
     dispatcher->stop();
 }
 
+void testConfirmationCancellation()
+{
+    PipePair pair = makePipePair(L"cancel");
+    std::mutex readyMutex;
+    std::condition_variable ready;
+    bool requestSeen = false;
+    std::jthread server([&] {
+        std::string error;
+        Message confirmation;
+        check(pair.server->readMessage(confirmation, 3000ms, error),
+              "cancel test receives confirmation request: " + error);
+        {
+            std::lock_guard lock(readyMutex);
+            requestSeen = true;
+        }
+        ready.notify_all();
+        Message cancel;
+        check(pair.server->readMessage(cancel, 3000ms, error),
+              "cancel test receives confirmation cancel: " + error);
+        const auto cancelled =
+            decodeCastConfirmationCancelMessage(cancel, error);
+        check(cancelled.has_value()
+                  && *cancelled == confirmation.header.messageId,
+              "confirmation cancel correlates to the request: " + error);
+    });
+
+    auto dispatcher = std::make_unique<ProtocolControlDispatcher>(
+        std::move(pair.client));
+    std::string error;
+    check(dispatcher->start(error),
+          "cancel dispatcher starts: " + error);
+
+    bool requestOk = true;
+    bool accepted = true;
+    std::string requestError;
+    std::jthread requester([&] {
+        requestOk = dispatcher->requestCastConfirmation(
+            confirmationRequest(), 5s, accepted, requestError);
+    });
+    {
+        std::unique_lock lock(readyMutex);
+        check(ready.wait_for(lock, 2s, [&] { return requestSeen; }),
+              "confirmation request reaches fake Shell");
+    }
+    check(dispatcher->cancelCastConfirmation(),
+          "pending confirmation can be cancelled");
+    requester.join();
+    check(!requestOk && !accepted
+              && requestError.find("cancelled") != std::string::npos,
+          "cancellation wakes the waiter as fail-closed");
+    check(dispatcher->connected(),
+          "confirmation cancellation keeps ControlPipe connected");
+    server.join();
+    dispatcher->stop();
+}
+
 } // namespace
 
 int main()
@@ -303,6 +360,7 @@ int main()
     testActivationRejectedWithoutGrant();
     testTransportFailureWakesWaiters();
     testConfirmationTimeout();
+    testConfirmationCancellation();
     std::cout << "Protocol control dispatcher tests passed\n";
     return 0;
 }

@@ -35,6 +35,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -735,6 +736,12 @@ private:
         bool ready = false;
         bool accepted = false;
         bool abandoned = false;
+        bool cancelled = false;
+    };
+
+    struct ConfirmationThreadSlot {
+        std::jthread thread;
+        std::shared_ptr<std::atomic_bool> done;
     };
 
     struct PendingUiConfirmation {
@@ -955,6 +962,7 @@ private:
                 pending.waiter->readyCondition.notify_all();
             }
             m_pendingUiConfirmations.clear();
+            m_cancelledProtocolConfirmations.clear();
             m_recentConfirmationDecisions.clear();
         }
         sendConfirmationCancels(targets);
@@ -1070,6 +1078,11 @@ private:
             std::scoped_lock lock(m_confirmationMutex);
             if (generation != m_protocolGeneration)
                 return std::nullopt;
+            if (m_cancelledProtocolConfirmations.erase(
+                    requestMessageId)
+                != 0) {
+                return std::nullopt;
+            }
             m_pendingUiConfirmations.emplace(
                 uiRequestMessageId,
                 PendingUiConfirmation{
@@ -1115,6 +1128,8 @@ private:
         }
         if (!waiter->ready)
             return std::nullopt;
+        if (waiter->cancelled)
+            return std::nullopt;
         const bool accepted = waiter->accepted;
         lock.unlock();
         {
@@ -1126,6 +1141,125 @@ private:
         if (!currentUiConnection(uiConnection, uiGeneration))
             return std::nullopt;
         return accepted;
+    }
+
+    void startProtocolConfirmation(
+        mcast::ipc::CastConfirmationRequestInfo request,
+        std::uint64_t requestMessageId, std::uint64_t generation,
+        const std::shared_ptr<mcast::ipc::PipeConnection> &connection)
+    {
+        reapConfirmationThreads();
+        auto done = std::make_shared<std::atomic_bool>(false);
+        std::lock_guard lock(m_confirmationThreadsMutex);
+        if (!m_acceptConfirmationThreads || m_shuttingDown.load())
+            return;
+        ConfirmationThreadSlot slot;
+        slot.done = done;
+        slot.thread = std::jthread(
+            [this, request = std::move(request), requestMessageId,
+             generation, connection,
+             done](std::stop_token stop) mutable {
+                struct DoneGuard {
+                    std::shared_ptr<std::atomic_bool> done;
+                    ~DoneGuard() { done->store(true); }
+                } doneGuard{done};
+                if (stop.stop_requested())
+                    return;
+                const auto result = requestCastConfirmation(
+                    request, requestMessageId, generation);
+                if (!result || stop.stop_requested())
+                    return;
+                const bool accepted = *result;
+                rememberConfirmationDecision(
+                    requestMessageId, request.protocol,
+                    request.claimId, accepted, generation);
+                const mcast::ipc::CastConfirmationDecisionInfo decision{
+                    request.protocol,
+                    request.claimId,
+                    accepted,
+                };
+                std::string error;
+                const auto decisionMessage =
+                    mcast::ipc::makeCastConfirmationDecisionMessage(
+                        nextMessageId(), requestMessageId,
+                        decision, error);
+                if (!decisionMessage
+                    || !connection->writeMessage(
+                        *decisionMessage, 2000ms, error)) {
+                    std::cerr << "cast confirmation decision: "
+                              << error << '\n';
+                    return;
+                }
+                std::cout << "SHELL_CAST_CONFIRMATION claim="
+                          << request.claimId
+                          << " protocol="
+                          << static_cast<int>(request.protocol)
+                          << " accepted=" << accepted
+                          << '\n';
+            });
+        m_confirmationThreads.push_back(std::move(slot));
+    }
+
+    void reapConfirmationThreads()
+    {
+        std::vector<std::jthread> completed;
+        {
+            std::scoped_lock lock(m_confirmationThreadsMutex);
+            for (auto it = m_confirmationThreads.begin();
+                 it != m_confirmationThreads.end();) {
+                if (!it->done || !it->done->load()) {
+                    ++it;
+                    continue;
+                }
+                completed.push_back(std::move(it->thread));
+                it = m_confirmationThreads.erase(it);
+            }
+        }
+        for (auto &thread : completed) {
+            if (thread.joinable())
+                thread.join();
+        }
+    }
+
+    void cancelProtocolConfirmation(
+        std::uint64_t requestMessageId,
+        std::uint64_t generation)
+    {
+        std::shared_ptr<mcast::ipc::PipeConnection> uiConnection;
+        std::uint64_t uiRequestMessageId = 0;
+        std::shared_ptr<ConfirmationWaiter> waiter;
+        {
+            std::scoped_lock lock(m_confirmationMutex);
+            const auto found = std::find_if(
+                m_pendingUiConfirmations.begin(),
+                m_pendingUiConfirmations.end(),
+                [&](const auto &entry) {
+                    return entry.second.protocolGeneration
+                            == generation
+                        && entry.second.protocolRequestMessageId
+                            == requestMessageId;
+                });
+            if (found == m_pendingUiConfirmations.end()) {
+                m_cancelledProtocolConfirmations.insert(
+                    requestMessageId);
+            } else {
+                uiConnection = found->second.uiConnection;
+                uiRequestMessageId =
+                    found->second.uiRequestMessageId;
+                waiter = found->second.waiter;
+                {
+                    std::scoped_lock waiterLock(waiter->mutex);
+                    waiter->cancelled = true;
+                    waiter->accepted = false;
+                    waiter->ready = true;
+                }
+                m_pendingUiConfirmations.erase(found);
+            }
+        }
+        if (!waiter)
+            return;
+        waiter->readyCondition.notify_all();
+        sendConfirmationCancels({{uiConnection, uiRequestMessageId}});
     }
 
     void completeUiConfirmation(
@@ -1477,7 +1611,9 @@ private:
         std::wstring arguments =
             L"--instance=" + widen(m_options.instance)
             + L" --nonce=" + widen(*m_nonce)
-            + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId());
+            + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
+            + L" --dlna-http-port="
+            + (m_options.testMode ? L"0" : L"8200");
         if (!m_options.background)
             arguments += L" --request-ui";
         if (!m_options.testMode || m_options.testPersistent)
@@ -1814,40 +1950,47 @@ private:
                 bool accepted = false;
                 if (cached.found) {
                     accepted = cached.accepted;
-                } else {
-                    const auto decisionResult = requestCastConfirmation(
-                        *request, message.header.messageId,
-                        confirmationGeneration);
-                    if (!decisionResult)
+                    const mcast::ipc::CastConfirmationDecisionInfo decision{
+                        request->protocol,
+                        request->claimId,
+                        accepted,
+                    };
+                    const auto decisionMessage =
+                        mcast::ipc::makeCastConfirmationDecisionMessage(
+                            nextMessageId(), message.header.messageId,
+                            decision, error);
+                    if (!decisionMessage
+                        || !connection->writeMessage(
+                            *decisionMessage, 2000ms, error)) {
+                        std::cerr << "cast confirmation decision: "
+                                  << error << '\n';
                         return;
-                    accepted = *decisionResult;
-                    rememberConfirmationDecision(
-                        message.header.messageId, request->protocol,
-                        request->claimId, accepted,
-                        confirmationGeneration);
+                    }
+                    std::cout << "SHELL_CAST_CONFIRMATION claim="
+                              << request->claimId
+                              << " protocol="
+                              << static_cast<int>(request->protocol)
+                              << " accepted=" << accepted
+                              << '\n';
+                } else {
+                    startProtocolConfirmation(
+                        *request, message.header.messageId,
+                        confirmationGeneration, connection);
                 }
-                const mcast::ipc::CastConfirmationDecisionInfo decision{
-                    request->protocol,
-                    request->claimId,
-                    accepted,
-                };
-                const auto decisionMessage =
-                    mcast::ipc::makeCastConfirmationDecisionMessage(
-                        nextMessageId(), message.header.messageId,
-                        decision, error);
-                if (!decisionMessage
-                    || !connection->writeMessage(
-                        *decisionMessage, 2000ms, error)) {
-                    std::cerr << "cast confirmation decision: "
+            } else if (message.header.type
+                           == MessageType::CastConfirmationCancel
+                       && helloMessage.header.source
+                           == ProcessRole::Protocol) {
+                const auto requestMessageId =
+                    mcast::ipc::decodeCastConfirmationCancelMessage(
+                        message, error);
+                if (!requestMessageId) {
+                    std::cerr << "cast confirmation cancel: "
                               << error << '\n';
                     return;
                 }
-                std::cout << "SHELL_CAST_CONFIRMATION claim="
-                          << request->claimId
-                          << " protocol="
-                          << static_cast<int>(request->protocol)
-                          << " accepted=" << accepted
-                          << '\n';
+                cancelProtocolConfirmation(
+                    *requestMessageId, confirmationGeneration);
             } else if (message.header.type
                            == MessageType::UiCastConfirmationDecision
                        && helloMessage.header.source == ProcessRole::Ui) {
@@ -1898,6 +2041,17 @@ private:
             }
             m_records.clear();
         }
+        {
+            std::scoped_lock lock(m_confirmationThreadsMutex);
+            m_acceptConfirmationThreads = false;
+            for (auto &slot : m_confirmationThreads)
+                slot.thread.request_stop();
+        }
+        for (auto &slot : m_confirmationThreads) {
+            if (slot.thread.joinable())
+                slot.thread.join();
+        }
+        m_confirmationThreads.clear();
         for (const auto &slot : m_connections) {
             if (slot->thread.joinable())
                 slot->thread.join();
@@ -1961,6 +2115,11 @@ private:
         m_recentConfirmationDecisions;
     std::unordered_map<std::uint64_t, PendingUiConfirmation>
         m_pendingUiConfirmations;
+    std::unordered_set<std::uint64_t>
+        m_cancelledProtocolConfirmations;
+    std::vector<ConfirmationThreadSlot> m_confirmationThreads;
+    std::mutex m_confirmationThreadsMutex;
+    bool m_acceptConfirmationThreads = true;
     std::uint64_t m_protocolGeneration = 0;
     std::uint64_t m_uiGeneration = 0;
     std::mutex m_confirmationMutex;
