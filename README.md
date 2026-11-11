@@ -8,6 +8,10 @@
 
 Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 
+当前正在把单进程 `MCast.exe` 迁向 `MCast.Shell.exe / MCast.Protocol.exe /
+MCast.Ui.exe` 三进程架构。生产入口切换前旧单体仍保留作回退，新的 shell 入口
+已覆盖托盘、启动屏幕、DLNA Protocol 和按需 MainWindow。
+
 - 接收 **DLNA / UPnP AV** 投送（用 vivo 相册、BubbleUPnP 实测过）
 - 播放后端是 **libmpv**，画面用 render API 合进 QML 界面
 - 常驻托盘：关掉窗口还在接收；「暂停接收投送」能让手机暂时搜不到这台电脑
@@ -29,13 +33,11 @@ licenses/        随包分发的第三方许可全文 + 组件清单
 以及一份 **libmpv 开发包**（`CMakeLists.txt` 里的 `MPV_DEV_DIR` 指向它，
 需要 `include/mpv/client.h` 和 `libmpv.lib`）。
 
-> **第三方源码 FluentUI 不在本仓库里。** 它是一个独立的 clone（自己带 `.git`），
-> 所以被 `.gitignore` 排除了。用的哪个提交、我们改了哪几行，都记在
-> **`third_party/PATCHES.md`** —— 照着那份文档准备好它，才能开始编译。
+> **第三方源码 FluentUI 已随仓库提供。** 上游 `.git-upstream/` 被忽略，实际
+> 使用提交和本项目补丁记录在 **`third_party/PATCHES.md`**。
 
 ```powershell
-# 1) 按 third_party/PATCHES.md 准备好 third_party/FluentUI
-# 2) 配置 + 编译
+# 配置 + 编译
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
       -DCMAKE_PREFIX_PATH=<你的 Qt 路径>
 cmake --build build
@@ -61,4 +63,5 @@ Qt 6（LGPLv3，动态链接、未修改）、FluentUI（MIT）。
 | `docs/待办.md` | 现在到哪儿了、下一步干什么、踩过的坑 |
 | `docs/控制点行为.md` | 真实控制点（vivo 相册、BubbleUPnP）**实际**怎么行为 |
 | `docs/DLNA实现情况.md` | 协议实现到什么程度 |
+| `docs/多进程重构交接.md` | 当前三进程边界、启动/重连时序、验证入口和下一步顺序 |
 | `docs/legal/` | 隐私、法律、商标、编解码器声明 |
