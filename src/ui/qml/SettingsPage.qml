@@ -273,6 +273,20 @@ Item {
                     icon: FluentIcons.Send
                     title: qsTr("ui_settings_accept")
                     subtitle: qsTr("ui_settings_accept_desc")
+
+                    FluToggleSwitch {
+                        id: switchAccept
+                        Component.onCompleted: checked = Settings.castNewCast
+                        Connections {
+                            target: Settings
+                            function onAcceptNewCastChanged() {
+                                switchAccept.checked = Settings.castNewCast
+                            }
+                        }
+                        clickListener: function () {
+                            Settings.castNewCast = !Settings.castNewCast
+                        }
+                    }
                 }
 
                 FluText {

@@ -159,7 +159,8 @@ set(MCAST_COMMON_CONTROLS_MANIFEST
 target_link_libraries(
     MCast.Shell PRIVATE
     mcast_ipc dwmapi.lib d2d1.lib d3d11.lib dxgi.lib dcomp.lib
-    windowscodecs.lib advapi32.lib ole32.lib shell32.lib windowsapp.lib)
+    windowscodecs.lib advapi32.lib ole32.lib shell32.lib uxtheme.lib
+    windowsapp.lib)
 set_target_properties(MCast.Shell PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_executable(

@@ -4,6 +4,7 @@
 #include "platform/windows/TrayIcon.h"
 
 #include <windowsx.h>
+#include <uxtheme.h>
 #include <winternl.h>
 
 #include <memory>
@@ -38,7 +39,7 @@ struct DarkModeApi {
     FlushMenuThemesFn flushMenuThemes = nullptr;
 };
 
-bool knownDarkModeOrdinalRange()
+bool darkModeMenuApiAvailable()
 {
     using RtlGetVersionFn = LONG(WINAPI *)(PRTL_OSVERSIONINFOW);
     const HMODULE module = GetModuleHandleW(L"ntdll.dll");
@@ -52,54 +53,32 @@ bool knownDarkModeOrdinalRange()
     version.dwOSVersionInfoSize = sizeof(version);
     if (getVersion(&version) != 0)
         return false;
-    return version.dwBuildNumber >= 17763
-        && version.dwBuildNumber <= 26100;
+    return version.dwMajorVersion != 10
+        ? version.dwMajorVersion > 10
+        : version.dwBuildNumber >= 17763;
 }
 
 DarkModeApi darkModeApi()
 {
     static const DarkModeApi api = [] {
         DarkModeApi result;
-        HMODULE module = LoadLibraryW(L"uxtheme.dll");
+        if (!darkModeMenuApiAvailable())
+            return result;
+        HMODULE module = GetModuleHandleW(L"uxtheme.dll");
         if (!module)
             return result;
         result.setPreferredAppMode =
             reinterpret_cast<SetPreferredAppModeFn>(
-                GetProcAddress(module, "SetPreferredAppMode"));
-        const bool useOrdinals = knownDarkModeOrdinalRange();
-        if (!result.setPreferredAppMode && useOrdinals) {
-            result.setPreferredAppMode =
-                reinterpret_cast<SetPreferredAppModeFn>(
-                    GetProcAddress(module, MAKEINTRESOURCEA(135)));
-        }
+                GetProcAddress(module, MAKEINTRESOURCEA(135)));
         result.allowDarkModeForWindow =
             reinterpret_cast<AllowDarkModeForWindowFn>(
-                GetProcAddress(module, "AllowDarkModeForWindow"));
-        if (!result.allowDarkModeForWindow && useOrdinals) {
-            result.allowDarkModeForWindow =
-                reinterpret_cast<AllowDarkModeForWindowFn>(
-                    GetProcAddress(module, MAKEINTRESOURCEA(133)));
-        }
+                GetProcAddress(module, MAKEINTRESOURCEA(133)));
         result.flushMenuThemes =
             reinterpret_cast<FlushMenuThemesFn>(
-                GetProcAddress(module, "FlushMenuThemes"));
-        if (!result.flushMenuThemes && useOrdinals) {
-            result.flushMenuThemes =
-                reinterpret_cast<FlushMenuThemesFn>(
-                    GetProcAddress(module, MAKEINTRESOURCEA(136)));
-        }
+                GetProcAddress(module, MAKEINTRESOURCEA(136)));
         return result;
     }();
     return api;
-}
-
-bool highContrastEnabled()
-{
-    HIGHCONTRASTW contrast{sizeof(contrast)};
-    return SystemParametersInfoW(
-               SPI_GETHIGHCONTRAST, sizeof(contrast),
-               &contrast, 0)
-        && (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
 }
 
 } // namespace
@@ -164,7 +143,6 @@ bool NativeTrayIcon::initialize(std::string &error)
     m_taskbarCreatedMessage =
         RegisterWindowMessageW(L"TaskbarCreated");
     rebuildMenu();
-    applyDarkMode();
     return addNotificationIcon(error);
 }
 
@@ -192,8 +170,6 @@ void NativeTrayIcon::requestTexts(TrayTexts texts)
 void NativeTrayIcon::setDark(bool dark)
 {
     m_dark = dark;
-    if (m_window)
-        applyDarkMode();
 }
 
 void NativeTrayIcon::requestDark(bool dark)
@@ -299,7 +275,6 @@ LRESULT NativeTrayIcon::handleMessage(
     } else if (message == WM_SETTINGCHANGE || message == WM_THEMECHANGED) {
         if (m_themeChanged)
             m_themeChanged();
-        applyDarkMode();
         return 0;
     } else if (message == WM_COMMAND) {
         switch (LOWORD(wParam)) {
@@ -409,17 +384,17 @@ void NativeTrayIcon::removeNotificationIcon()
 
 void NativeTrayIcon::applyDarkMode()
 {
-    const bool highContrast = highContrastEnabled();
-    const bool useDark = m_dark && !highContrast;
+    if (!m_window)
+        return;
     const DarkModeApi api = darkModeApi();
-    if (api.setPreferredAppMode) {
-        api.setPreferredAppMode(
-            highContrast
-                ? DefaultMode
-                : (useDark ? ForceDarkMode : ForceLightMode));
-    }
-    if (m_window && api.allowDarkModeForWindow)
-        api.allowDarkModeForWindow(m_window, useDark);
+    if (!api.allowDarkModeForWindow)
+        return;
+    if (api.setPreferredAppMode)
+        api.setPreferredAppMode(AllowDarkMode);
+    api.allowDarkModeForWindow(m_window, m_dark);
+    SetWindowTheme(
+        m_window, m_dark ? L"DarkMode_Explorer" : nullptr,
+        nullptr);
     if (api.flushMenuThemes)
         api.flushMenuThemes();
 }
