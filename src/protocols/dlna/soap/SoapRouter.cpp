@@ -183,7 +183,7 @@ std::optional<playback::PlayMode> parsePlayMode(std::string_view value)
     return std::nullopt;
 }
 
-playback::MediaRequest mediaRequest(
+playback::MediaRequest parseMediaRequest(
     std::string uri, std::string metadata)
 {
     playback::MediaRequest request;
@@ -320,8 +320,20 @@ SoapRouter::SoapRouter(
 
 HttpResponse SoapRouter::handle(const core::HttpRequest &request)
 {
+    HttpResponse errorResponse;
+    const auto parsed = parseRequest(request, errorResponse);
+    if (!parsed)
+        return errorResponse;
+    return handleParsed(*parsed);
+}
+
+std::optional<SoapRequestContext> SoapRouter::parseRequest(
+    const core::HttpRequest &request,
+    HttpResponse &errorResponse)
+{
     if (request.method != "POST")
-        return soapFault(kInvalidAction, "Invalid Action");
+        return errorResponse =
+            soapFault(kInvalidAction, "Invalid Action"), std::nullopt;
 
     std::string target = request.target;
     const std::size_t query = target.find('?');
@@ -335,14 +347,16 @@ HttpResponse SoapRouter::handle(const core::HttpRequest &request)
     else if (target == "/ConnectionManager/control")
         service = "ConnectionManager";
     else
-        return soapFault(kInvalidAction, "Invalid Action");
+        return errorResponse =
+            soapFault(kInvalidAction, "Invalid Action"), std::nullopt;
 
     SoapRequestXml body;
     std::string parseError;
     if (!parseSoapRequest(request.body, service, body, parseError)
         || !knownAction(service, body.action)) {
         log("SOAP XML rejected: " + parseError);
-        return soapFault(kInvalidAction, "Invalid Action");
+        return errorResponse =
+            soapFault(kInvalidAction, "Invalid Action"), std::nullopt;
     }
 
     const std::string expectedNamespace =
@@ -357,14 +371,16 @@ HttpResponse SoapRouter::handle(const core::HttpRequest &request)
         const std::size_t hash = value.rfind('#');
         if (hash == std::string::npos) {
             log("SOAPAction has no service/action separator");
-            return soapFault(kInvalidAction, "Invalid Action");
+            return errorResponse =
+                soapFault(kInvalidAction, "Invalid Action"), std::nullopt;
         }
         const std::string actionNamespace = value.substr(0, hash);
         const std::string headerAction = value.substr(hash + 1);
         if (actionNamespace != expectedNamespace
             || headerAction != body.action) {
             log("SOAPAction does not match path and body");
-            return soapFault(kInvalidAction, "Invalid Action");
+            return errorResponse =
+                soapFault(kInvalidAction, "Invalid Action"), std::nullopt;
         }
         action = headerAction;
     }
@@ -372,16 +388,52 @@ HttpResponse SoapRouter::handle(const core::HttpRequest &request)
     if (service != "ConnectionManager") {
         const auto instance = body.value("InstanceID");
         if (!instance)
-            return soapFault(kInvalidArgs, "Invalid Args");
+            return errorResponse =
+                soapFault(kInvalidArgs, "Invalid Args"), std::nullopt;
         const auto id = parseInt(*instance);
         if (!id || *id != 0)
-            return soapFault(kInvalidInstanceId, "Invalid InstanceID");
+            return errorResponse = soapFault(
+                kInvalidInstanceId, "Invalid InstanceID"), std::nullopt;
     }
 
     log("SOAP " + service + "#" + action);
-    const HttpResponse response = dispatch(service, action, body);
-    m_session.peerActivity(m_options.now());
+    return SoapRequestContext{
+        std::move(service),
+        std::move(action),
+        std::move(body),
+    };
+}
+
+HttpResponse SoapRouter::handleParsed(
+    const SoapRequestContext &request)
+{
+    const HttpResponse response = dispatch(
+        request.service, request.action, request.body);
+    notePeerActivity();
     return response;
+}
+
+void SoapRouter::notePeerActivity()
+{
+    m_session.peerActivity(m_options.now());
+}
+
+playback::MediaRequest SoapRouter::mediaRequest(
+    std::string uri, std::string metadata)
+{
+    return parseMediaRequest(std::move(uri), std::move(metadata));
+}
+
+HttpResponse SoapRouter::successResponse(
+    const std::string &service, const std::string &action)
+{
+    return soapResponse(service, action);
+}
+
+HttpResponse SoapRouter::faultResponse(
+    int code, std::string_view text)
+{
+    return soapFault(code, text);
 }
 
 HttpResponse SoapRouter::dispatch(

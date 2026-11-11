@@ -82,6 +82,19 @@ int main()
     check(loop.poll(2s, activations, woken, error) && woken,
           "wake event interrupts poll");
 
+    // Hold a TCP port without calling listen(). This guarantees a local
+    // connection-refused path and avoids reusing the UDP ephemeral port,
+    // which can race with an unrelated TCP listener.
+    SocketHandle refusedDestination;
+    check(refusedDestination.createTcp(error),
+          "refused TCP destination creates");
+    check(refusedDestination.bindLoopback(0, error),
+          "refused TCP destination binds loopback");
+    const auto refusedPort = refusedDestination.localPort();
+    check(refusedPort.has_value() && *refusedPort != 0,
+          "refused TCP destination has a port");
+    destination.sin_port = htons(*refusedPort);
+
     SocketHandle tcp;
     check(tcp.createTcp(error), "TCP socket creates");
     check(tcp.setNonBlocking(error), "TCP socket is nonblocking");
@@ -94,16 +107,21 @@ int main()
         connectResult == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK,
         "nonblocking TCP connect starts");
     const auto tcpDeadline = std::chrono::steady_clock::now() + 5s;
+    auto tcpConnectActivation = [&] {
+        return std::find_if(
+            activations.begin(), activations.end(),
+            [&](const SocketActivation &activation) {
+                return activation.socket == tcp.get()
+                    && (activation.events & FD_CONNECT) != 0;
+            });
+    };
+    auto tcpActivation = activations.end();
     do {
         check(loop.poll(250ms, activations, woken, error),
               "TCP failure event polls");
-    } while (activations.empty()
+        tcpActivation = tcpConnectActivation();
+    } while (tcpActivation == activations.end()
              && std::chrono::steady_clock::now() < tcpDeadline);
-    const auto tcpActivation = std::find_if(
-        activations.begin(), activations.end(),
-        [&](const SocketActivation &activation) {
-            return activation.socket == tcp.get();
-        });
     check(tcpActivation != activations.end(), "TCP activation is present");
     check((tcpActivation->events & FD_CONNECT) != 0,
           "TCP FD_CONNECT is present");

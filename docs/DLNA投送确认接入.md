@@ -28,6 +28,10 @@ Protocol 单一仲裁执行上下文
     -> 保存 HTTP requestId 与 DLNA 事务的关联
     -> 等媒体打开完成后才放行 SetURI/Play
 
+  DlnaClaimHttpHandler
+    -> 复用 SoapRouter 的校验与查询路径
+    -> 只异步接管 SetURI/Play/Stop 和受所有权约束的 AVTransport 动作
+
 DLNA 协议执行层
   SoapRouter / DlnaSession
     -> Claim 已允许后才提交 Open、Play、Stop 等播放命令
@@ -132,6 +136,48 @@ handler 返回 `Pending` 后，连接保持。确认线程或媒体准备线程�
 - sessionReady 失败时 HTTP 必须失败，不能因为 mpv 已经完成打开就报告成功；
 - ControlPipe 丢失时，确认候选和正在准备的媒体都 fail-closed。
 
+## 3.3 SOAP 异步接管
+
+`SoapRouter::parseRequest()` 与 `handleParsed()` 把原有校验和动作执行拆开。
+`DlnaClaimHttpHandler` 复用同一个解析结果，不复制路径、SOAPAction、
+namespace、InstanceID 和 XML 校验逻辑。
+
+`DlnaHttpFrontend` 是完整 HTTP 面的纯路由层：GET 提供
+`/description.xml` 和三份 SCPD，POST 原样交给 `DlnaClaimHttpHandler`。
+`net::HttpServer` 同时提供 loopback 和 `listenAny()` 两种绑定方式；生产测试不再
+依赖修改代码才能从局域网访问。
+
+异步接管范围：
+
+| 动作 | 行为 |
+|---|---|
+| `SetAVTransportURI` | 进入 Claim runtime，HTTP 保持 Pending |
+| `Play` | owner 直接播放；候选跟随 SetURI 等待确认；未知来源 701 |
+| `Stop` | owner 正常停止；候选/未知来源只返回成功但不停止旧投送 |
+| `Pause/Seek/Next/Previous/SetNext/SetPlayMode` | owner 且无慢 Open 时同步执行，否则 701 |
+| `Get*` 查询 | 保持原有同步 SoapRouter 行为 |
+| RenderingControl / ConnectionManager | 保持原有同步行为 |
+
+确认或媒体准备完成后，handler 根据原 requestId 生成对应 SOAP success/fault，
+再通过 `HttpServer::completeRequest()` 放行。确认、媒体打开和播放动作的
+callback 在连接 owner 线程执行，只允许投递到 Protocol 串行上下文，不允许在
+callback 内阻塞等待 IPC、创建 UI 或直接执行长时间媒体打开。
+
+handler 内部串行化 `DlnaClaimRuntime` 和 requestId 映射；外部 callback 在锁外
+执行，因此可以从 callback 安全地再次投递 handler 事件。入口另有一把递归
+“操作锁”，覆盖“授权判断 -> callback”整段，防止两个并发请求在授权后插入新的
+换片或抢占；runtime 状态锁只保护短临界区。
+
+`DlnaClaimConfirmationWorker` 把确认等待移出 HTTP 线程。handler 的
+`requestConfirmation` 只投递提示，后台线程通过可替换的
+`DlnaClaimConfirmationPort` 等待 Shell/UI 决定，再调用
+`confirmationDecision()`。Port 可以接 ControlPipe，而 DLNA 层本身仍不依赖 IPC。
+
+Runtime 还会在媒体打开完成时复核 owner session、epoch 和 mediaGeneration；
+所有权在这期间变化时，HTTP 必须失败，不能把迟到 Open 的成功算到新 owner 上。
+慢 Open 有 10 秒 Runtime deadline，`tick()` 到期会结束 owner、拒绝关联 HTTP
+并释放 operation，避免永久 Pending。
+
 ## 4. 明确 Claim
 
 只有控制点明确表达“开始播放这个媒体”时才产生 Claim：
@@ -210,6 +256,10 @@ latest MediaRequest
   confirmation、terminal failure、重复响应隔离和真实命名管道测试；
 - `DlnaClaimRuntime`：HTTP requestId 生命周期、慢 Open 替换、媒体就绪后完成
   SetURI/Play、controlLost 批量失败；
+- `DlnaClaimHttpHandler`：异步 SetURI/Play/Stop、候选慢 Open 控制隔离、
+  同步查询透传和 SOAP 错误映射；
+- `DlnaHttpFrontend`：设备描述、三份 SCPD 与 SOAP 的统一 HTTP 路由；
+- `DlnaClaimConfirmationWorker`：HTTP 线程之外的确认等待和决定回填；
 - Protocol 骨架已经使用 dispatcher 完成 heartbeat、UI Open、activation 和
   PlaybackPipe 握手；
 - HTTP、DLNA Claim、dispatcher、runtime 和进程级测试。

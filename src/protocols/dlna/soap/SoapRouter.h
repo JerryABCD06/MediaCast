@@ -10,11 +10,19 @@
 #include "protocols/dlna/session/DlnaSession.h"
 
 #include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace mcast::dlna::soap {
 
 using HttpResponse = net::HttpResponse;
+
+struct SoapRequestContext {
+    std::string service;
+    std::string action;
+    SoapRequestXml body;
+};
 
 struct SoapRouterOptions {
     std::function<SessionTime()> now;
@@ -28,6 +36,18 @@ public:
         DlnaSession &session, SoapRouterOptions options = {});
 
     HttpResponse handle(const core::HttpRequest &request);
+    std::optional<SoapRequestContext> parseRequest(
+        const core::HttpRequest &request,
+        HttpResponse &errorResponse);
+    HttpResponse handleParsed(const SoapRequestContext &request);
+    void notePeerActivity();
+
+    static playback::MediaRequest mediaRequest(
+        std::string uri, std::string metadata);
+    static HttpResponse successResponse(
+        const std::string &service, const std::string &action);
+    static HttpResponse faultResponse(
+        int code, std::string_view text);
 
 private:
     HttpResponse dispatch(

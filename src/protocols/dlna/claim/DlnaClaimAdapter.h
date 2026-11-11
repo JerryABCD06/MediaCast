@@ -87,6 +87,10 @@ public:
     const cast::ArbitrationSnapshot &snapshot() const noexcept;
 
     bool ownsPeer(const cast::PeerIdentity &peer) const;
+    bool ownsOperation(
+        std::uint64_t sessionId, std::uint64_t epoch,
+        std::uint64_t mediaGeneration) const;
+    bool sessionNeedsReady(std::uint64_t sessionId) const;
     // These two are projection queries. Call tick(now) before using them as a
     // deadline-sensitive source of truth.
     bool hasPending() const noexcept { return m_pending.has_value(); }

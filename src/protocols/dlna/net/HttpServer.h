@@ -68,6 +68,12 @@ public:
     bool listenLoopback(
         std::uint16_t port, AsyncHttpRequestHandler handler,
         HttpServerOptions options, std::string &error);
+    bool listenAny(
+        std::uint16_t port, HttpRequestHandler handler,
+        HttpServerOptions options, std::string &error);
+    bool listenAny(
+        std::uint16_t port, AsyncHttpRequestHandler handler,
+        HttpServerOptions options, std::string &error);
     void stop() noexcept;
 
     // Thread-safe. This only accepts the completion for later validation and
@@ -120,6 +126,10 @@ private:
     void queueErrorResponse(
         SOCKET socket, Connection &connection, int status,
         std::string message);
+    bool listenOn(
+        std::uint16_t port, bool loopback,
+        AsyncHttpRequestHandler handler,
+        HttpServerOptions options, std::string &error);
     std::size_t maximumBufferedBytes() const noexcept;
 
     platform::net::WinsockRuntime m_winsock;

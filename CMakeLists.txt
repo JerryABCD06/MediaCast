@@ -95,6 +95,12 @@ add_library(mcast_dlna_protocol STATIC
     src/protocols/dlna/claim/DlnaClaimAdapter.cpp
     src/protocols/dlna/claim/DlnaClaimRuntime.h
     src/protocols/dlna/claim/DlnaClaimRuntime.cpp
+    src/protocols/dlna/claim/DlnaClaimHttpHandler.h
+    src/protocols/dlna/claim/DlnaClaimHttpHandler.cpp
+    src/protocols/dlna/runtime/DlnaHttpFrontend.h
+    src/protocols/dlna/runtime/DlnaHttpFrontend.cpp
+    src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.h
+    src/protocols/dlna/runtime/DlnaClaimConfirmationWorker.cpp
     src/protocols/dlna/session/DlnaSession.h
     src/protocols/dlna/session/DlnaSession.cpp
     src/protocols/dlna/soap/SoapRouter.h
@@ -337,6 +343,40 @@ if(BUILD_TESTING)
         COMMAND mcast_dlna_claim_runtime_tests)
     set_tests_properties(
         mcast_dlna_claim_runtime_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_dlna_claim_http_handler_tests
+        tests/dlna_claim_http_handler_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_claim_http_handler_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_claim_http_handler_tests
+        COMMAND mcast_dlna_claim_http_handler_tests)
+    set_tests_properties(
+        mcast_dlna_claim_http_handler_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_dlna_http_frontend_tests
+        tests/dlna_http_frontend_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_http_frontend_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_http_frontend_tests
+        COMMAND mcast_dlna_http_frontend_tests)
+    set_tests_properties(
+        mcast_dlna_http_frontend_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_dlna_claim_confirmation_worker_tests
+        tests/dlna_claim_confirmation_worker_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_claim_confirmation_worker_tests
+        PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_claim_confirmation_worker_tests
+        COMMAND mcast_dlna_claim_confirmation_worker_tests)
+    set_tests_properties(
+        mcast_dlna_claim_confirmation_worker_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_app_settings_tests

@@ -315,6 +315,152 @@ void testSessionReadyFailureFailsMedia()
           "failed sessionReady cannot report HTTP success");
 }
 
+void testMediaReadyRejectsChangedOwnership()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    DlnaClaimRuntime runtime(adapter);
+    auto first = runtime.beginSetUri(
+        901, peer("192.0.2.10"), media("http://a/one.mp4"),
+        CastTime{0});
+    check(first.media.has_value()
+              && coordinator.snapshot().owner.has_value(),
+          "ownership validation starts with an owner");
+    check(runtime.mediaReady(
+              first.media->operationId, true, CastTime{1})
+              .playNow
+              == false,
+          "first owner media becomes ready");
+
+    auto replacement = runtime.beginSetUri(
+        902, peer("192.0.2.10"), media("http://a/two.mp4"),
+        CastTime{2});
+    check(replacement.media.has_value()
+              && !replacement.media->newSession,
+          "same-peer replacement reuses the session");
+    const std::uint64_t ownerId = coordinator.snapshot().owner->id;
+    check(coordinator.sessionEnded(
+              ownerId, EndReason::Preempted),
+          "owner can disappear while replacement media opens");
+    auto failed = runtime.mediaReady(
+        replacement.media->operationId, true, CastTime{3});
+    check(!failed.playNow
+              && hasCompletion(failed, 902, false)
+              && !runtime.mediaOpening(),
+          "late readiness cannot authorize media in an ended session");
+}
+
+void testSlowOpenDeadlineAndActiveControlLoss()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    DlnaClaimRuntime runtime(adapter);
+    auto started = runtime.beginSetUri(
+        1001, peer("192.0.2.10"), media("http://a/slow.mp4"),
+        CastTime{0});
+    check(started.media.has_value() && runtime.mediaOpening(),
+          "slow-open operation starts");
+    auto timedOut = runtime.tick(CastTime{10000});
+    check(hasCompletion(timedOut, 1001, false)
+              && !runtime.mediaOpening()
+              && !coordinator.snapshot().owner,
+          "slow Open has a bounded runtime deadline");
+
+    auto active = runtime.beginSetUri(
+        1002, peer("192.0.2.10"), media("http://a/active.mp4"),
+        CastTime{10001});
+    check(active.media.has_value(),
+          "active-owner loss scenario starts media");
+    runtime.mediaReady(
+        active.media->operationId, true, CastTime{10002});
+    check(coordinator.snapshot().owner.has_value(),
+          "active owner exists before control loss");
+    runtime.controlLost(CastTime{10003});
+    check(!coordinator.snapshot().owner,
+          "control loss ends an already-ready owner session");
+}
+
+void testReplacingPreparingOwnerRequiresReadiness()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    DlnaClaimRuntime runtime(adapter);
+    auto first = runtime.beginSetUri(
+        1101, peer("192.0.2.10"), media("http://a/first.mp4"),
+        CastTime{0});
+    check(first.media.has_value()
+              && coordinator.snapshot().phase
+                  == ArbitrationPhase::Preparing,
+          "first media leaves the owner preparing");
+    auto replacement = runtime.beginSetUri(
+        1102, peer("192.0.2.10"), media("http://a/replacement.mp4"),
+        CastTime{1});
+    check(replacement.media.has_value()
+              && replacement.media->newSession
+              && hasCompletion(replacement, 1101, false),
+          "replacement while preparing still requires session readiness");
+    auto ready = runtime.mediaReady(
+        replacement.media->operationId, true, CastTime{2});
+    check(hasCompletion(ready, 1102, true)
+              && coordinator.snapshot().phase
+                  == ArbitrationPhase::Active,
+          "replacement readiness moves the reused session to active");
+}
+
+void testLateReadinessCannotBeatDeadline()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    DlnaClaimRuntime runtime(adapter);
+    auto started = runtime.beginSetUri(
+        1201, peer("192.0.2.10"), media("http://a/late.mp4"),
+        CastTime{0});
+    check(started.media.has_value(),
+          "late-readiness operation starts");
+    auto late = runtime.mediaReady(
+        started.media->operationId, true, CastTime{10000});
+    check(hasCompletion(late, 1201, false)
+              && !late.playNow && !runtime.mediaOpening()
+              && !coordinator.snapshot().owner,
+          "mediaReady enforces the same deadline without waiting for tick");
+}
+
+void testReplacingHandoffOwnerRequiresReadiness()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    DlnaClaimRuntime runtime(adapter);
+    auto owner = runtime.beginSetUri(
+        1301, peer("192.0.2.10"), media("http://a/owner.mp4"),
+        CastTime{0});
+    runtime.mediaReady(
+        owner.media->operationId, true, CastTime{1});
+    auto candidate = runtime.beginSetUri(
+        1302, peer("192.0.2.20"), media("http://b/first.mp4"),
+        CastTime{2});
+    check(candidate.confirmation.has_value(),
+          "handoff test candidate waits for confirmation");
+    auto accepted = runtime.confirmationDecision(
+        candidate.confirmation->key, true, CastTime{3});
+    check(accepted.media.has_value()
+              && coordinator.snapshot().phase
+                  == ArbitrationPhase::Handoff,
+          "accepted preemption enters handoff");
+    auto replacement = runtime.beginSetUri(
+        1303, peer("192.0.2.20"), media("http://b/replacement.mp4"),
+        CastTime{4});
+    check(replacement.media.has_value()
+              && replacement.media->newSession
+              && hasCompletion(replacement, 1302, false),
+          "replacement during handoff still marks the session ready");
+    auto ready = runtime.mediaReady(
+        replacement.media->operationId, true, CastTime{5});
+    check(hasCompletion(ready, 1303, true)
+              && coordinator.snapshot().phase
+                  == ArbitrationPhase::Active,
+          "handoff replacement readiness activates the owner");
+}
+
 } // namespace
 
 int main()
@@ -327,6 +473,11 @@ int main()
     testReplacingSlowOpenAndControlLoss();
     testInvalidAndDuplicateRequestIdsHaveNoSideEffects();
     testSessionReadyFailureFailsMedia();
+    testMediaReadyRejectsChangedOwnership();
+    testSlowOpenDeadlineAndActiveControlLoss();
+    testReplacingPreparingOwnerRequiresReadiness();
+    testLateReadinessCannotBeatDeadline();
+    testReplacingHandoffOwnerRequiresReadiness();
     std::cout << "DLNA claim runtime tests passed\n";
     return 0;
 }

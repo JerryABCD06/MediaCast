@@ -61,6 +61,7 @@ public:
     bool createTcp(std::string &error);
     bool setNonBlocking(std::string &error);
     bool bindLoopback(std::uint16_t port, std::string &error);
+    bool bindAny(std::uint16_t port, std::string &error);
     std::optional<std::uint16_t> localPort() const;
 
 private:

@@ -32,6 +32,7 @@ struct DlnaClaimRuntimeActions {
     std::optional<cast::ConfirmationPrompt> confirmation;
     std::optional<DlnaMediaExecution> media;
     bool playNow = false;
+    bool stopNow = false;
     bool staleOperation = false;
 };
 
@@ -49,6 +50,11 @@ public:
     DlnaClaimRuntimeActions attachPlay(
         std::uint64_t requestId, cast::PeerIdentity peer,
         cast::CastTime now);
+    DlnaClaimRuntimeActions requestStop(
+        std::uint64_t requestId, cast::PeerIdentity peer,
+        cast::CastTime now);
+    DlnaClaimDisposition requestControl(
+        cast::PeerIdentity peer, cast::CastTime now);
     DlnaClaimRuntimeActions confirmationDecision(
         cast::ClaimKey key, bool accepted, cast::CastTime now);
     DlnaClaimRuntimeActions tick(cast::CastTime now);
@@ -67,6 +73,7 @@ public:
 private:
     struct PendingHttp {
         cast::ClaimKey key;
+        cast::PeerIdentity peer;
         std::vector<std::uint64_t> setRequests;
         std::vector<std::uint64_t> playRequests;
     };
@@ -78,15 +85,16 @@ private:
         std::uint64_t mediaGeneration = 0;
         bool newSession = false;
         bool playRequested = false;
+        cast::CastTime deadline{0};
         playback::MediaRequest media;
         std::vector<std::uint64_t> setRequests;
         std::vector<std::uint64_t> playRequests;
     };
 
     DlnaClaimRuntimeActions beginExecute(
-        DlnaClaimOutcome &&outcome);
+        DlnaClaimOutcome &&outcome, cast::CastTime now);
     DlnaClaimRuntimeActions beginResolution(
-        DlnaClaimResolution &&resolution);
+        DlnaClaimResolution &&resolution, cast::CastTime now);
     void completePending(
         DlnaClaimRuntimeActions &actions,
         const cast::ClaimDecision &decision);
@@ -104,6 +112,7 @@ private:
     std::optional<PendingHttp> m_pending;
     std::optional<Operation> m_operation;
     std::uint64_t m_nextOperationId = 1;
+    static constexpr cast::CastTime kOpenTimeout{10000};
 };
 
 } // namespace mcast::dlna::claim

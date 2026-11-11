@@ -148,6 +148,22 @@ bool SocketHandle::bindLoopback(std::uint16_t port, std::string &error)
     return true;
 }
 
+bool SocketHandle::bindAny(std::uint16_t port, std::string &error)
+{
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(port);
+    if (!valid()
+        || bind(
+            m_socket, reinterpret_cast<const sockaddr *>(&address),
+            sizeof(address)) == SOCKET_ERROR) {
+        error = socketError("bind(any)");
+        return false;
+    }
+    return true;
+}
+
 std::optional<std::uint16_t> SocketHandle::localPort() const
 {
     if (!valid())

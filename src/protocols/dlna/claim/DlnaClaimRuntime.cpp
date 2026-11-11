@@ -44,6 +44,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginSetUri(
         return invalid;
     }
 
+    const cast::PeerIdentity requestPeer = peer;
     DlnaClaimOutcome outcome = m_adapter.beginMedia(
         std::move(peer), std::move(media), now);
 
@@ -61,7 +62,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginSetUri(
         }
         const cast::ClaimReason reason = outcome.reason;
         DlnaClaimRuntimeActions executed =
-            beginExecute(std::move(outcome));
+            beginExecute(std::move(outcome), now);
         if (m_operation) {
             m_operation->setRequests.push_back(requestId);
         } else {
@@ -81,7 +82,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginSetUri(
         const cast::ClaimKey key{
             cast::ProtocolKind::Dlna, outcome.transactionId};
         if (!m_pending || m_pending->key.id != key.id)
-            m_pending = PendingHttp{key, {}, {}};
+            m_pending = PendingHttp{key, requestPeer, {}, {}};
         m_pending->setRequests.push_back(requestId);
         actions.confirmation = std::move(outcome.confirmation);
         return actions;
@@ -104,6 +105,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::attachPlay(
     }
 
     DlnaClaimRuntimeActions actions;
+    const cast::PeerIdentity requestPeer = peer;
     DlnaClaimOutcome outcome =
         m_adapter.requestPlay(std::move(peer), now);
     if (outcome.invalidatedPending) {
@@ -115,6 +117,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::attachPlay(
         if (!m_pending)
             m_pending = PendingHttp{
                 {cast::ProtocolKind::Dlna, outcome.transactionId},
+                requestPeer,
                 {},
                 {},
             };
@@ -147,6 +150,59 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::attachPlay(
     return actions;
 }
 
+DlnaClaimRuntimeActions DlnaClaimRuntime::requestStop(
+    std::uint64_t requestId, cast::PeerIdentity peer,
+    cast::CastTime now)
+{
+    DlnaClaimRuntimeActions actions;
+    if (requestId == 0 || requestTracked(requestId)) {
+        actions.http.push_back(completion(
+            requestId, false, cast::ClaimReason::InvalidClaim));
+        return actions;
+    }
+
+    if (m_operation && m_adapter.ownsPeer(peer)) {
+        actions.http.push_back(completion(
+            requestId, false, cast::ClaimReason::SessionTransitionPending));
+        return actions;
+    }
+
+    DlnaClaimOutcome outcome =
+        m_adapter.requestStop(std::move(peer), now);
+    if (outcome.invalidatedPending) {
+        completePending(
+            actions, outcome.invalidatedPending->decision);
+    }
+    if (outcome.disposition == DlnaClaimDisposition::Execute) {
+        actions.stopNow = true;
+        actions.http.push_back(completion(
+            requestId, true, cast::ClaimReason::None));
+    } else if (outcome.disposition == DlnaClaimDisposition::Ignored) {
+        actions.http.push_back(completion(
+            requestId, true, outcome.reason));
+    } else {
+        actions.http.push_back(completion(
+            requestId, false, outcome.reason));
+    }
+    return actions;
+}
+
+DlnaClaimDisposition DlnaClaimRuntime::requestControl(
+    cast::PeerIdentity peer, cast::CastTime now)
+{
+    static_cast<void>(now);
+    if (m_adapter.ownsPeer(peer)) {
+        if (m_operation)
+            return DlnaClaimDisposition::Pending;
+        return DlnaClaimDisposition::Execute;
+    }
+    if (m_pending
+        && m_pending->peer.id == peer.id
+        && m_pending->peer.address == peer.address)
+        return DlnaClaimDisposition::Pending;
+    return DlnaClaimDisposition::Rejected;
+}
+
 DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
     cast::ClaimKey key, bool accepted, cast::CastTime now)
 {
@@ -160,7 +216,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
 
     if (resolution.executeMedia) {
         DlnaClaimRuntimeActions resolved =
-            beginResolution(std::move(resolution));
+            beginResolution(std::move(resolution), now);
         std::move(
             resolved.http.begin(), resolved.http.end(),
             std::back_inserter(actions.http));
@@ -177,6 +233,15 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
 DlnaClaimRuntimeActions DlnaClaimRuntime::tick(cast::CastTime now)
 {
     DlnaClaimRuntimeActions actions;
+    if (m_operation && now >= m_operation->deadline) {
+        Operation operation = std::move(*m_operation);
+        m_operation.reset();
+        static_cast<void>(m_adapter.sessionEnded(
+            operation.sessionId, cast::EndReason::Failed));
+        completeOperation(
+            actions, operation, false,
+            cast::ClaimReason::SessionTransitionPending);
+    }
     DlnaClaimTick ticked = m_adapter.tick(now);
     if (ticked.pendingInvalidation) {
         completePending(
@@ -199,8 +264,19 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::mediaReady(
     Operation operation = std::move(*m_operation);
     m_operation.reset();
     if (success) {
-        if (operation.newSession
-            && !m_adapter.sessionReady(operation.sessionId)) {
+        if (now >= operation.deadline) {
+            static_cast<void>(m_adapter.sessionEnded(
+                operation.sessionId, cast::EndReason::Failed));
+            completeOperation(
+                actions, operation, false,
+                cast::ClaimReason::SessionTransitionPending);
+            return actions;
+        }
+        if ((operation.newSession
+             && !m_adapter.sessionReady(operation.sessionId))
+            || !m_adapter.ownsOperation(
+                operation.sessionId, operation.epoch,
+                operation.mediaGeneration)) {
             static_cast<void>(m_adapter.sessionEnded(
                 operation.sessionId, cast::EndReason::Failed));
             completeOperation(
@@ -250,6 +326,12 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::controlLost(
             actions, operation, false,
             cast::ClaimReason::InvalidClaim);
     }
+    const auto &snapshot = m_adapter.snapshot();
+    if (snapshot.owner
+        && snapshot.owner->protocol == cast::ProtocolKind::Dlna) {
+        static_cast<void>(m_adapter.sessionEnded(
+            snapshot.owner->id, cast::EndReason::ProtocolLost));
+    }
     return actions;
 }
 
@@ -270,7 +352,7 @@ DlnaClaimRuntime::pendingKey() const noexcept
 }
 
 DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
-    DlnaClaimOutcome &&outcome)
+    DlnaClaimOutcome &&outcome, cast::CastTime now)
 {
     DlnaClaimRuntimeActions actions;
     if (!outcome.media || !outcome.ownerSessionId) {
@@ -285,7 +367,9 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
         m_adapter.snapshot().revision,
     });
 
-    const bool newSession = outcome.claimedSessionId.has_value();
+    const bool newSession =
+        outcome.claimedSessionId.has_value()
+        || m_adapter.sessionNeedsReady(*outcome.ownerSessionId);
     m_operation = Operation{
         nextOperationId(),
         *outcome.ownerSessionId,
@@ -293,6 +377,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
         outcome.mediaGeneration,
         newSession,
         false,
+        now + kOpenTimeout,
         *outcome.media,
         {},
         {},
@@ -310,7 +395,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
 }
 
 DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
-    DlnaClaimResolution &&resolution)
+    DlnaClaimResolution &&resolution, cast::CastTime now)
 {
     DlnaClaimRuntimeActions actions;
     if (!resolution.media || !resolution.ownerSessionId) {
@@ -323,7 +408,10 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         : PendingHttp{};
     m_pending.reset();
     replaceOperation(actions, resolution.decision);
-    const bool newSession = !resolution.decision.duplicate;
+    const bool newSession =
+        !resolution.decision.duplicate
+        || m_adapter.sessionNeedsReady(
+            *resolution.ownerSessionId);
     m_operation = Operation{
         nextOperationId(),
         *resolution.ownerSessionId,
@@ -331,6 +419,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         resolution.mediaGeneration,
         newSession,
         !pending.playRequests.empty(),
+        now + kOpenTimeout,
         *resolution.media,
         std::move(pending.setRequests),
         std::move(pending.playRequests),

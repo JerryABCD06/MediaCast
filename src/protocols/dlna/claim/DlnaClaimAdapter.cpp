@@ -295,6 +295,30 @@ bool DlnaClaimAdapter::ownsPeer(
     return ownerMatches(peer);
 }
 
+bool DlnaClaimAdapter::ownsOperation(
+    std::uint64_t sessionId, std::uint64_t epoch,
+    std::uint64_t mediaGeneration) const
+{
+    const auto &snapshot = m_coordinator.snapshot();
+    return sessionId != 0 && epoch != 0 && mediaGeneration != 0
+        && snapshot.owner
+        && snapshot.owner->protocol == cast::ProtocolKind::Dlna
+        && snapshot.owner->id == sessionId
+        && snapshot.owner->epoch == epoch
+        && m_mediaGeneration == mediaGeneration;
+}
+
+bool DlnaClaimAdapter::sessionNeedsReady(
+    std::uint64_t sessionId) const
+{
+    const auto &snapshot = m_coordinator.snapshot();
+    return sessionId != 0 && snapshot.owner
+        && snapshot.owner->protocol == cast::ProtocolKind::Dlna
+        && snapshot.owner->id == sessionId
+        && (snapshot.phase == cast::ArbitrationPhase::Preparing
+            || snapshot.phase == cast::ArbitrationPhase::Handoff);
+}
+
 std::optional<cast::ClaimKey>
 DlnaClaimAdapter::pendingKey() const
 {

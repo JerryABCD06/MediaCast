@@ -128,6 +128,10 @@ SOAP 全部经 `DlnaSession -> PlaybackGateway`。
 超限/过多 header 回 431；响应按完整序列化大小限制，禁止覆盖 framing
 header 或注入 CR/LF。handler 当前要求非阻塞。
 
+`HttpServer::listenAny()` 已补上局域网 IPv4 绑定，单元测试仍只使用临时端口和
+loopback 客户端，不占用 8200。`DlnaHttpFrontend` 已覆盖设备描述、三份 SCPD
+和 SOAP POST；`DlnaClaimHttpHandler` 已成为 SOAP 写动作的统一异步入口。
+
 已加入无 Qt `SoapRouter`，覆盖 AVTransport、RenderingControl、
 ConnectionManager 三份 SCPD 的全部动作，并严格校验 service 路径、
 SOAPAction 与 body namespace/action 的一致性、`InstanceID`、枚举和必填
@@ -138,7 +142,8 @@ DIDL-Lite 元数据已提取为与 DLNA 协议层绑定的播放项描述。
 普通命令与 `EndSession` 的提交顺序串行化，并通过 command ID、deadline、
 pending Open 和 generation 跟踪处理排队、超时、取消与重连。排队 Open 后的
 Play/Pause，以及 `WaitingForPlayer` 期间的 deferred 调优命令均有回归测试。
-HTTP 到 SOAP router 的生产接线和真实入口切换仍未完成。
+HTTP 到 SOAP router 的组件已齐，但尚未由 Protocol 入口实例化；播放器打开完成
+事件回填 `mediaReady()`、ControlPipe 确认 Port 和真实入口切换仍未完成。
 
 ### 7. SSDP
 

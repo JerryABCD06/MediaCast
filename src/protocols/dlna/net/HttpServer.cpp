@@ -265,6 +265,43 @@ bool HttpServer::listenLoopback(
     std::uint16_t port, AsyncHttpRequestHandler handler,
     HttpServerOptions options, std::string &error)
 {
+    return listenOn(
+        port, true, std::move(handler), std::move(options), error);
+}
+
+bool HttpServer::listenAny(
+    std::uint16_t port, HttpRequestHandler handler,
+    HttpServerOptions options, std::string &error)
+{
+    if (!handler) {
+        stop();
+        error = "HTTP request handler is required";
+        return false;
+    }
+    AsyncHttpRequestHandler asyncHandler =
+        [handler = std::move(handler)](
+            const core::HttpRequest &request) {
+            HttpDispatchResult result;
+            result.response = handler(request);
+            return result;
+        };
+    return listenAny(
+        port, std::move(asyncHandler), std::move(options), error);
+}
+
+bool HttpServer::listenAny(
+    std::uint16_t port, AsyncHttpRequestHandler handler,
+    HttpServerOptions options, std::string &error)
+{
+    return listenOn(
+        port, false, std::move(handler), std::move(options), error);
+}
+
+bool HttpServer::listenOn(
+    std::uint16_t port, bool loopback,
+    AsyncHttpRequestHandler handler,
+    HttpServerOptions options, std::string &error)
+{
     error.clear();
     if (m_callbackDepth != 0) {
         error = "HTTP server cannot restart from a callback";
@@ -292,7 +329,9 @@ bool HttpServer::listenLoopback(
         return false;
     if (!m_listener.createTcp(error)
         || !m_listener.setNonBlocking(error)
-        || !m_listener.bindLoopback(port, error)) {
+        || !(loopback
+                ? m_listener.bindLoopback(port, error)
+                : m_listener.bindAny(port, error))) {
         m_listener.close();
         return false;
     }
@@ -319,7 +358,8 @@ bool HttpServer::listenLoopback(
     }
     if (m_options.logger) {
         log(
-            "HTTP listening on 127.0.0.1:"
+            std::string("HTTP listening on ")
+            + (loopback ? "127.0.0.1:" : "0.0.0.0:")
             + std::to_string(*m_listener.localPort()));
         if (!m_running) {
             error = "HTTP server stopped during startup";

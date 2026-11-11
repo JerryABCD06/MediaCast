@@ -174,6 +174,30 @@ int main()
     WinsockRuntime runtime;
     check(runtime.initialize(error), "Winsock initializes");
 
+    HttpServer anyServer;
+    check(
+        anyServer.listenAny(
+            0,
+            [](const mcast::dlna::core::HttpRequest &request) {
+                HttpResponse response;
+                response.body = "any:" + request.target;
+                return response;
+            },
+            HttpServerOptions{}, error),
+        "HTTP server starts on all IPv4 interfaces");
+    auto anyOutcome = runExchange(
+        anyServer,
+        {
+            "GET /interface-test HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n\r\n",
+        });
+    check(anyOutcome.error.empty()
+              && anyOutcome.response.starts_with("HTTP/1.1 200 OK\r\n")
+              && anyOutcome.response.ends_with("any:/interface-test"),
+          "any-interface HTTP server is reachable over loopback");
+    pollUntilNoConnections(anyServer, 2s);
+    anyServer.stop();
+
     HttpServer server;
     HttpServerOptions options;
     options.logger = [](const std::string &) {};
