@@ -64,4 +64,5 @@ Qt 6（LGPLv3，动态链接、未修改）、FluentUI（MIT）。
 | `docs/控制点行为.md` | 真实控制点（vivo 相册、BubbleUPnP）**实际**怎么行为 |
 | `docs/DLNA实现情况.md` | 协议实现到什么程度 |
 | `docs/多进程重构交接.md` | 当前三进程边界、启动/重连时序、验证入口和下一步顺序 |
+| `docs/DLNA迁移分阶段.md` | DLNA 从旧单体迁入无 Qt Protocol 的阶段和验收 |
 | `docs/legal/` | 隐私、法律、商标、编解码器声明 |

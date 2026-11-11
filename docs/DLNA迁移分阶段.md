@@ -91,7 +91,8 @@ picture controls。
 
 Protocol 侧 `PlaybackPipeGateway` 已支持首快照门控、pending 命令超时、
 重复/未知结果去重、generation/stateVersion 去重、断线拒绝 pending 命令，
-以及 listener 析构等待；Ui 侧 PlaybackController bridge 尚待接入。
+以及 listener 析构等待。Ui 侧 `PlaybackBridge` 已接入真实
+`PlaybackController`，命令在 Qt 主线程执行，Pipe 写入由独立 writer 线程完成。
 
 PlaybackPipe 命令现在还受 `PlaybackUiReady` 门控：UI 只有在窗口首帧、
 MpvQmlItem 完成首次实际 OpenGL 渲染、libmpv 已启动且 PlaybackBridge 已连接后
@@ -226,8 +227,21 @@ M-SEARCH 回应队列有上限，搜索类型按 HTTP 规矩大小写不敏感�
 ### 9. Protocol 影子集成
 
 只通过显式测试参数启动影子 DLNA，使用独立端口，不绑定 8200/1900。
-旧 `MCast.exe` 仍是生产路径。HTTP/SOAP/SSDP/GENA 已全部在无 Qt Protocol
-中具备实现，下一步是完整影子端到端和真实控制点回归。
+旧 `MCast.exe` 仍是生产回退路径。HTTP/SOAP/SSDP/GENA 已全部在无 Qt Protocol
+中具备实现；运行时级测试和真实控制点首轮回归已经完成。尚未完成的是一次从
+外部进程驱动、同时覆盖发现面和播放面的自动化影子 E2E。
+
+已由 `DlnaProtocolRuntime` 运行时测试覆盖：
+
+- description 与三份 SCPD；
+- `SetAVTransportURI` 经媒体就绪门控后完成；
+- 首投、确认、拒绝、加载失败和候选取消；
+- `SUBSCRIBE` 建立 peer、暂停接收只阻止新投送；
+- 主动断开清会话、短暂停网络面、重新上线，以及粘性断开状态；
+- 新 `SetAVTransportURI` 开启下一次会话。
+
+真实控制点已确认首条媒体不再黑屏、代理暂停不终止当前会话、主动断开成功；
+自动测试仍需补齐从 `M-SEARCH` 发现开始的跨组件链路。
 
 端到端验收：
 

@@ -243,7 +243,7 @@ latest MediaRequest
 - 特定断线取消必须携带原 claim key；协议整体换代才使用 `cancelAllPending()`，
   迟到的旧取消不能误伤新候选。
 
-## 7. 尚未完成的生产接线
+## 7. 当前边界与剩余接线
 
 当前已完成并测试：
 
@@ -260,16 +260,25 @@ latest MediaRequest
   同步查询透传和 SOAP 错误映射；
 - `DlnaHttpFrontend`：设备描述、三份 SCPD 与 SOAP 的统一 HTTP 路由；
 - `DlnaClaimConfirmationWorker`：HTTP 线程之外的确认等待和决定回填；
+- `DlnaProtocolRuntime`：把 HTTP、SOAP、SSDP、GENA、Claim、确认 worker 和
+  播放任务线程组合进 `MCast.Protocol.exe`；
+- Protocol ControlPipe 断开时拒绝待确认候选和正在准备的媒体；
+- 确认后继续 Open，并按媒体就绪/失败结果完成原 HTTP 请求；
+- 暂停接收只阻止新投送，主动断开使用短暂网络离线兼容非标准控制点；
 - Protocol 骨架已经使用 dispatcher 完成 heartbeat、UI Open、activation 和
   PlaybackPipe 握手；
-- HTTP、DLNA Claim、dispatcher、runtime 和进程级测试。
+- HTTP、DLNA Claim、dispatcher、runtime 和进程级测试；
+- 真实控制点的首条媒体、暂停接收、主动断开和窗口重新唤起回归。
 
 尚未完成：
 
-- ControlPipe 断开时批量 fail-closed 所有待确认 HTTP；
-- `SoapRouter::handle()` 或外层 adapter 返回异步 `Pending`；
-- 确认后继续 Open，并把成功/失败映射为 SOAP 响应；
-- 真实手机控制点等待时长实测；
-- 将新 DLNA 网络栈接入生产 `MCast.Protocol.exe`。
+- 从外部进程驱动 `M-SEARCH -> description -> SetURI -> Playback` 的自动化
+  影子 E2E；
+- 不同真实控制点在确认窗口前的等待时长实测；
+- MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI 的完整冷启动
+  故障路径；
+- 接收/确认策略完全收归 Shell 的持久配置数据面；
+- 新三进程入口替换旧 `MCast.exe` 前需要补足的长稳和故障注入。
 
-在这些步骤完成前，不能宣称真实手机投送已经会触发 QML 确认窗口。
+MainWindow 已存在时，真实 DLNA 投送已经可以触发 QML 确认窗口；冷启动和无 UI
+场景尚未完成全路径验证。
