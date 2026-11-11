@@ -61,6 +61,9 @@ DlnaProtocolRuntime::DlnaProtocolRuntime(
           DlnaHttpFrontendOptions{
               m_options.friendlyName, m_options.udn, &m_gena})
 {
+    m_broadcasting = m_options.startBroadcasting;
+    m_broadcastIntervalMs =
+        m_options.broadcastInterval.count();
     m_gena.updateState(m_playback.snapshot());
     m_playbackListener = m_playback.addEventListener(
         [this](const PlaybackEvent &event) {
@@ -242,6 +245,19 @@ bool DlnaProtocolRuntime::requestDisconnect(std::string &error)
         "DLNA disconnect requested; network surface stopped; EndSession command="
         + std::to_string(submission.commandId));
     return true;
+}
+
+void DlnaProtocolRuntime::setBroadcasting(bool enabled) noexcept
+{
+    m_broadcasting = enabled;
+    m_ssdp.setBroadcasting(enabled);
+}
+
+void DlnaProtocolRuntime::setBroadcastInterval(
+    std::chrono::milliseconds interval) noexcept
+{
+    m_broadcastIntervalMs = interval.count();
+    m_ssdp.setAliveInterval(interval);
 }
 
 DlnaSessionCallbacks DlnaProtocolRuntime::sessionCallbacks()
@@ -486,8 +502,10 @@ bool DlnaProtocolRuntime::startNetworkSurface(std::string &error)
     ssdpOptions.ssdpPort = m_options.ssdpPort;
     const bool productionDiscovery = m_options.ssdpPort != 0;
     ssdpOptions.joinMulticast = productionDiscovery;
-    ssdpOptions.advertise = productionDiscovery;
-    ssdpOptions.aliveInterval = std::chrono::seconds{10};
+    ssdpOptions.advertise =
+        productionDiscovery && m_broadcasting.load();
+    ssdpOptions.aliveInterval = std::chrono::milliseconds(
+        m_broadcastIntervalMs.load());
     if (!m_ssdp.start(
             std::move(ssdpOptions),
             [this](const std::string &message) { log(message); },

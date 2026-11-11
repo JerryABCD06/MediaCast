@@ -227,7 +227,8 @@ try {
         "Host: 127.0.0.1`r`n" +
         "Connection: close`r`n`r`n")
     if ($description -notmatch '^HTTP/1\.1 200 OK' -or
-        $description -notmatch '<friendlyName>Media Cast Receiver</friendlyName>') {
+        $description -notmatch '<friendlyName>[^<]+</friendlyName>' -or
+        $description -notmatch '<UDN>uuid:[0-9a-fA-F-]+</UDN>') {
         throw "Unexpected device description:`n$description"
     }
 

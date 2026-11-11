@@ -3,11 +3,11 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 #include <QObject>
 
 class QTranslator;
-class AppSettings;
 class Tr;
 
 // UiState —— 界面的**唯一状态源**：现在是哪种语言、要深色还是浅色。
@@ -68,7 +68,7 @@ public:
      * 告诉这里（写属性），真正的改变由这里的信号广播出去，每个界面再跟着变。
      * 这条链路是单向的，界面在收到广播之前不会自己动。
      */
-    explicit UiState(AppSettings *settings, Tr *tr, QObject *parent = nullptr);
+    UiState(Tr *tr, QObject *parent = nullptr);
     ~UiState() override;
 
     int themeMode() const { return m_themeMode; }
@@ -83,12 +83,19 @@ public:
     void setThemeMode(int mode);
     void setAccentMode(int mode);
     void setLanguage(const QString &code);
+    bool applySettingsJson(
+        const QByteArray &json, QString *error = nullptr);
+    void applyAppearance(
+        int themeMode, int accentMode, const QString &language);
 
 signals:
     void themeModeChanged();
     void accentModeChanged();
     void darkChanged();
     void languageChanged();
+    void themeModeChangeRequested(int mode);
+    void accentModeChangeRequested(int mode);
+    void languageChangeRequested(const QString &code);
 
 private:
     void applyTheme();
@@ -103,6 +110,5 @@ private:
 
     QTranslator *m_qtTranslator = nullptr;   // Qt 自带原生控件的 qtbase_*.qm
 
-    /** 设置文件。初始值从它读，改动写回它。可以为空（没有设置也能跑）。 */
-    AppSettings *m_settings = nullptr;
+    bool m_applying = false;
 };

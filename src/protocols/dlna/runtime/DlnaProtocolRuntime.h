@@ -32,6 +32,8 @@ struct DlnaProtocolRuntimeOptions {
     bool bindLoopback = true;
     bool enableSsdp = true;
     bool startReceivingEnabled = true;
+    bool startBroadcasting = true;
+    std::chrono::milliseconds broadcastInterval{10000};
     std::function<bool()> requestUiActivation;
     std::function<void(const std::string &)> log;
     std::function<void(bool, std::uint64_t)> receivingStateChanged;
@@ -56,6 +58,9 @@ public:
     void stop() noexcept;
     bool setReceivingEnabled(bool enabled, std::string &error);
     bool requestDisconnect(std::string &error);
+    void setBroadcasting(bool enabled) noexcept;
+    void setBroadcastInterval(
+        std::chrono::milliseconds interval) noexcept;
     bool receivingEnabled() const noexcept
     {
         return m_receivingEnabled.load();
@@ -150,6 +155,8 @@ private:
     std::atomic_bool m_surfaceKeptForActiveSession{false};
     std::atomic_bool m_httpPolling{false};
     std::atomic_bool m_networkRecoveryPending{false};
+    std::atomic_bool m_broadcasting{true};
+    std::atomic<std::int64_t> m_broadcastIntervalMs{10000};
     std::optional<SessionTime> m_disconnectRestartAt;
     bool m_mediaStopping = false;
 };

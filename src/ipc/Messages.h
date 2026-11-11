@@ -53,6 +53,11 @@ enum class FieldId : std::uint16_t {
     CastMediaTitle = 85,
     CastConfirmationTimeoutMs = 86,
     CastConfirmationAccepted = 87,
+    SettingsJson = 88,
+    BroadcastEnabled = 89,
+    BroadcastIntervalMs = 90,
+    SettingsAccepted = 91,
+    SettingsUpdateStatus = 92,
     ErrorCode = 16,
     ErrorText = 17,
 };
@@ -117,6 +122,17 @@ struct CastConfirmationDecisionInfo {
     cast::ProtocolKind protocol = cast::ProtocolKind::None;
     std::uint64_t claimId = 0;
     bool accepted = false;
+};
+
+enum class SettingsUpdateStatus : std::uint8_t {
+    Applied = 0,
+    Rejected = 1,
+    SavedRuntimeFailed = 2,
+};
+
+struct SettingsUpdateResultInfo {
+    SettingsUpdateStatus status = SettingsUpdateStatus::Rejected;
+    std::string error;
 };
 
 std::optional<std::vector<std::uint8_t>>
@@ -238,5 +254,28 @@ std::optional<Message> makeUiCastConfirmationCancelMessage(
 
 std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
     const Message &message, std::string &error);
+
+std::optional<Message> makeSettingsSnapshotMessage(
+    std::uint64_t messageId, std::uint64_t stateVersion,
+    std::string_view json, std::string &error);
+
+std::optional<std::string> decodeSettingsSnapshotMessage(
+    const Message &message, std::string &error);
+
+std::optional<Message> makeUiUpdateSettingsMessage(
+    std::uint64_t messageId, std::string_view json,
+    std::string &error);
+
+std::optional<std::string> decodeUiUpdateSettingsMessage(
+    const Message &message, std::string &error);
+
+std::optional<Message> makeSettingsUpdateResultMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const SettingsUpdateResultInfo &result, std::string &error);
+
+std::optional<SettingsUpdateResultInfo>
+decodeSettingsUpdateResultMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error);
 
 } // namespace mcast::ipc

@@ -3,11 +3,13 @@
 
 #include "UiState.h"
 
-#include "core/AppSettings.h"
 #include "core/Tr.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QLibraryInfo>
 #include <QLocale>
 #include <QStyleHints>
@@ -50,45 +52,17 @@ QString accentModeName(int mode)
 
 } // namespace
 
-UiState::UiState(AppSettings *settings, Tr *tr, QObject *parent)
+UiState::UiState(Tr *tr, QObject *parent)
     : QObject(parent)
-    , m_settings(settings)
     , m_tr(tr)
 {
-    // 先把设置文件里的值读进来 —— 它们是"上次关掉时的样子"。
-    if (m_settings) {
-        m_themeMode = themeModeFromName(m_settings->darkMode());
-        m_accentMode = accentModeFromName(m_settings->accentMode());
-        m_language = m_settings->language();
-        if (m_language == QLatin1String("System"))
-            m_language.clear();   // 空串 = 跟随系统，内部就是这么表示的
-    }
-
-    // 开机就把两样都落实一遍。先语言后外观，顺序无所谓，互不干涉。
     applyLanguage();
     applyTheme();
-
-    // System 模式下，用户在 Windows 设置里改深色时我们自己得跟上，
-    // 否则界面会一直停在开机那一刻的样子。
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged,
             this, [this] {
         if (m_themeMode == System)
             emit darkChanged();
     });
-
-    // 用户在外面（或者别的模块）改了设置文件里的值 —— 也跟着变。
-    // 两个方向都走同一条路：setThemeMode/setLanguage 会写回设置，写入又是
-    // 幂等的（值一样就不动），所以不会来回弹。
-    if (m_settings) {
-        connect(m_settings, &AppSettings::darkModeChanged, this,
-                [this](const QString &name) { setThemeMode(themeModeFromName(name)); });
-        connect(m_settings, &AppSettings::accentModeChanged, this,
-                [this](const QString &name) { setAccentMode(accentModeFromName(name)); });
-        connect(m_settings, &AppSettings::languageChanged, this,
-                [this](const QString &code) {
-            setLanguage(code == QLatin1String("System") ? QString() : code);
-        });
-    }
 }
 
 UiState::~UiState()
@@ -124,9 +98,8 @@ void UiState::setThemeMode(int mode)
     applyTheme();
     emit themeModeChanged();
 
-    // 写回设置文件 —— 下次启动还是这个样子。
-    if (m_settings)
-        m_settings->setDarkMode(themeModeName(mode));
+    if (!m_applying)
+        emit themeModeChangeRequested(mode);
 }
 
 void UiState::setAccentMode(int mode)
@@ -136,8 +109,8 @@ void UiState::setAccentMode(int mode)
 
     m_accentMode = mode;
     emit accentModeChanged();
-    if (m_settings)
-        m_settings->setAccentMode(accentModeName(mode));
+    if (!m_applying)
+        emit accentModeChangeRequested(mode);
 }
 
 void UiState::applyTheme()
@@ -170,9 +143,49 @@ void UiState::setLanguage(const QString &code)
     applyLanguage();
     emit languageChanged();
 
-    // 同上。空串在内部表示"跟随系统"，写进文件时换成给人看的 System。
-    if (m_settings)
-        m_settings->setLanguage(code.isEmpty() ? QStringLiteral("System") : code);
+    // 空串在内部表示"跟随系统"。
+    if (!m_applying)
+        emit languageChangeRequested(code);
+}
+
+void UiState::applyAppearance(
+    int themeMode, int accentMode, const QString &language)
+{
+    m_applying = true;
+    setThemeMode(themeMode);
+    setAccentMode(accentMode);
+    setLanguage(language);
+    m_applying = false;
+}
+
+bool UiState::applySettingsJson(
+    const QByteArray &json, QString *error)
+{
+    QJsonParseError parseError{};
+    const QJsonDocument document =
+        QJsonDocument::fromJson(json, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        if (error)
+            *error = parseError.errorString();
+        return false;
+    }
+    const QJsonObject ui =
+        document.object().value(QStringLiteral("ui")).toObject();
+    const int themeMode = themeModeFromName(
+        ui.value(QStringLiteral("darkmode"))
+            .toString(QStringLiteral("System")));
+    const int accentMode = accentModeFromName(
+        ui.value(QStringLiteral("accentmode"))
+            .toString(QStringLiteral("System")));
+    const QString language =
+        ui.value(QStringLiteral("language"))
+            .toString(QStringLiteral("System"));
+    applyAppearance(
+        themeMode, accentMode,
+        language == QLatin1String("System")
+            ? QString() : language);
+    return true;
 }
 
 void UiState::applyLanguage()

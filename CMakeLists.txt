@@ -294,6 +294,26 @@ if(BUILD_TESTING)
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(
+        mcast_ui_settings_model_tests
+        tests/ui_settings_model_tests.cpp
+        src/ui_process/UiSettingsModel.h
+        src/ui_process/UiSettingsModel.cpp)
+    target_include_directories(
+        mcast_ui_settings_model_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(mcast_ui_settings_model_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_ui_settings_model_tests PRIVATE Qt6::Core)
+    set_target_properties(
+        mcast_ui_settings_model_tests PROPERTIES AUTOMOC TRUE)
+    add_test(
+        NAME mcast_ui_settings_model_tests
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
+            -Executable "$<TARGET_FILE:mcast_ui_settings_model_tests>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(
         mcast_shell_settings_tests
         tests/shell_settings_tests.cpp
         src/shell/ShellSettings.cpp)
@@ -742,8 +762,8 @@ qt_add_executable(MCast.Ui
     src/ui_process/UiConfirmationBridge.cpp
     src/ui_process/UiSession.h
     src/ui_process/UiSession.cpp
-    src/core/AppSettings.h
-    src/core/AppSettings.cpp
+    src/ui_process/UiSettingsModel.h
+    src/ui_process/UiSettingsModel.cpp
     src/core/LegalDocs.h
     src/core/LegalDocs.cpp
     src/core/MediaPlayer.h

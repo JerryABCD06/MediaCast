@@ -202,7 +202,60 @@ int main(int argc, char *argv[])
     // 设置文件：主程序旁边那份 JSON。没有就按默认值生成一份出来 ——
     // 用户想改直接拿记事本改，不用翻界面。
     AppSettings settings;
-    UiState uiState(&settings, &tr);
+    UiState uiState(&tr);
+    const auto themeFromSettings = [&] {
+        if (settings.darkMode() == QLatin1String("Light"))
+            return UiState::Light;
+        if (settings.darkMode() == QLatin1String("Dark"))
+            return UiState::Dark;
+        return UiState::System;
+    };
+    const auto accentFromSettings = [&] {
+        return settings.accentMode() == QLatin1String("System")
+            ? UiState::SystemAccent : UiState::WindowsBlue;
+    };
+    uiState.applyAppearance(
+        themeFromSettings(), accentFromSettings(),
+        settings.language() == QLatin1String("System")
+            ? QString() : settings.language());
+    QObject::connect(
+        &uiState, &UiState::themeModeChangeRequested,
+        &settings, [&settings](int mode) {
+            settings.setDarkMode(
+                mode == UiState::Light
+                    ? QStringLiteral("Light")
+                    : (mode == UiState::Dark
+                           ? QStringLiteral("Dark")
+                           : QStringLiteral("System")));
+        });
+    QObject::connect(
+        &uiState, &UiState::accentModeChangeRequested,
+        &settings, [&settings](int mode) {
+            settings.setAccentMode(
+                mode == UiState::SystemAccent
+                    ? QStringLiteral("System")
+                    : QStringLiteral("WindowsBlue"));
+        });
+    QObject::connect(
+        &uiState, &UiState::languageChangeRequested,
+        &settings, [&settings](const QString &language) {
+            settings.setLanguage(
+                language.isEmpty()
+                    ? QStringLiteral("System") : language);
+        });
+    QObject::connect(
+        &settings, &AppSettings::darkModeChanged,
+        &uiState, [&] { uiState.setThemeMode(themeFromSettings()); });
+    QObject::connect(
+        &settings, &AppSettings::accentModeChanged,
+        &uiState, [&] { uiState.setAccentMode(accentFromSettings()); });
+    QObject::connect(
+        &settings, &AppSettings::languageChanged,
+        &uiState, [&](const QString &language) {
+            uiState.setLanguage(
+                language == QLatin1String("System")
+                    ? QString() : language);
+        });
     auto updateSplashAppearance = [&] {
         splash.setTheme(uiState.themeMode() == UiState::System, uiState.dark());
         const bool useSystemAccent =

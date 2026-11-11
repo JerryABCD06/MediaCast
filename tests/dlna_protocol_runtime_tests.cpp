@@ -364,6 +364,8 @@ void testEndToEndInitialMediaAndConfirmation()
             true,
             true,
             true,
+            true,
+            10s,
             [&] {
                 ++activationRequests;
                 return true;
@@ -473,6 +475,8 @@ void testMediaLoadFailureFailsHttp()
             true,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -526,6 +530,8 @@ void testEarlyCommandCompletionDoesNotLoseWakeup()
             true,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -578,6 +584,8 @@ void testReceivingSurfaceToggle()
             true,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -641,6 +649,8 @@ void testReceivingStartsPaused()
             true,
             true,
             false,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -694,6 +704,8 @@ void testPauseCancelsPendingClaim()
             true,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -768,6 +780,8 @@ void testSubscriptionControlsPeerConnection()
             true,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -918,6 +932,8 @@ void testEphemeralSsdpSurface()
             false,
             true,
             true,
+            true,
+            10s,
             [] { return true; },
             [](const std::string &) {},
         });
@@ -1005,13 +1021,21 @@ void testEphemeralSsdpSurface()
 
 int main()
 {
+    std::cerr << "[ RUN ] initial media and confirmation\n";
     testEndToEndInitialMediaAndConfirmation();
+    std::cerr << "[ RUN ] media load failure\n";
     testMediaLoadFailureFailsHttp();
+    std::cerr << "[ RUN ] early command completion\n";
     testEarlyCommandCompletionDoesNotLoseWakeup();
+    std::cerr << "[ RUN ] receiving surface toggle\n";
     testReceivingSurfaceToggle();
+    std::cerr << "[ RUN ] receiving starts paused\n";
     testReceivingStartsPaused();
+    std::cerr << "[ RUN ] pause cancels pending claim\n";
     testPauseCancelsPendingClaim();
+    std::cerr << "[ RUN ] subscription controls peer\n";
     testSubscriptionControlsPeerConnection();
+    std::cerr << "[ RUN ] ephemeral SSDP surface\n";
     testEphemeralSsdpSurface();
     std::cout << "DLNA protocol runtime tests passed\n";
     return 0;

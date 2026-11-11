@@ -488,9 +488,21 @@ bool validateMessageDirection(
             && header.destination == ProcessRole::Protocol)
             return true;
         break;
+    case MessageType::SetDlnaBroadcast:
+        if (channel == ConnectionChannel::Command
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Protocol)
+            return true;
+        break;
     case MessageType::ReceivingState:
         if ((channel == ConnectionChannel::Command
              || channel == ConnectionChannel::Control)
+            && header.source == ProcessRole::Protocol
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::DlnaBroadcastState:
+        if (channel == ConnectionChannel::Command
             && header.source == ProcessRole::Protocol
             && header.destination == ProcessRole::Shell)
             return true;
@@ -536,6 +548,24 @@ bool validateMessageDirection(
         if (channel == ConnectionChannel::Control
             && header.source == ProcessRole::Ui
             && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::SettingsSnapshot:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Ui)
+            return true;
+        break;
+    case MessageType::UiUpdateSettings:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Ui
+            && header.destination == ProcessRole::Shell)
+            return true;
+        break;
+    case MessageType::SettingsUpdateResult:
+        if (channel == ConnectionChannel::Control
+            && header.source == ProcessRole::Shell
+            && header.destination == ProcessRole::Ui)
             return true;
         break;
     case MessageType::UiOpenReady:
@@ -1292,6 +1322,193 @@ std::optional<std::uint64_t> decodeUiCastConfirmationCancelMessage(
         return std::nullopt;
     }
     return message.header.correlationId;
+}
+
+std::optional<Message> makeSettingsSnapshotMessage(
+    std::uint64_t messageId, std::uint64_t stateVersion,
+    std::string_view json, std::string &error)
+{
+    error.clear();
+    if (messageId == 0 || stateVersion == 0 || json.empty()) {
+        error = "invalid settings snapshot";
+        return std::nullopt;
+    }
+    PayloadBuilder builder;
+    if (!builder.addString(
+            static_cast<std::uint16_t>(FieldId::SettingsJson),
+            json)) {
+        error = "settings snapshot payload is too large";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::SettingsSnapshot;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Ui;
+    message.header.messageId = messageId;
+    message.header.sessionId = 1;
+    message.header.stateVersion = stateVersion;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<std::string> decodeSettingsSnapshotMessage(
+    const Message &message, std::string &error)
+{
+    error.clear();
+    if (message.header.type != MessageType::SettingsSnapshot
+        || message.header.stateVersion == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        if (error.empty())
+            error = "not a settings snapshot";
+        return std::nullopt;
+    }
+    const PayloadReader reader(message.payload);
+    const auto json = reader.getString(
+        static_cast<std::uint16_t>(FieldId::SettingsJson));
+    if (!reader.valid() || !json || json->empty()) {
+        error = "invalid settings snapshot payload";
+        return std::nullopt;
+    }
+    return json;
+}
+
+std::optional<Message> makeUiUpdateSettingsMessage(
+    std::uint64_t messageId, std::string_view json,
+    std::string &error)
+{
+    error.clear();
+    if (messageId == 0 || json.empty()) {
+        error = "invalid settings update";
+        return std::nullopt;
+    }
+    PayloadBuilder builder;
+    if (!builder.addString(
+            static_cast<std::uint16_t>(FieldId::SettingsJson),
+            json)) {
+        error = "settings update payload is too large";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::UiUpdateSettings;
+    message.header.source = ProcessRole::Ui;
+    message.header.destination = ProcessRole::Shell;
+    message.header.messageId = messageId;
+    message.header.sessionId = 1;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<std::string> decodeUiUpdateSettingsMessage(
+    const Message &message, std::string &error)
+{
+    error.clear();
+    if (message.header.type != MessageType::UiUpdateSettings
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        if (error.empty())
+            error = "not a settings update";
+        return std::nullopt;
+    }
+    const PayloadReader reader(message.payload);
+    const auto json = reader.getString(
+        static_cast<std::uint16_t>(FieldId::SettingsJson));
+    if (!reader.valid() || !json || json->empty()) {
+        error = "invalid settings update payload";
+        return std::nullopt;
+    }
+    return json;
+}
+
+std::optional<Message> makeSettingsUpdateResultMessage(
+    std::uint64_t messageId, std::uint64_t correlationId,
+    const SettingsUpdateResultInfo &result, std::string &error)
+{
+    error.clear();
+    if (messageId == 0 || correlationId == 0) {
+        error = "invalid settings update result";
+        return std::nullopt;
+    }
+    PayloadBuilder builder;
+    const bool accepted = result.status
+        == SettingsUpdateStatus::Applied;
+    if (!builder.addBool(
+            static_cast<std::uint16_t>(FieldId::SettingsAccepted),
+            accepted)
+        || !builder.addUInt64(
+            static_cast<std::uint16_t>(FieldId::SettingsUpdateStatus),
+            static_cast<std::uint8_t>(result.status))) {
+        error = "settings result payload is invalid";
+        return std::nullopt;
+    }
+    if (!result.error.empty()
+        && !builder.addString(
+            static_cast<std::uint16_t>(FieldId::ErrorText),
+            result.error)) {
+        error = "settings result error is too large";
+        return std::nullopt;
+    }
+    Message message;
+    message.header.type = MessageType::SettingsUpdateResult;
+    message.header.source = ProcessRole::Shell;
+    message.header.destination = ProcessRole::Ui;
+    message.header.flags = MessageFlags::Response;
+    message.header.messageId = messageId;
+    message.header.correlationId = correlationId;
+    message.header.sessionId = 1;
+    message.payload = std::move(builder).finish().value_or(
+        std::vector<std::uint8_t>{});
+    if (!validateMessageDirection(
+            ConnectionChannel::Control, message.header, error))
+        return std::nullopt;
+    return message;
+}
+
+std::optional<SettingsUpdateResultInfo>
+decodeSettingsUpdateResultMessage(
+    const Message &message, std::uint64_t expectedCorrelationId,
+    std::string &error)
+{
+    error.clear();
+    if (message.header.type != MessageType::SettingsUpdateResult
+        || message.header.correlationId != expectedCorrelationId
+        || expectedCorrelationId == 0
+        || !validateMessageDirection(
+            ConnectionChannel::Control, message.header, error)) {
+        if (error.empty())
+            error = "not a settings update result";
+        return std::nullopt;
+    }
+    const PayloadReader reader(message.payload);
+    const auto accepted = reader.getBool(
+        static_cast<std::uint16_t>(FieldId::SettingsAccepted));
+    const auto status = reader.getUInt64(
+        static_cast<std::uint16_t>(FieldId::SettingsUpdateStatus));
+    if (!reader.valid() || !accepted || !status
+        || *status
+            > static_cast<std::uint8_t>(
+                SettingsUpdateStatus::SavedRuntimeFailed)
+        || *accepted
+            != (*status
+                == static_cast<std::uint8_t>(
+                    SettingsUpdateStatus::Applied))) {
+        error = "invalid settings update result payload";
+        return std::nullopt;
+    }
+    SettingsUpdateResultInfo result;
+    result.status =
+        static_cast<SettingsUpdateStatus>(*status);
+    result.error = reader.getString(
+        static_cast<std::uint16_t>(FieldId::ErrorText)).value_or("");
+    return result;
 }
 
 } // namespace mcast::ipc

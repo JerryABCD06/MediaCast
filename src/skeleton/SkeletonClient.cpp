@@ -169,8 +169,13 @@ std::unique_ptr<PipeConnection> connectControl(
 void protocolCommandServer(
     const ClientOptions &options, std::atomic_bool &receivingEnabled,
     std::atomic_uint64_t &receivingStateVersion,
+    std::atomic_bool &broadcasting,
+    std::atomic_uint32_t &broadcastIntervalMs,
     const std::function<bool(
         bool, bool &, std::uint64_t &, std::string &)> &applyReceiving,
+    const std::function<bool(
+        bool, std::uint32_t, bool &, std::uint32_t &, std::string &)>
+        &applyBroadcast,
     mcast::ipc::PipeListener &listener, std::stop_token stop)
 {
     while (!stop.stop_requested()) {
@@ -193,55 +198,104 @@ void protocolCommandServer(
 
         Message request;
         if (!connection->readMessage(request, 2000ms, error)
-            || request.header.type != MessageType::SetReceivingEnabled
             || !mcast::ipc::validateMessageDirection(
                 ConnectionChannel::Command, request.header, error)) {
             protocolLog("Protocol command invalid: " + error);
             std::cerr << "Protocol command rejected: " << error << '\n';
             continue;
         }
-        const mcast::ipc::PayloadReader reader(request.payload);
-        const auto enabled = reader.getBool(
-            static_cast<std::uint16_t>(mcast::ipc::FieldId::ReceivingEnabled));
-        if (!reader.valid() || !enabled) {
-            protocolLog("Protocol command payload is invalid");
-            std::cerr << "Protocol command payload is invalid\n";
-            continue;
-        }
-        std::string applyError;
-        bool applied = true;
-        bool effective = receivingEnabled.load();
-        std::uint64_t stateVersion =
-            receivingStateVersion.load();
-        if (applyReceiving)
-            applied = applyReceiving(
-                *enabled, effective, stateVersion, applyError);
-        receivingEnabled = effective;
-        receivingStateVersion = stateVersion;
-        if (applied) {
-            protocolLog(
-                std::string("Protocol receiving enabled=")
-                + (effective ? "true" : "false"));
-        } else {
-            protocolLog(
-                "Protocol receiving command failed: " + applyError);
-        }
-
-        mcast::ipc::PayloadBuilder builder;
-        builder.addBool(
-            static_cast<std::uint16_t>(mcast::ipc::FieldId::ReceivingEnabled),
-            effective);
         Message state;
-        state.header.type = MessageType::ReceivingState;
         state.header.source = ProcessRole::Protocol;
         state.header.destination = ProcessRole::Shell;
         state.header.flags = mcast::ipc::MessageFlags::Response;
         state.header.messageId = 1;
         state.header.correlationId = request.header.messageId;
         state.header.sessionId = request.header.sessionId;
-        state.header.stateVersion = stateVersion;
-        state.payload = std::move(builder).finish().value_or(
-            std::vector<std::uint8_t>{});
+        std::string applyError;
+        bool applied = true;
+
+        if (request.header.type == MessageType::SetReceivingEnabled) {
+            const mcast::ipc::PayloadReader reader(request.payload);
+            const auto enabled = reader.getBool(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::ReceivingEnabled));
+            if (!reader.valid() || !enabled) {
+                protocolLog("Protocol receiving payload is invalid");
+                continue;
+            }
+            bool effective = receivingEnabled.load();
+            std::uint64_t stateVersion =
+                receivingStateVersion.load();
+            if (applyReceiving)
+                applied = applyReceiving(
+                    *enabled, effective, stateVersion, applyError);
+            receivingEnabled = effective;
+            receivingStateVersion = stateVersion;
+            mcast::ipc::PayloadBuilder builder;
+            builder.addBool(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::ReceivingEnabled),
+                effective);
+            state.header.type = MessageType::ReceivingState;
+            state.header.stateVersion = stateVersion;
+            state.payload = std::move(builder).finish().value_or(
+                std::vector<std::uint8_t>{});
+            protocolLog(
+                applied
+                    ? std::string("Protocol receiving enabled=")
+                        + (effective ? "true" : "false")
+                    : "Protocol receiving command failed: "
+                        + applyError);
+        } else if (
+            request.header.type == MessageType::SetDlnaBroadcast) {
+            const mcast::ipc::PayloadReader reader(request.payload);
+            const auto enabled = reader.getBool(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::BroadcastEnabled));
+            const auto interval = reader.getUInt64(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::BroadcastIntervalMs));
+            if (!reader.valid() || !enabled || !interval
+                || *interval < 1000 || *interval > 3600000) {
+                protocolLog("Protocol broadcast payload is invalid");
+                continue;
+            }
+            bool effective = broadcasting.load();
+            std::uint32_t effectiveInterval =
+                broadcastIntervalMs.load();
+            if (applyBroadcast)
+                applied = applyBroadcast(
+                    *enabled,
+                    static_cast<std::uint32_t>(*interval),
+                    effective, effectiveInterval, applyError);
+            broadcasting = effective;
+            broadcastIntervalMs = effectiveInterval;
+            mcast::ipc::PayloadBuilder builder;
+            builder.addBool(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::BroadcastEnabled),
+                effective);
+            builder.addUInt64(
+                static_cast<std::uint16_t>(
+                    mcast::ipc::FieldId::BroadcastIntervalMs),
+                effectiveInterval);
+            state.header.type = MessageType::DlnaBroadcastState;
+            state.header.stateVersion = 1;
+            state.payload = std::move(builder).finish().value_or(
+                std::vector<std::uint8_t>{});
+            protocolLog(
+                applied
+                    ? std::string("Protocol broadcast enabled=")
+                        + (effective ? "true" : "false")
+                        + " interval_ms="
+                        + std::to_string(effectiveInterval)
+                    : "Protocol broadcast command failed: "
+                        + applyError);
+        } else {
+            protocolLog("Protocol command type is unsupported");
+            continue;
+        }
+
         if (!connection->writeMessage(state, 2000ms, error)) {
             protocolLog("Protocol command acknowledgement failed: " + error);
             std::cerr << "Protocol command acknowledgement failed: "
@@ -270,16 +324,24 @@ public:
         const ClientOptions &options,
         std::atomic_bool &receivingEnabled,
         std::atomic_uint64_t &receivingStateVersion,
+        std::atomic_bool &broadcasting,
+        std::atomic_uint32_t &broadcastIntervalMs,
         std::function<bool(
             bool, bool &, std::uint64_t &, std::string &)>
-            applyReceiving)
+            applyReceiving,
+        std::function<bool(
+            bool, std::uint32_t, bool &, std::uint32_t &,
+            std::string &)> applyBroadcast)
         : m_listener(
             mcast::ipc::makeProtocolCommandPipeName(
                 widen(options.instance)), 2)
         , m_options(options)
         , m_receivingEnabled(receivingEnabled)
         , m_receivingStateVersion(receivingStateVersion)
+        , m_broadcasting(broadcasting)
+        , m_broadcastIntervalMs(broadcastIntervalMs)
         , m_applyReceiving(std::move(applyReceiving))
+        , m_applyBroadcast(std::move(applyBroadcast))
     {
         if (!m_listener.valid()) {
             std::cerr << "Protocol command listener failed\n";
@@ -288,7 +350,9 @@ public:
         m_thread = std::jthread([this](std::stop_token stop) {
             protocolCommandServer(
                 m_options, m_receivingEnabled,
-                m_receivingStateVersion, m_applyReceiving,
+                m_receivingStateVersion,
+                m_broadcasting, m_broadcastIntervalMs,
+                m_applyReceiving, m_applyBroadcast,
                 m_listener, stop);
         });
     }
@@ -306,9 +370,14 @@ private:
     const ClientOptions &m_options;
     std::atomic_bool &m_receivingEnabled;
     std::atomic_uint64_t &m_receivingStateVersion;
+    std::atomic_bool &m_broadcasting;
+    std::atomic_uint32_t &m_broadcastIntervalMs;
     std::function<bool(
         bool, bool &, std::uint64_t &, std::string &)>
         m_applyReceiving;
+    std::function<bool(
+        bool, std::uint32_t, bool &, std::uint32_t &,
+        std::string &)> m_applyBroadcast;
     std::jthread m_thread;
 };
 
@@ -557,6 +626,9 @@ bool parseClientOptions(
         const std::wstring argument = argv[index];
         constexpr std::wstring_view instancePrefix = L"--instance=";
         constexpr std::wstring_view noncePrefix = L"--nonce=";
+        constexpr std::wstring_view friendlyNamePrefix =
+            L"--friendly-name=";
+        constexpr std::wstring_view udnPrefix = L"--udn=";
         constexpr std::wstring_view shellPidPrefix = L"--shell-pid=";
         constexpr std::wstring_view activationPrefix = L"--activation-id=";
         constexpr std::wstring_view dlnaPortPrefix =
@@ -567,6 +639,10 @@ bool parseClientOptions(
             L"--protocol-log=";
         constexpr std::wstring_view receivingPrefix =
             L"--receiving-enabled=";
+        constexpr std::wstring_view broadcastPrefix =
+            L"--broadcast-enabled=";
+        constexpr std::wstring_view broadcastIntervalPrefix =
+            L"--broadcast-interval-ms=";
         constexpr std::wstring_view requestRoundsPrefix =
             L"--request-ui-rounds=";
         if (argument.starts_with(instancePrefix)) {
@@ -575,6 +651,12 @@ bool parseClientOptions(
         } else if (argument.starts_with(noncePrefix)) {
             options.nonce = narrow(
                 argument.substr(noncePrefix.size()).c_str());
+        } else if (argument.starts_with(friendlyNamePrefix)) {
+            options.friendlyName = narrow(
+                argument.substr(friendlyNamePrefix.size()).c_str());
+        } else if (argument.starts_with(udnPrefix)) {
+            options.udn = narrow(
+                argument.substr(udnPrefix.size()).c_str());
         } else if (argument.starts_with(shellPidPrefix)) {
             const std::wstring value =
                 argument.substr(shellPidPrefix.size());
@@ -645,6 +727,33 @@ bool parseClientOptions(
                 error = "invalid --receiving-enabled";
                 return false;
             }
+        } else if (argument.starts_with(broadcastPrefix)) {
+            const std::wstring value =
+                argument.substr(broadcastPrefix.size());
+            if (value == L"1" || value == L"true") {
+                options.initialBroadcasting = true;
+            } else if (value == L"0" || value == L"false") {
+                options.initialBroadcasting = false;
+            } else {
+                error = "invalid --broadcast-enabled";
+                return false;
+            }
+        } else if (argument.starts_with(broadcastIntervalPrefix)) {
+            const std::wstring value =
+                argument.substr(broadcastIntervalPrefix.size());
+            try {
+                std::size_t consumed = 0;
+                const unsigned long parsed =
+                    std::stoul(value, &consumed);
+                if (consumed != value.size()
+                    || parsed < 1000 || parsed > 3600000)
+                    throw std::out_of_range("interval");
+                options.broadcastIntervalMs =
+                    static_cast<std::uint32_t>(parsed);
+            } catch (...) {
+                error = "invalid --broadcast-interval-ms";
+                return false;
+            }
         } else if (argument == L"--request-ui") {
             options.requestUi = true;
         } else if (argument == L"--disable-ssdp") {
@@ -675,6 +784,11 @@ bool parseClientOptions(
     }
     if (options.nonce.empty()) {
         error = "--nonce is required";
+        return false;
+    }
+    if (options.friendlyName.empty()
+        || !options.udn.starts_with("uuid:")) {
+        error = "invalid DLNA device identity";
         return false;
     }
     if (options.shellPid == 0) {
@@ -941,13 +1055,16 @@ int runClient(const ClientOptions &options)
         mcast::dlna::runtime::DlnaProtocolRuntime dlnaRuntime(
             *playbackGateway, dlnaConfirmationPort,
             mcast::dlna::runtime::DlnaProtocolRuntimeOptions{
-                "Media Cast Receiver",
-                "uuid:mcast-" + options.instance,
+                options.friendlyName,
+                options.udn,
                 options.dlnaHttpPort,
                 options.dlnaSsdpPort,
                 false,
                 !options.disableSsdp,
                 options.initialReceivingEnabled,
+                options.initialBroadcasting,
+                std::chrono::milliseconds(
+                    options.broadcastIntervalMs),
                 [&] {
                     mcast::ipc::UiActivationOutcome activation;
                     std::string activationError;
@@ -990,8 +1107,13 @@ int runClient(const ClientOptions &options)
         std::atomic_bool receivingEnabled =
             options.initialReceivingEnabled;
         std::atomic_uint64_t receivingStateVersion = 1;
+        std::atomic_bool broadcasting =
+            options.initialBroadcasting;
+        std::atomic_uint32_t broadcastIntervalMs =
+            options.broadcastIntervalMs;
         ProtocolCommandServer commandServer(
             options, receivingEnabled, receivingStateVersion,
+            broadcasting, broadcastIntervalMs,
             [&](bool enabled, bool &effective,
                 std::uint64_t &stateVersion,
                 std::string &receivingError) {
@@ -1001,6 +1123,25 @@ int runClient(const ClientOptions &options)
                 effective = dlnaRuntime.receivingEnabled();
                 stateVersion = dlnaRuntime.receivingStateVersion();
                 return applied;
+            },
+            [&](bool enabled, std::uint32_t interval,
+                bool &effective, std::uint32_t &effectiveInterval,
+                std::string &broadcastError) {
+                try {
+                    dlnaRuntime.setBroadcasting(enabled);
+                    dlnaRuntime.setBroadcastInterval(
+                        std::chrono::milliseconds(interval));
+                    effective = enabled;
+                    effectiveInterval = interval;
+                    broadcastError.clear();
+                    return true;
+                } catch (const std::exception &exception) {
+                    broadcastError = exception.what();
+                    return false;
+                } catch (...) {
+                    broadcastError = "unknown broadcast error";
+                    return false;
+                }
             });
         std::atomic_bool heartbeatFailed = false;
         std::string heartbeatError;
@@ -1098,6 +1239,14 @@ int runClient(const ClientOptions &options)
         }
         dispatcher->stop();
     } else if (options.role == ProcessRole::Ui) {
+        Message settingsSnapshot;
+        if (!control->readMessage(settingsSnapshot, 3000ms, error)
+            || !mcast::ipc::decodeSettingsSnapshotMessage(
+                settingsSnapshot, error)) {
+            std::cerr << "settings snapshot read failed: "
+                      << error << '\n';
+            return 4;
+        }
         Message grant;
         if (!control->readMessage(grant, 3000ms, error)) {
             std::cerr << "protocol grant read failed: " << error << '\n';

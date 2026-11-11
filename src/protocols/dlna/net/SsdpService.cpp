@@ -172,6 +172,23 @@ std::string SsdpService::locationUrl() const
     return m_locationUrl;
 }
 
+void SsdpService::setBroadcasting(bool enabled) noexcept
+{
+    const bool previous = m_broadcasting.exchange(enabled);
+    if (!previous && enabled)
+        m_sendAliveRequested = true;
+}
+
+void SsdpService::setAliveInterval(
+    std::chrono::milliseconds interval) noexcept
+{
+    if (interval.count() <= 0)
+        return;
+    m_aliveIntervalMs = interval.count();
+    if (m_broadcasting)
+        m_sendAliveRequested = true;
+}
+
 void SsdpService::completeStart(bool success, std::string error)
 {
     {
@@ -294,7 +311,15 @@ void SsdpService::run(
         }
     };
 
-    if (options.advertise)
+    m_broadcasting = options.advertise;
+    m_aliveIntervalMs =
+        options.aliveInterval.count() > 0
+        ? options.aliveInterval.count() : 10000;
+    m_sendAliveRequested = false;
+
+    // 关闭“定期广播”不等于拒绝被发现：和旧实现一样，启动时仍主动
+    // alive 一次，之后只停止周期广播，M-SEARCH 始终继续响应。
+    if (options.joinMulticast)
         sendNotify(true);
     auto nextAlive = Clock::now() + 300ms;
     std::vector<PendingReply> pendingReplies;
@@ -325,13 +350,21 @@ void SsdpService::run(
             reply = pendingReplies.erase(reply);
         }
 
-        if (options.advertise && now >= nextAlive) {
+        if (m_sendAliveRequested.exchange(false)) {
             sendNotify(true);
-            nextAlive = now + options.aliveInterval;
+            nextAlive = now
+                + std::chrono::milliseconds(
+                    m_aliveIntervalMs.load());
+        }
+        if (m_broadcasting && now >= nextAlive) {
+            sendNotify(true);
+            nextAlive = now
+                + std::chrono::milliseconds(
+                    m_aliveIntervalMs.load());
         }
 
         auto timeout = 100ms;
-        if (options.advertise) {
+        if (m_broadcasting) {
             timeout = std::min(
                 timeout,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -410,7 +443,7 @@ void SsdpService::run(
         }
     }
 
-    if (options.advertise)
+    if (multicastJoined)
         sendNotify(false);
     loop.remove(socket.handle());
     if (multicastJoined) {

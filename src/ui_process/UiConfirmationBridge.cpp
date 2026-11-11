@@ -8,6 +8,7 @@
 #include <QString>
 
 #include <chrono>
+#include <string_view>
 #include <utility>
 
 namespace mcast::ui_process {
@@ -58,6 +59,32 @@ bool UiConfirmationBridge::sendFirstFrame(
     firstFrame.header.correlationId = activationId;
     firstFrame.header.sessionId = 1;
     return m_control->writeMessage(firstFrame, 2000ms, error);
+}
+
+bool UiConfirmationBridge::submitSettings(
+    const QByteArray &json, std::uint64_t baseVersion,
+    std::string &error)
+{
+    if (!m_control || json.isEmpty()) {
+        error = "settings update is unavailable";
+        return false;
+    }
+    auto message = ipc::makeUiUpdateSettingsMessage(
+        nextMessageId(),
+        std::string_view(json.constData(), json.size()),
+        error);
+    if (!message) {
+        emit settingsSubmitFailed(
+            QString::fromStdString(error));
+        return false;
+    }
+    message->header.stateVersion = baseVersion;
+    if (!m_control->writeMessage(*message, 2000ms, error)) {
+        emit settingsSubmitFailed(
+            QString::fromStdString(error));
+        return false;
+    }
+    return true;
 }
 
 void UiConfirmationBridge::submitDecision(
@@ -177,6 +204,42 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 continue;
             }
             emit playbackReconnectRequested(*requestId);
+        } else if (
+            message.header.type
+            == ipc::MessageType::SettingsSnapshot) {
+            const auto json =
+                ipc::decodeSettingsSnapshotMessage(message, error);
+            if (!json) {
+                emit logMessage(
+                    QStringLiteral("设置快照无效：%1")
+                        .arg(QString::fromStdString(error)));
+                continue;
+            }
+            emit settingsReceived(
+                QByteArray::fromStdString(*json),
+                message.header.stateVersion);
+        } else if (
+            message.header.type
+            == ipc::MessageType::SettingsUpdateResult) {
+            const auto result =
+                ipc::decodeSettingsUpdateResultMessage(
+                    message, message.header.correlationId, error);
+            if (!result) {
+                emit logMessage(
+                    QStringLiteral("设置更新结果无效：%1")
+                        .arg(QString::fromStdString(error)));
+                continue;
+            }
+            if (result->status
+                == ipc::SettingsUpdateStatus::Rejected) {
+                emit settingsUpdateRejected(
+                    QString::fromStdString(result->error));
+            } else if (result->status
+                       == ipc::SettingsUpdateStatus::
+                           SavedRuntimeFailed) {
+                emit settingsRuntimeApplyFailed(
+                    QString::fromStdString(result->error));
+            }
         }
     }
 }

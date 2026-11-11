@@ -24,6 +24,7 @@ public:
 
     bool initialize(std::string &error);
     void setChinese(bool chinese);
+    void requestChinese(bool chinese);
     void setReceivingEnabled(bool enabled);
     void requestReceivingEnabled(bool enabled);
     void pumpMessages();

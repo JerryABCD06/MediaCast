@@ -5,6 +5,7 @@
 
 #include "ipc/Messages.h"
 
+#include <QByteArray>
 #include <QObject>
 #include <QVariantMap>
 
@@ -31,6 +32,9 @@ public:
     ~UiConfirmationBridge() override;
 
     bool sendFirstFrame(std::uint64_t activationId, std::string &error);
+    bool submitSettings(
+        const QByteArray &json, std::uint64_t baseVersion,
+        std::string &error);
 
 public slots:
     void submitDecision(qulonglong requestId, bool accepted);
@@ -39,6 +43,11 @@ signals:
     void requestReceived(qulonglong requestId, const QVariantMap &request);
     void cancelReceived(qulonglong requestId);
     void playbackReconnectRequested(qulonglong requestId);
+    void settingsReceived(
+        const QByteArray &json, qulonglong version);
+    void settingsSubmitFailed(const QString &reason);
+    void settingsUpdateRejected(const QString &reason);
+    void settingsRuntimeApplyFailed(const QString &reason);
     void connectionLost(const QString &reason);
     void logMessage(const QString &message);
 

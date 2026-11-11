@@ -71,6 +71,11 @@ enum class MessageType : std::uint16_t {
     UiPlaybackReconnect = 36,
     UiEndCastRequest = 37,
     PlaybackUiReady = 38,
+    SettingsSnapshot = 39,
+    UiUpdateSettings = 40,
+    SetDlnaBroadcast = 41,
+    DlnaBroadcastState = 42,
+    SettingsUpdateResult = 43,
 };
 
 enum class FieldType : std::uint8_t {

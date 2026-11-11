@@ -28,6 +28,7 @@
 #include <deque>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -57,6 +58,7 @@ struct Options {
     bool testHold = false;
     bool testToggleReceiving = false;
     bool testToggleReceivingAfterFirstFrame = false;
+    bool testToggleBroadcast = false;
     bool testPersistent = false;
     bool testEnableSsdp = false;
     bool testForceReceivingEnabled = false;
@@ -111,6 +113,36 @@ std::wstring widen(const std::string &value)
     std::wstring result(size - 1, L'\0');
     MultiByteToWideChar(
         CP_UTF8, 0, value.c_str(), -1, result.data(), size);
+    return result;
+}
+
+std::wstring quoteWindowsArgument(std::wstring_view value)
+{
+    if (value.empty())
+        return L"\"\"";
+    if (value.find_first_of(L" \t\"") == std::wstring_view::npos)
+        return std::wstring(value);
+
+    std::wstring result;
+    result.push_back(L'"');
+    std::size_t backslashes = 0;
+    for (const wchar_t ch : value) {
+        if (ch == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"') {
+            result.append(backslashes * 2 + 1, L'\\');
+            result.push_back(ch);
+            backslashes = 0;
+            continue;
+        }
+        result.append(backslashes, L'\\');
+        backslashes = 0;
+        result.push_back(ch);
+    }
+    result.append(backslashes * 2, L'\\');
+    result.push_back(L'"');
     return result;
 }
 
@@ -218,6 +250,9 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
                    L"--test-toggle-receiving-after-first-frame") {
             options.testToggleReceiving = true;
             options.testToggleReceivingAfterFirstFrame = true;
+        } else if (argument ==
+                   L"--test-toggle-broadcast-after-first-frame") {
+            options.testToggleBroadcast = true;
         } else if (argument == L"--test-persistent") {
             options.testPersistent = true;
         } else if (argument == L"--test-enable-ssdp") {
@@ -265,6 +300,10 @@ bool parseOptions(int argc, wchar_t **argv, Options &options, std::string &error
     }
     if (options.testToggleReceiving && !options.testMode) {
         error = "--test-toggle-receiving requires --test";
+        return false;
+    }
+    if (options.testToggleBroadcast && !options.testMode) {
+        error = "--test-toggle-broadcast-after-first-frame requires --test";
         return false;
     }
     if (options.testPersistent && !options.testMode) {
@@ -518,16 +557,33 @@ public:
 
     bool initialize(std::string &error)
     {
+        const auto settingsDirectory =
+            mcast::supervisor::currentExecutablePath().parent_path();
+        const std::wstring settingsName =
+            m_options.testMode
+            ? L"MediaCast." + widen(m_options.instance) + L".json"
+            : L"MediaCast.json";
         m_settings = std::make_unique<mcast::shell::ShellSettings>(
-            mcast::supervisor::currentExecutablePath().parent_path()
-            / L"MediaCast.json");
+            settingsDirectory / settingsName);
         std::string settingsError;
         if (!m_settings->load(settingsError)) {
             std::cerr << "Settings load failed: " << settingsError << '\n';
         }
+        std::string initialSettingsSaveError;
+        if (!m_settings->save(initialSettingsSaveError)) {
+            std::cerr << "Settings initial save failed: "
+                      << initialSettingsSaveError << '\n';
+        }
         m_receivingEnabled = m_settings->acceptNewCast();
+        m_broadcasting = m_settings->broadcast();
+        m_broadcastIntervalMs =
+            static_cast<std::uint32_t>(
+                m_settings->broadcastIntervalMs());
         if (m_options.testForceReceivingEnabled)
             m_receivingEnabled = true;
+        const std::string darkMode = m_settings->darkMode();
+        m_splash.setTheme(
+            darkMode == "System", darkMode == "Dark");
 
         m_nonce = mcast::supervisor::randomHexToken(16);
         if (!m_nonce) {
@@ -605,7 +661,9 @@ public:
         const auto startedAt = std::chrono::steady_clock::now();
         auto lastReceivingAttempt = startedAt - 1s;
         auto lastInitialReceivingAttempt = startedAt - 1s;
+        auto lastReceivingReconcileAttempt = startedAt - 1s;
         bool receivingStateSynchronized = m_options.testMode;
+        bool broadcastToggleDone = false;
         while (true) {
             if (m_tray)
                 m_tray->pumpMessages();
@@ -629,6 +687,22 @@ public:
                               << syncError << '\n';
                 }
             }
+            if (m_receivingReconcilePending.load()
+                && now - lastReceivingReconcileAttempt > 500ms) {
+                lastReceivingReconcileAttempt = now;
+                bool effective = m_receivingEnabled;
+                std::uint64_t stateVersion = 0;
+                std::string reconcileError;
+                if (sendReceivingEnabled(
+                        m_receivingEnabled, effective,
+                        stateVersion, reconcileError)) {
+                    applyReceivingState(effective, stateVersion);
+                    m_receivingReconcilePending = false;
+                } else {
+                    std::cerr << "Receiving reconciliation retry: "
+                              << reconcileError << '\n';
+                }
+            }
             if (m_options.testToggleReceiving
                 && now - startedAt > 10s) {
                 std::cerr << "Receiving command test timed out\n";
@@ -637,6 +711,28 @@ public:
             const bool toggleReady =
                 !m_options.testToggleReceivingAfterFirstFrame
                 || m_firstFrameRounds.load() > 0;
+            if (m_options.testToggleBroadcast && toggleReady
+                && !broadcastToggleDone) {
+                bool effective = m_broadcasting.load();
+                std::uint32_t effectiveInterval =
+                    m_broadcastIntervalMs.load();
+                std::string broadcastError;
+                if (sendDlnaBroadcast(
+                        false, 30000, effective,
+                        effectiveInterval, broadcastError)) {
+                    m_broadcasting = effective;
+                    m_broadcastIntervalMs = effectiveInterval;
+                    broadcastToggleDone = true;
+                    std::cout
+                        << "SHELL_BROADCAST_TOGGLE_OK enabled="
+                        << (effective ? "true" : "false")
+                        << " interval_ms=" << effectiveInterval
+                        << '\n';
+                } else {
+                    std::cerr << "Broadcast command retry: "
+                              << broadcastError << '\n';
+                }
+            }
             if (m_options.testToggleReceiving && toggleReady
                 && now - startedAt > 250ms
                 && now - lastReceivingAttempt > 500ms) {
@@ -760,6 +856,16 @@ private:
     struct ConfirmationThreadSlot {
         std::jthread thread;
         std::shared_ptr<std::atomic_bool> done;
+    };
+
+    struct SettingsPatchEffect {
+        bool stale = false;
+        bool previousReceiving = false;
+        bool previousBroadcast = false;
+        std::uint32_t previousBroadcastInterval = 10000;
+        bool currentReceiving = false;
+        bool currentBroadcast = false;
+        std::uint32_t currentBroadcastInterval = 10000;
     };
 
     struct PendingUiConfirmation {
@@ -1440,20 +1546,61 @@ private:
     void applyReceivingState(
         bool enabled, std::uint64_t stateVersion)
     {
-        std::lock_guard lock(m_receivingStateMutex);
-        if (stateVersion < m_receivingStateVersion)
-            return;
-        m_receivingStateVersion = stateVersion;
-        const bool previous = m_receivingEnabled.exchange(enabled);
-        if (m_tray)
-            m_tray->requestReceivingEnabled(enabled);
-        if (previous != enabled && m_settings) {
-            m_settings->setAcceptNewCast(enabled);
-            std::string saveError;
-            if (!m_settings->save(saveError))
-                std::cerr << "Settings save failed: "
-                          << saveError << '\n';
+        bool previous = m_receivingEnabled.load();
+        bool settingsChanged = false;
+        bool persistenceFailed = false;
+        std::string saveError;
+        {
+            std::lock_guard lock(m_receivingStateMutex);
+            if (stateVersion < m_receivingStateVersion)
+                return;
+            previous = m_receivingEnabled.load();
+            if (previous != enabled && m_settings) {
+                std::lock_guard settingsLock(m_settingsMutex);
+                if (m_settings->acceptNewCast() == enabled) {
+                    settingsChanged = false;
+                } else if (m_settings->setAcceptNewCastAndSave(
+                               enabled, saveError)) {
+                    ++m_settingsStateVersion;
+                    settingsChanged = true;
+                } else {
+                    persistenceFailed = true;
+                }
+            }
+            if (!persistenceFailed) {
+                m_receivingStateVersion = stateVersion;
+                m_receivingEnabled = enabled;
+                if (m_tray)
+                    m_tray->requestReceivingEnabled(enabled);
+            }
         }
+        if (persistenceFailed) {
+            std::cerr << "Receiving setting save failed: "
+                      << saveError << '\n';
+            bool rollbackEffective = previous;
+            std::uint64_t rollbackVersion = stateVersion;
+            std::string rollbackError;
+            if (sendReceivingEnabled(
+                    previous, rollbackEffective,
+                    rollbackVersion, rollbackError)) {
+                m_receivingReconcilePending = false;
+                std::lock_guard lock(m_receivingStateMutex);
+                if (rollbackVersion >= m_receivingStateVersion) {
+                    m_receivingStateVersion = rollbackVersion;
+                    m_receivingEnabled = rollbackEffective;
+                    if (m_tray)
+                        m_tray->requestReceivingEnabled(
+                            rollbackEffective);
+                }
+            } else {
+                m_receivingReconcilePending = true;
+                std::cerr << "Receiving state rollback failed: "
+                          << rollbackError << '\n';
+            }
+            return;
+        }
+        if (settingsChanged)
+            broadcastSettingsSnapshot();
     }
 
     bool sendReceivingEnabled(
@@ -1530,6 +1677,177 @@ private:
         }
         effective = *value;
         stateVersion = state.header.stateVersion;
+        return true;
+    }
+
+    bool sendSettingsSnapshot(
+        const std::shared_ptr<mcast::ipc::PipeConnection> &connection,
+        std::string &error)
+    {
+        if (!connection || !m_settings)
+            return false;
+        std::uint64_t version = 0;
+        std::string snapshot;
+        {
+            std::lock_guard lock(m_settingsMutex);
+            version = m_settingsStateVersion.load();
+            snapshot = m_settings->snapshotJson();
+        }
+        auto message = mcast::ipc::makeSettingsSnapshotMessage(
+            nextMessageId(), version,
+            snapshot, error);
+        return message
+            && connection->writeMessage(*message, 2000ms, error);
+    }
+
+    void broadcastSettingsSnapshot()
+    {
+        std::shared_ptr<mcast::ipc::PipeConnection> connection;
+        {
+            std::scoped_lock lock(m_uiControlMutex);
+            connection = m_uiControlConnection;
+        }
+        if (!connection)
+            return;
+        std::string error;
+        if (!sendSettingsSnapshot(connection, error))
+            std::cerr << "Settings snapshot broadcast failed: "
+                      << error << '\n';
+    }
+
+    bool sendSettingsUpdateResult(
+        const std::shared_ptr<mcast::ipc::PipeConnection> &connection,
+        std::uint64_t correlationId,
+        mcast::ipc::SettingsUpdateStatus status,
+        const std::string &errorText, std::string &error)
+    {
+        const auto result = mcast::ipc::makeSettingsUpdateResultMessage(
+            nextMessageId(), correlationId,
+            mcast::ipc::SettingsUpdateResultInfo{
+                status, errorText},
+            error);
+        return result
+            && connection
+            && connection->writeMessage(*result, 2000ms, error);
+    }
+
+    bool sendDlnaBroadcast(
+        bool enabled, std::uint32_t intervalMs,
+        bool &effective, std::uint32_t &effectiveInterval,
+        std::string &error)
+    {
+        std::uint32_t protocolProcessId = 0;
+        std::string protocolHash;
+        {
+            std::scoped_lock lock(m_recordsMutex);
+            ChildRecord *protocol = findRecord(ProcessRole::Protocol);
+            if (!protocol || !protocol->process.running()) {
+                error = "Protocol is not running";
+                return false;
+            }
+            protocolProcessId = protocol->expectation.peerProcessId;
+            protocolHash = protocol->expectation.executableHash;
+        }
+
+        auto connection = mcast::ipc::PipeClient::connect(
+            mcast::ipc::makeProtocolCommandPipeName(
+                widen(m_options.instance)),
+            1000ms, error);
+        if (!connection)
+            return false;
+        if (connection->peerProcessId() != protocolProcessId) {
+            error = "Protocol command server PID mismatch";
+            return false;
+        }
+        const auto path =
+            mcast::supervisor::queryProcessPath(protocolProcessId);
+        const auto hash = path
+            ? mcast::supervisor::sha256File(*path) : std::nullopt;
+        if (!hash || *hash != protocolHash) {
+            error = "Protocol command server executable mismatch";
+            return false;
+        }
+
+        mcast::ipc::PayloadBuilder builder;
+        builder.addBool(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::BroadcastEnabled),
+            enabled);
+        builder.addUInt64(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::BroadcastIntervalMs),
+            intervalMs);
+        Message request;
+        request.header.type = MessageType::SetDlnaBroadcast;
+        request.header.source = ProcessRole::Shell;
+        request.header.destination = ProcessRole::Protocol;
+        request.header.messageId = GetTickCount64();
+        if (request.header.messageId == 0)
+            request.header.messageId = 1;
+        request.header.sessionId = 1;
+        request.payload = std::move(builder).finish().value_or(
+            std::vector<std::uint8_t>{});
+        if (!connection->writeMessage(request, 1500ms, error))
+            return false;
+
+        Message state;
+        if (!connection->readMessage(state, 4000ms, error)
+            || state.header.type != MessageType::DlnaBroadcastState
+            || state.header.correlationId != request.header.messageId
+            || !mcast::ipc::validateMessageDirection(
+                ConnectionChannel::Command, state.header, error)) {
+            if (error.empty())
+                error = "invalid broadcast state response";
+            return false;
+        }
+        const mcast::ipc::PayloadReader reader(state.payload);
+        const auto value = reader.getBool(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::BroadcastEnabled));
+        const auto interval = reader.getUInt64(
+            static_cast<std::uint16_t>(
+                mcast::ipc::FieldId::BroadcastIntervalMs));
+        if (!reader.valid() || !value || !interval
+            || *interval > std::numeric_limits<std::uint32_t>::max()) {
+            error = "broadcast state response is invalid";
+            return false;
+        }
+        effective = *value;
+        effectiveInterval =
+            static_cast<std::uint32_t>(*interval);
+        return true;
+    }
+
+    bool applySettingsPatch(
+        std::string_view json, std::uint64_t baseVersion,
+        SettingsPatchEffect &effect, std::string &error)
+    {
+        if (!m_settings)
+            return false;
+        std::lock_guard lock(m_settingsMutex);
+        if (baseVersion != m_settingsStateVersion.load()) {
+            effect.stale = true;
+            error = "stale settings version";
+            return false;
+        }
+        effect.previousReceiving = m_settings->acceptNewCast();
+        effect.previousBroadcast = m_settings->broadcast();
+        effect.previousBroadcastInterval =
+            static_cast<std::uint32_t>(
+                m_settings->broadcastIntervalMs());
+        if (!m_settings->applyJsonPatchAndSave(json, error))
+            return false;
+        ++m_settingsStateVersion;
+        effect.currentReceiving = m_settings->acceptNewCast();
+        effect.currentBroadcast = m_settings->broadcast();
+        effect.currentBroadcastInterval =
+            static_cast<std::uint32_t>(
+                m_settings->broadcastIntervalMs());
+        if (m_tray)
+            m_tray->requestChinese(m_settings->chineseUi());
+        const std::string darkMode = m_settings->darkMode();
+        m_splash.setTheme(
+            darkMode == "System", darkMode == "Dark");
         return true;
     }
 
@@ -1659,23 +1977,39 @@ private:
         std::wstring arguments =
             L"--instance=" + widen(m_options.instance)
             + L" --nonce=" + widen(*m_nonce)
+            + L" --friendly-name="
+            + [&] {
+                  std::lock_guard lock(m_settingsMutex);
+                  return quoteWindowsArgument(
+                      widen(m_settings->deviceName()));
+              }()
+            + L" --udn="
+            + [&] {
+                  std::lock_guard lock(m_settingsMutex);
+                  return quoteWindowsArgument(
+                      widen(m_settings->deviceUdn()));
+              }()
             + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
             + L" --dlna-http-port="
             + (m_options.testMode ? L"0" : L"8200")
             + L" --receiving-enabled="
-            + (m_receivingEnabled ? L"1" : L"0");
+            + (m_receivingEnabled ? L"1" : L"0")
+            + L" --broadcast-enabled="
+            + (m_broadcasting.load() ? L"1" : L"0")
+            + L" --broadcast-interval-ms="
+            + std::to_wstring(m_broadcastIntervalMs.load());
         if (m_options.testMode && !m_options.testEnableSsdp)
             arguments += L" --disable-ssdp";
         if (m_options.testMode && m_options.testEnableSsdp)
             arguments += L" --dlna-ssdp-port=0";
         if (m_options.testMode && m_options.testEnableSsdp) {
-            arguments += L" --protocol-log=\""
-                + (mcast::supervisor::currentExecutablePath()
-                       .parent_path()
-                   / (L"MCast.Protocol."
-                      + widen(m_options.instance) + L".log"))
-                      .wstring()
-                + L"\"";
+            arguments += L" --protocol-log="
+                + quoteWindowsArgument(
+                    (mcast::supervisor::currentExecutablePath()
+                           .parent_path()
+                       / (L"MCast.Protocol."
+                          + widen(m_options.instance) + L".log"))
+                          .wstring());
         }
         if (!m_options.background)
             arguments += L" --request-ui";
@@ -1893,6 +2227,13 @@ private:
         if (!ackMessage
             || !connection->writeMessage(*ackMessage, 2000ms, error)) {
             std::cerr << "hello ack: " << error << '\n';
+            return;
+        }
+
+        if (helloMessage.header.source == ProcessRole::Ui
+            && !sendSettingsSnapshot(connection, error)) {
+            std::cerr << "settings snapshot send: "
+                      << error << '\n';
             return;
         }
 
@@ -2152,6 +2493,105 @@ private:
                        && helloMessage.header.source == ProcessRole::Ui) {
                 completeUiConfirmation(
                     message, connection, uiControlGeneration);
+            } else if (message.header.type
+                           == MessageType::UiUpdateSettings
+                       && helloMessage.header.source == ProcessRole::Ui) {
+                const auto json =
+                    mcast::ipc::decodeUiUpdateSettingsMessage(
+                        message, error);
+                if (!json) {
+                    std::cerr << "UI settings update: "
+                              << error << '\n';
+                    return;
+                }
+                const std::uint64_t baseVersion =
+                    message.header.stateVersion;
+                SettingsPatchEffect effect;
+                if (!applySettingsPatch(
+                        *json, baseVersion, effect, error)) {
+                    std::cerr << "UI settings update failed: "
+                              << error << '\n';
+                    std::string resultError;
+                    if (!sendSettingsUpdateResult(
+                            connection, message.header.messageId,
+                            mcast::ipc::SettingsUpdateStatus::Rejected,
+                            error, resultError)) {
+                        std::cerr
+                            << "Settings rejection result failed: "
+                            << resultError << '\n';
+                    }
+                    if (!sendSettingsSnapshot(connection, error)) {
+                        std::cerr << "settings snapshot send: "
+                                  << error << '\n';
+                        return;
+                    }
+                    continue;
+                }
+                std::string runtimeError;
+                if (effect.previousReceiving != effect.currentReceiving) {
+                    bool effective = m_receivingEnabled;
+                    std::uint64_t stateVersion = 0;
+                    std::string receiveError;
+                    if (sendReceivingEnabled(
+                            effect.currentReceiving,
+                            effective, stateVersion,
+                            receiveError)) {
+                        applyReceivingState(
+                            effective, stateVersion);
+                    } else {
+                        std::cerr
+                            << "UI receiving setting sync failed: "
+                            << receiveError << '\n';
+                        runtimeError =
+                            "receiving runtime apply failed: "
+                            + receiveError;
+                    }
+                }
+                if (effect.previousBroadcast != effect.currentBroadcast
+                    || effect.previousBroadcastInterval
+                        != effect.currentBroadcastInterval) {
+                    bool effective = m_broadcasting.load();
+                    std::uint32_t effectiveInterval =
+                        m_broadcastIntervalMs.load();
+                    std::string broadcastError;
+                    if (sendDlnaBroadcast(
+                            effect.currentBroadcast,
+                            effect.currentBroadcastInterval,
+                            effective, effectiveInterval,
+                            broadcastError)) {
+                        m_broadcasting = effective;
+                        m_broadcastIntervalMs =
+                            effectiveInterval;
+                    } else {
+                        std::cerr
+                            << "UI broadcast setting sync failed: "
+                            << broadcastError << '\n';
+                        if (runtimeError.empty())
+                            runtimeError =
+                                "broadcast runtime apply failed: "
+                                + broadcastError;
+                    }
+                }
+                std::string resultError;
+                const bool runtimeApplied = runtimeError.empty();
+                if (!sendSettingsUpdateResult(
+                        connection, message.header.messageId,
+                        runtimeApplied
+                            ? mcast::ipc::SettingsUpdateStatus::Applied
+                            : mcast::ipc::SettingsUpdateStatus::
+                                  SavedRuntimeFailed,
+                        runtimeApplied
+                            ? std::string{}
+                            : "settings saved, but " + runtimeError,
+                        resultError)) {
+                    std::cerr << "Settings success result failed: "
+                              << resultError << '\n';
+                }
+                if (!sendSettingsSnapshot(connection, error)) {
+                    std::cerr << "settings snapshot send: "
+                              << error << '\n';
+                    return;
+                }
             } else if (message.header.type == MessageType::UiFirstFrame
                        && helloMessage.header.source == ProcessRole::Ui) {
                 bool accepted = false;
@@ -2215,7 +2655,17 @@ private:
         m_connections.clear();
         m_listener.reset();
         m_tray.reset();
+        const std::filesystem::path testSettingsPath =
+            m_settings ? m_settings->path() : std::filesystem::path{};
         m_settings.reset();
+        if (m_options.testMode && !testSettingsPath.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(testSettingsPath, ignored);
+            std::filesystem::path statePath = testSettingsPath;
+            statePath.replace_filename(
+                testSettingsPath.stem().wstring() + L".Shell.json");
+            std::filesystem::remove(statePath, ignored);
+        }
         if (m_firstFrame)
             CloseHandle(m_firstFrame);
         if (m_mutex)
@@ -2300,9 +2750,14 @@ private:
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
     std::unique_ptr<mcast::shell::ShellSettings> m_settings;
     std::atomic_bool m_receivingEnabled{true};
+    std::atomic_bool m_broadcasting{true};
+    std::atomic_uint32_t m_broadcastIntervalMs{10000};
+    std::atomic_bool m_receivingReconcilePending{false};
     std::uint64_t m_receivingStateVersion = 0;
     std::mutex m_receivingStateMutex;
+    std::mutex m_settingsMutex;
     std::atomic_uint64_t m_nextMessageId{100};
+    std::atomic_uint64_t m_settingsStateVersion{1};
     std::atomic_bool m_shuttingDown = false;
     std::atomic_bool m_quitRequested = false;
 

@@ -4,21 +4,34 @@
 #include "DeviceInfo.h"
 
 #include <QCoreApplication>
-#include <QSettings>
-#include <QStandardPaths>
 #include <QSysInfo>
 
 DeviceInfo::DeviceInfo(QObject *parent)
     : QObject(parent)
     , m_deviceName(QSysInfo::machineHostName())
 {
-    const QString path =
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
-        + QStringLiteral("/renderer.ini");
-    QSettings settings(path, QSettings::IniFormat);
-    const QString uuid = settings.value(QStringLiteral("device/uuid")).toString();
-    if (!uuid.isEmpty())
-        m_udn = QStringLiteral("uuid:") + uuid;
+}
+
+void DeviceInfo::applyIdentity(
+    const QString &deviceName, const QString &udn,
+    const QString &address, const QString &locationUrl)
+{
+    if (!deviceName.isEmpty() && m_deviceName != deviceName) {
+        m_deviceName = deviceName;
+        emit deviceNameChanged();
+    }
+    if (m_udn != udn) {
+        m_udn = udn;
+        emit udnChanged();
+    }
+    if (m_address != address) {
+        m_address = address;
+        emit addressChanged();
+    }
+    if (m_locationUrl != locationUrl) {
+        m_locationUrl = locationUrl;
+        emit locationUrlChanged();
+    }
 }
 
 QString DeviceInfo::appVersion() const

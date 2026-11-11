@@ -367,6 +367,36 @@ void testHelloSchema()
     check(validateMessageDirection(
               ConnectionChannel::Control, direction, error),
           "ReceivingState accepted as an unsolicited control update");
+    direction.type = MessageType::SettingsSnapshot;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "SettingsSnapshot accepted on control pipe");
+    direction.type = MessageType::UiUpdateSettings;
+    direction.source = ProcessRole::Ui;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "UiUpdateSettings accepted on control pipe");
+    direction.type = MessageType::SettingsUpdateResult;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Ui;
+    check(validateMessageDirection(
+              ConnectionChannel::Control, direction, error),
+          "SettingsUpdateResult accepted on control pipe");
+    direction.type = MessageType::SetDlnaBroadcast;
+    direction.source = ProcessRole::Shell;
+    direction.destination = ProcessRole::Protocol;
+    check(validateMessageDirection(
+              ConnectionChannel::Command, direction, error),
+          "SetDlnaBroadcast accepted on command pipe");
+    direction.type = MessageType::DlnaBroadcastState;
+    direction.source = ProcessRole::Protocol;
+    direction.destination = ProcessRole::Shell;
+    check(validateMessageDirection(
+              ConnectionChannel::Command, direction, error),
+          "DlnaBroadcastState accepted on command pipe");
     direction.type = MessageType::PlaybackCommand;
     direction.source = ProcessRole::Protocol;
     direction.destination = ProcessRole::Ui;
@@ -687,6 +717,48 @@ void testCastConfirmationSchema()
     check(validateMessageDirection(
               ConnectionChannel::Control, direction, error),
           "UI cast confirmation cancel direction accepted");
+
+    error.clear();
+    const std::string settingsJson = R"({"ui":{"language":"en_US"}})";
+    const auto settingsSnapshot =
+        makeSettingsSnapshotMessage(901, 7, settingsJson, error);
+    check(settingsSnapshot.has_value(),
+          "settings snapshot encodes: " + error);
+    const auto decodedSettings =
+        settingsSnapshot
+        ? decodeSettingsSnapshotMessage(*settingsSnapshot, error)
+        : std::nullopt;
+    check(decodedSettings && *decodedSettings == settingsJson,
+          "settings snapshot decodes");
+
+    error.clear();
+    const auto settingsUpdate =
+        makeUiUpdateSettingsMessage(902, settingsJson, error);
+    check(settingsUpdate.has_value(),
+          "settings update encodes: " + error);
+    const auto decodedUpdate =
+        settingsUpdate
+        ? decodeUiUpdateSettingsMessage(*settingsUpdate, error)
+        : std::nullopt;
+    check(decodedUpdate && *decodedUpdate == settingsJson,
+          "settings update decodes");
+    error.clear();
+    const auto updateResult = makeSettingsUpdateResultMessage(
+        903, 902,
+        {SettingsUpdateStatus::SavedRuntimeFailed, "runtime unavailable"},
+        error);
+    check(updateResult.has_value(),
+          "settings update result encodes: " + error);
+    const auto decodedResult =
+        updateResult
+        ? decodeSettingsUpdateResultMessage(
+              *updateResult, 902, error)
+        : std::nullopt;
+    check(decodedResult
+              && decodedResult->status
+                  == SettingsUpdateStatus::SavedRuntimeFailed
+              && decodedResult->error == "runtime unavailable",
+          "settings update result decodes");
 }
 
 void testPipeRoundTrip()

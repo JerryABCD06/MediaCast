@@ -14,6 +14,7 @@ $arguments = @(
     '--test-persistent',
     '--test-force-receiving-enabled',
     '--test-toggle-receiving-after-first-frame',
+    '--test-toggle-broadcast-after-first-frame',
     "--protocol=$ProtocolExe",
     "--ui=$UiExe"
 )
@@ -41,6 +42,9 @@ if ($process.ExitCode -ne 0) {
 }
 if ($out -notmatch 'SHELL_RECEIVING_TOGGLE_OK enabled=false') {
     throw "Protocol command was not acknowledged`nSTDOUT:`n$out`nSTDERR:`n$err"
+}
+if ($out -notmatch 'SHELL_BROADCAST_TOGGLE_OK enabled=false interval_ms=30000') {
+    throw "Broadcast command was not acknowledged`nSTDOUT:`n$out`nSTDERR:`n$err"
 }
 if ($out -notmatch 'SHELL_UI_FIRST_FRAME') {
     throw "Foreground Ui did not reach FirstFrame`nSTDOUT:`n$out`nSTDERR:`n$err"

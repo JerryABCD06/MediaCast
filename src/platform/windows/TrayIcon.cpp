@@ -13,6 +13,7 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"MCast.NativeTray";
 constexpr UINT kTrayMessage = WM_APP + 0x41;
 constexpr UINT kReceivingUpdateMessage = WM_APP + 0x42;
+constexpr UINT kChineseUpdateMessage = WM_APP + 0x43;
 constexpr UINT kOpenMainCommand = 1;
 constexpr UINT kToggleReceivingCommand = 2;
 constexpr UINT kQuitCommand = 3;
@@ -81,6 +82,17 @@ void NativeTrayIcon::setChinese(bool chinese)
     m_chinese = chinese;
     rebuildMenu();
     setReceivingEnabled(m_receivingEnabled);
+}
+
+void NativeTrayIcon::requestChinese(bool chinese)
+{
+    if (m_window) {
+        PostMessageW(
+            m_window, kChineseUpdateMessage, 0,
+            chinese ? 1 : 0);
+        return;
+    }
+    setChinese(chinese);
 }
 
 void NativeTrayIcon::setReceivingEnabled(bool enabled)
@@ -163,6 +175,9 @@ LRESULT NativeTrayIcon::handleMessage(
         addNotificationIcon(error);
     } else if (message == kReceivingUpdateMessage) {
         setReceivingEnabled(lParam != 0);
+        return 0;
+    } else if (message == kChineseUpdateMessage) {
+        setChinese(lParam != 0);
         return 0;
     } else if (message == WM_COMMAND) {
         switch (LOWORD(wParam)) {

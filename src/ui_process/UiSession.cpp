@@ -260,6 +260,16 @@ bool UiSession::connectToPeers(const Options &options, std::string &error)
             *m_control, ConnectionChannel::Control, 1, options.nonce, error))
         return false;
 
+    Message settingsMessage;
+    if (!m_control->readMessage(settingsMessage, 3000ms, error))
+        return false;
+    const auto settingsJson =
+        decodeSettingsSnapshotMessage(settingsMessage, error);
+    if (!settingsJson)
+        return false;
+    m_settingsJson = *settingsJson;
+    m_settingsVersion = settingsMessage.header.stateVersion;
+
     Message grantMessage;
     if (!m_control->readMessage(grantMessage, 3000ms, error))
         return false;

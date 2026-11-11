@@ -48,6 +48,8 @@ public:
     }
     std::string interfaceAddress() const;
     std::string locationUrl() const;
+    void setBroadcasting(bool enabled) noexcept;
+    void setAliveInterval(std::chrono::milliseconds interval) noexcept;
 
 private:
     void run(SsdpServiceOptions options, std::stop_token stop);
@@ -65,6 +67,9 @@ private:
     std::string m_interfaceAddress;
     std::string m_locationUrl;
     std::atomic_bool m_running{false};
+    std::atomic_bool m_broadcasting{true};
+    std::atomic_bool m_sendAliveRequested{false};
+    std::atomic<std::int64_t> m_aliveIntervalMs{10000};
     std::atomic<std::uint16_t> m_localPort{0};
 };
 

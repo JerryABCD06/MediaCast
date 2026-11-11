@@ -37,6 +37,14 @@ public:
         std::string &error);
     std::unique_ptr<mcast::ipc::PipeConnection> takeControlConnection();
     std::unique_ptr<mcast::ipc::PipeConnection> takePlaybackConnection();
+    const std::string &settingsJson() const noexcept
+    {
+        return m_settingsJson;
+    }
+    std::uint64_t settingsVersion() const noexcept
+    {
+        return m_settingsVersion;
+    }
 
 private:
     Options m_options;
@@ -44,4 +52,6 @@ private:
     std::unique_ptr<mcast::ipc::PipeConnection> m_playback;
     mcast::ipc::PeerIdentityGrant m_protocolGrant;
     bool m_hasProtocolGrant = false;
+    std::string m_settingsJson;
+    std::uint64_t m_settingsVersion = 0;
 };

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>
 
-#include "core/AppSettings.h"
 #include "core/LegalDocs.h"
 #include "core/MpvCore.h"
 #include "core/MpvQmlItem.h"
@@ -15,14 +14,17 @@
 #include "ui_process/PlaybackBridge.h"
 #include "ui_process/UiConfirmationBridge.h"
 #include "ui_process/UiSession.h"
+#include "ui_process/UiSettingsModel.h"
 
 #include <QApplication>
 #include <QDateTime>
 #include <QFile>
 #include <QIcon>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QSignalBlocker>
 #include <QTextStream>
 #include <QTime>
 #include <QTimer>
@@ -60,8 +62,6 @@ int main(int argc, char *argv[])
         log.flush();
     };
 
-    UiSession uiSession;
-
     SystemAccentColors systemColors;
     systemColors.refresh();
     qmlRegisterSingletonInstance(
@@ -72,9 +72,30 @@ int main(int argc, char *argv[])
     tr.scan();
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Tr", &tr);
 
-    AppSettings settings;
-    QObject::connect(&settings, &AppSettings::logMessage, writeLog);
-    UiState uiState(&settings, &tr);
+    UiSession uiSession;
+    if (!uiSession.connectToPeers(uiSessionOptions, uiSessionError)) {
+        writeLog(QStringLiteral("IPC 连接失败：%1")
+                     .arg(QString::fromStdString(uiSessionError)));
+        return 4;
+    }
+
+    mcast::ui_process::UiSettingsModel settings;
+    QString settingsError;
+    if (!settings.applySnapshot(
+            QByteArray::fromStdString(uiSession.settingsJson()),
+            uiSession.settingsVersion(),
+            &settingsError)) {
+        writeLog(QStringLiteral("设置快照解析失败：%1")
+                     .arg(settingsError));
+        return 5;
+    }
+    UiState uiState(&tr);
+    if (!uiState.applySettingsJson(
+            QByteArray::fromStdString(uiSession.settingsJson()),
+            &settingsError)) {
+        writeLog(QStringLiteral("外观快照解析失败：%1")
+                     .arg(settingsError));
+    }
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Settings", &settings);
 
@@ -96,14 +117,40 @@ int main(int argc, char *argv[])
     qmlRegisterAnonymousType<NowPlaying>("MediaCast", 1);
 
     DeviceInfo device;
+    device.applyIdentity(
+        settings.deviceName(), settings.deviceUdn());
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Device", &device);
 
     MainWindow mainWindow(nullptr);
     QObject::connect(&mainWindow, &MainWindow::logMessage, writeLog);
+    const auto applyAuthoritativeSettings = [&] {
+        QString error;
+        if (!uiState.applySettingsJson(
+                settings.snapshotJson(), &error)) {
+            writeLog(
+                QStringLiteral("外观设置回滚失败：%1").arg(error));
+        }
+        device.applyIdentity(
+            settings.deviceName(), settings.deviceUdn());
+        const QSignalBlocker pictureSignalBlocker(&playback);
+        playback.resetPictureControls();
+        const QVariantMap picture = settings.pictureValues();
+        for (auto it = picture.constBegin();
+             it != picture.constEnd(); ++it) {
+            playback.setPictureControl(
+                it.key(), it.value().toInt());
+        }
+    };
     QObject::connect(
         &playback, &PlaybackController::logMessage,
         &mainWindow, [&writeLog](const QString &text) {
             writeLog(QStringLiteral("Playback  %1").arg(text));
+        });
+    QObject::connect(
+        &playback, &PlaybackController::pictureControlChanged,
+        &settings,
+        [&settings](const QString &name, int value) {
+            settings.setPictureValue(name, value);
         });
     QObject::connect(
         &mainWindow, &MainWindow::windowClosed, &app, &QApplication::quit);
@@ -120,11 +167,36 @@ int main(int argc, char *argv[])
         &playback, &PlaybackController::retranslate);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Shell", &mainWindow);
 
-    if (!uiSession.connectToPeers(uiSessionOptions, uiSessionError)) {
-        writeLog(QStringLiteral("IPC 连接失败：%1")
-                     .arg(QString::fromStdString(uiSessionError)));
-        return 4;
-    }
+    QObject::connect(
+        &uiState, &UiState::themeModeChangeRequested,
+        &settings, [&settings](int mode) {
+            const QString value =
+                mode == UiState::Dark
+                ? QStringLiteral("Dark")
+                : (mode == UiState::Light
+                       ? QStringLiteral("Light")
+                       : QStringLiteral("System"));
+            settings.queueUiSetting(
+                QStringLiteral("darkmode"), value);
+        });
+    QObject::connect(
+        &uiState, &UiState::accentModeChangeRequested,
+        &settings, [&settings](int mode) {
+            settings.queueUiSetting(
+                QStringLiteral("accentmode"),
+                mode == UiState::SystemAccent
+                    ? QStringLiteral("System")
+                    : QStringLiteral("WindowsBlue"));
+        });
+    QObject::connect(
+        &uiState, &UiState::languageChangeRequested,
+        &settings, [&settings](const QString &language) {
+            settings.queueUiSetting(
+                QStringLiteral("language"),
+                language.isEmpty()
+                    ? QStringLiteral("System") : language);
+        });
+
     std::unique_ptr<mcast::ui_process::PlaybackBridge> playbackBridge;
     std::atomic_bool windowFrameReady{false};
     std::atomic_bool mpvRendererReady{false};
@@ -252,6 +324,62 @@ int main(int argc, char *argv[])
                 playbackReconnectRequested,
             &mainWindow, [&](qulonglong) {
                 startPlaybackReconnect();
+            });
+        QObject::connect(
+            &settings,
+            &mcast::ui_process::UiSettingsModel::settingsPatchReady,
+            confirmationBridge.get(),
+            [&](const QByteArray &json) {
+                std::string error;
+                if (!confirmationBridge->submitSettings(
+                        json, settings.version(), error)) {
+                    writeLog(
+                        QStringLiteral("设置更新发送失败：%1")
+                            .arg(QString::fromStdString(error)));
+                }
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::settingsReceived,
+            &mainWindow, [&](const QByteArray &json, qulonglong version) {
+                QString error;
+                if (!settings.applySnapshot(
+                        json, version, &error)) {
+                    writeLog(
+                        QStringLiteral("设置快照更新失败：%1")
+                            .arg(error));
+                    return;
+                }
+                applyAuthoritativeSettings();
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::
+                settingsSubmitFailed,
+            &mainWindow, [&](const QString &reason) {
+                settings.rejectPendingPatch();
+                applyAuthoritativeSettings();
+                writeLog(
+                    QStringLiteral("设置更新发送失败：%1")
+                        .arg(reason));
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::
+                settingsUpdateRejected,
+            &mainWindow, [&](const QString &reason) {
+                writeLog(
+                    QStringLiteral("设置更新被 Shell 拒绝：%1")
+                        .arg(reason));
+            });
+        QObject::connect(
+            confirmationBridge.get(),
+            &mcast::ui_process::UiConfirmationBridge::
+                settingsRuntimeApplyFailed,
+            &mainWindow, [&](const QString &reason) {
+                writeLog(
+                    QStringLiteral("设置已保存但运行态应用失败：%1")
+                        .arg(reason));
             });
         QObject::connect(
             &mainWindow, &MainWindow::castConfirmationResponded,
