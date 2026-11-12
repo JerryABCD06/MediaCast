@@ -59,12 +59,28 @@ DlnaSession::~DlnaSession()
 bool DlnaSession::start(bool accepting)
 {
     Lock lock(m_mutex);
-    if (m_transitionInProgress)
+    if (m_transitionInProgress) {
+        if (m_callbacks.log) {
+            outsideLock(lock, [&] {
+                m_callbacks.log(
+                    "DLNA session start rejected while a transition "
+                    "is still in progress (accepting="
+                    + std::to_string(m_accepting)
+                    + ", running=" + std::to_string(m_running)
+                    + ", endOperation="
+                    + std::to_string(m_endOperation.has_value()) + ")");
+            });
+        }
         return false;
+    }
     if (!accepting) {
         m_accepting = false;
         m_running = false;
         m_disconnectedByUs = true;
+        m_reconnectAfterEnd = false;
+        m_subscriptionEnded = true;
+        m_reconnectClientName.clear();
+        m_reconnectClientAddress.clear();
         return true;
     }
     if (m_accepting && m_running)
@@ -73,6 +89,12 @@ bool DlnaSession::start(bool accepting)
     const bool started = m_callbacks.startNetwork
         && outsideLock(lock, [&] { return m_callbacks.startNetwork(); });
     if (!started) {
+        if (m_callbacks.log) {
+            outsideLock(lock, [&] {
+                m_callbacks.log(
+                    "DLNA session start could not start its network");
+            });
+        }
         if (m_callbacks.networkStateChanged
             || m_callbacks.log) {
             outsideLock(lock, [&] {
@@ -169,8 +191,18 @@ void DlnaSession::setSubscriptionCount(
 {
     Lock lock(m_mutex);
     m_subscriptionCount = count;
-    if (m_endOperation)
+    if (count > 0 && !m_endOperation)
+        m_subscriptionEnded = false;
+    if (m_endOperation) {
+        if (count > 0
+            && reason == SubscriptionChangeReason::Added
+            && !m_disconnectedByUs) {
+            m_reconnectAfterEnd = true;
+            m_reconnectClientName = m_clientName;
+            m_reconnectClientAddress = m_clientAddress;
+        }
         return;
+    }
     if (count > 0 && !m_disconnectedByUs) {
         cancelPeerGrace();
         setPeerConnected(true, lock);
@@ -185,30 +217,79 @@ void DlnaSession::setSubscriptionCount(
             || reason == SubscriptionChangeReason::Expired
             || reason == SubscriptionChangeReason::Count)) {
         cancelPeerGrace();
-        setPeerConnected(false, lock);
+        cancelStopIdleGrace();
+        if (m_peerConnected) {
+            // A zero-subscription transition is a session boundary, not only a
+            // presence flag change. End and unload the cast media before the
+            // local UI can revive it with the Play button.
+            m_subscriptionEnded = true;
+            m_queuePeerDisconnect = true;
+            setPeerConnected(false, lock, false);
+            (void)requestEnd(EndOperationMode::Disconnect, now, lock);
+        }
     }
     publishCastSession(lock);
 }
 
-void DlnaSession::peerActivity(SessionTime now)
+void DlnaSession::peerActivity(
+    SessionTime now, std::string_view clientAddress)
 {
     Lock lock(m_mutex);
     if (m_endOperation)
         return;
+    if (m_peerConnected && !clientAddress.empty()
+        && !isCurrentOwner(clientAddress)) {
+        // A second control point must not keep the current owner's Stop grace
+        // alive. Ownership changes only at a validated media boundary.
+        return;
+    }
     if (m_disconnectedByUs) {
         // A query, Play/Stop or subscription renewal is not a new cast. Keep
         // the explicit local disconnect sticky until SetAVTransportURI.
         return;
     }
+    if (m_subscriptionEnded) {
+        // Explicit GENA teardown stays closed until a new subscription or
+        // media request, even if an old control point keeps polling SOAP.
+        return;
+    }
     cancelPeerGrace();
+    cancelStopIdleGrace();
     setPeerConnected(true, lock);
     (void)now;
+}
+
+void DlnaSession::transportStopped(
+    SessionTime now, std::string_view clientAddress)
+{
+    Lock lock(m_mutex);
+    if (m_endOperation || !m_peerConnected || m_disconnectedByUs)
+        return;
+    if (!clientAddress.empty() && !isCurrentOwner(clientAddress))
+        return;
+    m_stopIdleDeadline = now + kStopIdleGrace;
+    m_stopIdleSettling = false;
+    if (m_callbacks.log) {
+        outsideLock(lock, [&] {
+            m_callbacks.log(
+                "DLNA control point stopped; ending the session if it "
+                "remains idle for "
+                + std::to_string(kStopIdleGrace.count()) + " ms");
+        });
+    }
 }
 
 void DlnaSession::observeHttpClient(
     const std::string &name, const std::string &address)
 {
     Lock lock(m_mutex);
+    // While a session owns the renderer, unrelated discovery/query traffic
+    // must not replace its identity. A validated media boundary can claim the
+    // renderer for another address.
+    if (m_peerConnected && !address.empty()
+        && !isCurrentOwner(address)) {
+        return;
+    }
     if (m_clientName == name && m_clientAddress == address)
         return;
     m_clientName = name;
@@ -246,11 +327,19 @@ void DlnaSession::publishCastSession(Lock &lock)
         m_lastPublishedCastSession = std::move(info);
 }
 
-void DlnaSession::newMediaRequested(SessionTime now)
+void DlnaSession::newMediaRequested(
+    SessionTime now, std::string clientName,
+    std::string clientAddress)
 {
     Lock lock(m_mutex);
     if (m_endOperation)
         return;
+
+    if (!clientName.empty())
+        m_clientName = std::move(clientName);
+    if (!clientAddress.empty())
+        m_clientAddress = std::move(clientAddress);
+    cancelStopIdleGrace();
 
     // A new control point starts a new media epoch. Anything still in flight
     // belongs to the previous owner and must never materialize after this
@@ -287,6 +376,8 @@ void DlnaSession::newMediaRequested(SessionTime now)
     m_commandReady.notify_all();
 
     m_disconnectedByUs = false;
+    m_reconnectAfterEnd = false;
+    m_subscriptionEnded = false;
     m_mediaBoundaryPending = true;
     m_ignorePlaybackQueue = true;
     m_protocolNext.reset();
@@ -295,6 +386,14 @@ void DlnaSession::newMediaRequested(SessionTime now)
     cancelPeerGrace();
     setPeerConnected(true, lock);
     (void)now;
+}
+
+bool DlnaSession::isCurrentOwner(
+    std::string_view clientAddress) const noexcept
+{
+    return clientAddress.empty()
+        || m_clientAddress.empty()
+        || clientAddress == m_clientAddress;
 }
 
 void DlnaSession::tick(SessionTime now)
@@ -353,10 +452,47 @@ void DlnaSession::tick(SessionTime now)
         }
     }
     retryPendingEnd(lock);
-    if (!m_peerGraceDeadline || now < *m_peerGraceDeadline)
+    if (m_peerGraceDeadline && now >= *m_peerGraceDeadline) {
+        m_peerGraceDeadline.reset();
+        cancelStopIdleGrace();
+        if (m_peerConnected) {
+            // Grace only protects transient network loss. Once it expires,
+            // the session is over and the loaded media must be unloaded.
+            m_queuePeerDisconnect = true;
+            setPeerConnected(false, lock, false);
+            (void)requestEnd(EndOperationMode::Disconnect, now, lock);
+        }
+    }
+    if (!m_stopIdleDeadline || now < *m_stopIdleDeadline)
         return;
-    m_peerGraceDeadline.reset();
-    setPeerConnected(false, lock);
+    if (m_endOperation || !m_peerConnected || m_disconnectedByUs) {
+        cancelStopIdleGrace();
+        return;
+    }
+    if (!m_stopIdleSettling) {
+        m_stopIdleSettling = true;
+        m_stopIdleDeadline = now + kStopBoundarySettle;
+        if (m_callbacks.log) {
+            outsideLock(lock, [&] {
+                m_callbacks.log(
+                    "DLNA Stop grace reached its boundary; allowing an "
+                    "in-flight SetAVTransportURI to win");
+            });
+        }
+        return;
+    }
+    m_stopIdleDeadline.reset();
+    m_stopIdleSettling = false;
+    if (m_callbacks.log) {
+        outsideLock(lock, [&] {
+            m_callbacks.log(
+                "DLNA control point remained idle after Stop; "
+                "ending the session");
+        });
+    }
+    m_queuePeerDisconnect = true;
+    setPeerConnected(false, lock, false);
+    (void)requestEnd(EndOperationMode::Disconnect, now, lock);
 }
 
 PlaybackCommandSubmission DlnaSession::openMedia(
@@ -437,14 +573,19 @@ PlaybackCommandSubmission DlnaSession::openMedia(
     return submission;
 }
 
-PlaybackCommandSubmission DlnaSession::submit(PlaybackCommand command)
+PlaybackCommandSubmission DlnaSession::submit(
+    PlaybackCommand command,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     Lock lock(m_mutex);
-    return submitLocked(std::move(command), lock);
+    return submitLocked(
+        std::move(command), lock, true, std::nullopt, nullptr,
+        expectedOwnerEpoch);
 }
 
 DlnaCommandResult DlnaSession::submitAndWait(
-    PlaybackCommand command, SessionTime timeout)
+    PlaybackCommand command, SessionTime timeout,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     Lock lock(m_mutex);
     const auto baseline = outsideLock(lock, [&] {
@@ -454,7 +595,8 @@ DlnaCommandResult DlnaSession::submitAndWait(
     std::uint64_t commandId = 0;
     DlnaCommandResult result;
     result.submission = submitLocked(
-        std::move(command), lock, true, std::nullopt, &commandId);
+        std::move(command), lock, true, std::nullopt, &commandId,
+        expectedOwnerEpoch);
     if (!result.submission.queued || commandId == 0) {
         if (!result.submission.queued) {
             result.outcome = PlaybackOutcomeStatus::Rejected;
@@ -513,7 +655,8 @@ PlaybackCommandSubmission DlnaSession::submitLocked(
     Lock &lock,
     bool allowDefer,
     std::optional<std::uint64_t> requiredOpenToken,
-    std::uint64_t *awaitedCommandId)
+    std::uint64_t *awaitedCommandId,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     const bool endCommand =
         command.type == PlaybackCommandType::EndSession;
@@ -562,11 +705,17 @@ PlaybackCommandSubmission DlnaSession::submitLocked(
                 playback.generation, "DLNA open was cancelled",
                 playback.stateVersion};
     }
+    if (expectedOwnerEpoch
+        && *expectedOwnerEpoch != m_protocolEpoch) {
+        return {false, PlaybackSubmissionStatus::StaleGeneration, 0,
+                playback.generation, "DLNA owner changed",
+                playback.stateVersion};
+    }
     if (allowDefer && (m_pendingOpen || m_flushingDeferred)
         && waitsForOpen(command.type)) {
         constexpr std::size_t maxDeferred = 8;
         if (m_deferredAfterOpen.size() >= maxDeferred) {
-            return {false, PlaybackSubmissionStatus::InvalidCommand, 0,
+            return {false, PlaybackSubmissionStatus::Busy, 0,
                     playback.generation,
                     "too many commands are waiting for playback",
                     playback.stateVersion};
@@ -689,10 +838,34 @@ PlaybackCommandSubmission DlnaSession::endSession(SessionTime now)
     }
     cancelPendingOpen("DLNA session ended", lock);
     m_disconnectedByUs = true;
+    m_subscriptionEnded = true;
+    m_reconnectAfterEnd = false;
+    m_reconnectClientName.clear();
+    m_reconnectClientAddress.clear();
     m_queuePeerDisconnect = true;
     cancelPeerGrace();
+    cancelStopIdleGrace();
     setPeerConnected(false, lock, false);
     return requestEnd(EndOperationMode::Disconnect, now, lock);
+}
+
+void DlnaSession::abandonEndingSession()
+{
+    Lock lock(m_mutex);
+    if (m_transitionInProgress)
+        return;
+    m_endOperation.reset();
+    m_endSubmitInProgress = false;
+    m_disconnectedByUs = true;
+    m_reconnectAfterEnd = false;
+    m_subscriptionEnded = true;
+    m_reconnectClientName.clear();
+    m_reconnectClientAddress.clear();
+    m_queuePeerDisconnect = true;
+    cancelPeerGrace();
+    cancelStopIdleGrace();
+    setPeerConnected(false, lock, false);
+    finishDisconnect(lock);
 }
 
 void DlnaSession::resetForRestart()
@@ -708,6 +881,10 @@ void DlnaSession::resetForRestart()
     m_clientAddress.clear();
     m_lastPublishedCastSession = {};
     m_disconnectedByUs = true;
+    m_reconnectAfterEnd = false;
+    m_subscriptionEnded = true;
+    m_reconnectClientName.clear();
+    m_reconnectClientAddress.clear();
     m_queuePeerDisconnect = false;
     m_peerSyncPending = false;
     m_desiredPeerConnected = false;
@@ -737,6 +914,7 @@ void DlnaSession::resetForRestart()
     m_lastObservedStateVersion = 0;
     m_deferredAfterOpen.clear();
     cancelPeerGrace();
+    cancelStopIdleGrace();
 }
 
 void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
@@ -1013,6 +1191,12 @@ bool DlnaSession::transportTransitionPending() const
         || m_openAwaitingReady.has_value();
 }
 
+std::uint64_t DlnaSession::protocolEpoch() const
+{
+    const std::scoped_lock lock(m_mutex);
+    return m_protocolEpoch;
+}
+
 DlnaSessionSnapshot DlnaSession::snapshot() const
 {
     Lock lock(m_mutex);
@@ -1124,6 +1308,12 @@ void DlnaSession::cancelPeerGrace()
     m_peerGraceDeadline.reset();
 }
 
+void DlnaSession::cancelStopIdleGrace()
+{
+    m_stopIdleDeadline.reset();
+    m_stopIdleSettling = false;
+}
+
 void DlnaSession::finishPause(Lock &lock)
 {
     if (!m_accepting && !m_running)
@@ -1137,6 +1327,10 @@ void DlnaSession::finishPause(Lock &lock)
     m_accepting = false;
     m_running = false;
     m_disconnectedByUs = true;
+    m_reconnectAfterEnd = false;
+    m_subscriptionEnded = true;
+    m_reconnectClientName.clear();
+    m_reconnectClientAddress.clear();
     cancelPeerGrace();
     if (m_queuePeerDisconnect) {
         m_queuePeerDisconnect = false;
@@ -1166,6 +1360,17 @@ void DlnaSession::finishDisconnect(Lock &lock)
         ~TransitionGuard() { value = false; }
     } transition{m_transitionInProgress};
     m_transitionInProgress = true;
+    const bool mediaCleared =
+        m_endOperation && m_endOperation->finalSnapshotSeen;
+    const bool reconnectAfterEnd =
+        m_reconnectAfterEnd && !m_disconnectedByUs
+        && m_subscriptionCount > 0 && mediaCleared;
+    std::string reconnectClientName = std::move(m_reconnectClientName);
+    std::string reconnectClientAddress =
+        std::move(m_reconnectClientAddress);
+    m_reconnectAfterEnd = false;
+    m_reconnectClientName.clear();
+    m_reconnectClientAddress.clear();
     m_endOperation.reset();
     m_clientName.clear();
     m_clientAddress.clear();
@@ -1195,6 +1400,13 @@ void DlnaSession::finishDisconnect(Lock &lock)
             if (m_callbacks.log)
                 m_callbacks.log("DLNA session ended");
         });
+    }
+    if (reconnectAfterEnd) {
+        cancelPeerGrace();
+        m_clientName = std::move(reconnectClientName);
+        m_clientAddress = std::move(reconnectClientAddress);
+        m_subscriptionEnded = false;
+        setPeerConnected(true, lock);
     }
 }
 

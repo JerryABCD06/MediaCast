@@ -772,6 +772,20 @@ std::size_t GenaManager::subscriptionCount() const
     return m_subscriptions.size();
 }
 
+bool GenaManager::quiescent() const
+{
+    std::lock_guard lock(m_mutex);
+    if (!m_readySubscriptions.empty())
+        return false;
+    return std::all_of(
+        m_subscriptions.begin(), m_subscriptions.end(),
+        [](const auto &entry) {
+            const Subscription &subscription = entry.second;
+            return !subscription.busy && !subscription.queued
+                && !subscription.dirty;
+        });
+}
+
 void GenaManager::scheduleLocked(
     const std::string &sid, Clock::time_point now)
 {

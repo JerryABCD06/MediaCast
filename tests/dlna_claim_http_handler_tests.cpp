@@ -105,6 +105,7 @@ struct Harness {
     std::vector<DlnaMediaExecution> executions;
     int playCalls = 0;
     int stopCalls = 0;
+    std::string stoppedAddress;
     bool throwExecute = false;
     bool openMediaOnExecute = true;
     DlnaClaimHttpHandler handler;
@@ -132,8 +133,13 @@ struct Harness {
                           playback.processAll();
                       }
                   },
-                  [this] { ++playCalls; },
-                  [this] { ++stopCalls; },
+                  [this](std::optional<std::uint64_t>) { ++playCalls; },
+                  [this](
+                      const PeerIdentity &peer,
+                      std::optional<std::uint64_t>) {
+                      ++stopCalls;
+                      stoppedAddress = peer.address;
+                  },
                   {},
                   {},
               })
@@ -200,6 +206,7 @@ void testFirstMediaWaitsForReadyAndOwnerControls()
     result = harness.handler.handle(stopRequest(103, address));
     check(result.status == mcast::dlna::net::HttpDispatchStatus::Pending
               && harness.stopCalls == 1
+              && harness.stoppedAddress == address
               && harness.completion(103)
               && harness.completion(103)->status == 200,
           "owner Stop executes and completes HTTP");
@@ -375,6 +382,21 @@ void testDifferentUserAgentIsNotOwner()
               && harness.executions.size() == 1,
           "another User-Agent on the same IP does not inherit ownership");
 
+    auto otherNext = request(
+        404, "192.0.2.10", "SetNextAVTransportURI",
+        "<InstanceID>0</InstanceID><NextURI>"
+        "http://example.test/injected.mp4</NextURI>"
+        "<NextURIMetaData></NextURIMetaData>");
+    otherNext.headers.front().second = "Other-Control";
+    const auto otherNextResult = harness.handler.handle(otherNext);
+    check(otherNextResult.status
+              == mcast::dlna::net::HttpDispatchStatus::Completed
+              && otherNextResult.response.status == 500
+              && otherNextResult.response.body.find(
+                  "<errorCode>701</errorCode>")
+                  != std::string::npos,
+          "same-IP control identity cannot mutate the owner's queue");
+
     auto noAgent = request(
         403, "192.0.2.10", "Pause",
         "<InstanceID>0</InstanceID>");
@@ -388,11 +410,9 @@ void testDifferentUserAgentIsNotOwner()
     const auto noAgentResult = harness.handler.handle(noAgent);
     check(noAgentResult.status
               == mcast::dlna::net::HttpDispatchStatus::Completed
-              && noAgentResult.response.status == 500
-              && noAgentResult.response.body.find(
-                  "<errorCode>701</errorCode>")
-                  != std::string::npos,
-          "ambiguous or missing User-Agent cannot inherit owner controls");
+              && noAgentResult.response.status == 200,
+          "missing User-Agent on the owner address may operate the current "
+          "session after ownership is already settled");
 }
 
 void testExecuteCallbackFailureFailsClosed()

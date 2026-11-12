@@ -268,6 +268,19 @@ MetadataPipeline::MetadataPipeline()
         QStringLiteral("file.subtitle"),
         QStringLiteral("unknown"),
     };
+    m_subtitleVisual.rejectPatterns = {
+        QRegularExpression(
+            QStringLiteral("^vid:[A-Za-z0-9]+$"),
+            QRegularExpression::CaseInsensitiveOption),
+        QRegularExpression(
+            QStringLiteral("^[A-Za-z0-9_-]{200,}$"),
+            QRegularExpression::CaseInsensitiveOption),
+        QRegularExpression(
+            QStringLiteral(
+                "^Bilibili VXCode Swarm Transcoder"
+                "(?:\\s+v[\\d.]+)?$"),
+            QRegularExpression::CaseInsensitiveOption),
+    };
     m_artworkSources = {
         QStringLiteral("protocol.artwork_uri"),
         QStringLiteral("file.artwork"),

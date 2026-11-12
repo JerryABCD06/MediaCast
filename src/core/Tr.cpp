@@ -98,13 +98,13 @@ bool Tr::loadBaseTable()
     if (readJson(onDisk, &root, &error)) {
         m_base = stringsFrom(root);
         mergeStringTable(
-            langDir() + QStringLiteral("/en_US/media.json"), m_base);
+            langDir() + QStringLiteral("/en_US/terms.json"), m_base);
         return true;
     }
     if (readJson(embedded, &root, &error)) {
         m_base = stringsFrom(root);
         mergeStringTable(
-            QStringLiteral(":/lang/en_US/media.json"), m_base);
+            QStringLiteral(":/lang/en_US/terms.json"), m_base);
         return true;
     }
     log(QStringLiteral("基准语言读不出来（%1）").arg(error));
@@ -222,9 +222,13 @@ bool Tr::setResolvedLanguage(const QString &code, QString *error)
         if (error)
             *error = QStringLiteral("语言包不存在：%1").arg(requested);
         loadActiveTable(baseCode());
+        ++m_languageRevision;
+        emit languageChanged();
         return false;
     }
     loadActiveTable(requested);
+    ++m_languageRevision;
+    emit languageChanged();
     if (m_effective != requested) {
         if (error)
             *error = QStringLiteral("无法读取语言包：%1").arg(requested);
@@ -252,7 +256,7 @@ void Tr::loadActiveTable(const QString &code)
                 &root, &error)) {
             m_active = stringsFrom(root);
             mergeStringTable(
-                QStringLiteral(":/lang/en_US/media.json"), m_active);
+                QStringLiteral(":/lang/en_US/terms.json"), m_active);
             m_effective = baseCode();
             return;
         }
@@ -266,7 +270,7 @@ void Tr::loadActiveTable(const QString &code)
     m_active = stringsFrom(root);
     const QFileInfo activeInfo(info.uiFile);
     mergeStringTable(
-        activeInfo.absolutePath() + QStringLiteral("/media.json"),
+        activeInfo.absolutePath() + QStringLiteral("/terms.json"),
         m_active);
     m_effective = code;
     reportTableDifferences();
@@ -326,6 +330,32 @@ QString Tr::translate(
     if (base != m_base.constEnd())
         return base.value();
     return QString();
+}
+
+QString Tr::resolve(
+    const QString &key, const QString &fallback) const
+{
+    const auto active = m_active.constFind(key);
+    if (active != m_active.constEnd() && !active->isEmpty())
+        return active.value();
+    const auto base = m_base.constFind(key);
+    if (base != m_base.constEnd() && !base->isEmpty())
+        return base.value();
+    return fallback;
+}
+
+QString Tr::appFullName() const
+{
+    return resolve(
+        QStringLiteral("term_app_full"),
+        QStringLiteral("Media Cast Receiver"));
+}
+
+QString Tr::appShortName() const
+{
+    return resolve(
+        QStringLiteral("term_app_short"),
+        QStringLiteral("Media Cast"));
 }
 
 void Tr::log(const QString &text)

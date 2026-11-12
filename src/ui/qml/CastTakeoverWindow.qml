@@ -37,12 +37,14 @@ FluWindow {
     effect: "normal"
 
     function protocolName() {
+        const revision = Tr.languageRevision
+        void revision
         switch (protocol) {
-        case 1: return "DLNA"
-        case 2: return "Google Cast"
-        case 3: return "AirPlay"
-        case 4: return "Miracast"
-        case 5: return "LeLink"
+        case 1: return Tr.resolve("term_protocol_dlna_full", "DLNA")
+        case 2: return Tr.resolve("term_protocol_google_cast_full", "Google Cast")
+        case 3: return Tr.resolve("term_protocol_airplay_full", "AirPlay")
+        case 4: return Tr.resolve("term_protocol_miracast_full", "Miracast")
+        case 5: return Tr.resolve("term_protocol_lelink_full", "LeLink")
         case 6: return qsTr("ui_cast_takeover_vendor")
         default: return qsTr("ui_cast_takeover_unknown")
         }

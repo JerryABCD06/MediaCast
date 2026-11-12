@@ -13,6 +13,8 @@
 #include <QVariantMap>
 #include <QVector>
 
+#include <cstdint>
+
 class QTimer;
 
 /**
@@ -264,6 +266,8 @@ public:
         QString longDescription;
         QString artworkUri;
         MediaKind kind = MediaKind::Unknown;
+        MediaLoadRoute route = MediaLoadRoute::Native;
+        QVector<MediaLoadFrame> imageSequenceFrames;
 
         /**
          * 这条是谁送来的 —— **协议层自己填**（"DLNA" / "AirPlay" / …）。
@@ -513,7 +517,9 @@ signals:
 
 private:
     /** 真正开播的地方 —— openUri / next / previous / 自动接下一首都走它。 */
-    void startPlaying(const MediaRequest &request, const MediaSource &source);
+    void startPlaying(
+        const MediaRequest &request, const MediaSource &source,
+        bool nativeFallback = false);
 
     /** 当前这条是谁送来的（队列自动接上时要沿用同一个来源）。 */
     MediaSource sourceForCurrent() const;
@@ -569,6 +575,8 @@ private:
 
     LoadStatus m_loadStatus = LoadStatus::Ok;
     MediaKind m_playerKind = MediaKind::Unknown;
+    bool m_nativeFallbackAttempted = false;
+    std::uint64_t m_loadGeneration = 0;
 
     /// 当前这条。三格队列都存完整请求，理由见 setNextUri 上面那段。
     MediaRequest m_current;

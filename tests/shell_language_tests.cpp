@@ -64,9 +64,14 @@ void writePack(
         + "\",\"tray_pause_receiving\":\"pause\","
           "\"tray_resume_receiving\":\"resume\","
           "\"tray_quit\":\"quit\","
-          "\"tray_tooltip_receiving\":\"Media Cast\","
-          "\"tray_tooltip_paused\":\"Media Cast (paused)\"}";
+          "\"tray_tooltip_receiving\":\"{app_short}\","
+          "\"tray_tooltip_paused\":\"{app_short} (paused)\"}";
     writeFile(directory / L"shell.json", shell);
+    const std::string terms =
+        code == "zh_CN"
+        ? R"JSON({"strings":{"term_app_full":"媒体投屏接收器","term_app_short":"媒体投屏","term_protocol_dlna_full":"数字生活网络联盟（DLNA）","term_protocol_dlna_short":"DLNA"}})JSON"
+        : R"JSON({"strings":{"term_app_full":"Media Cast Receiver","term_app_short":"Media Cast","term_protocol_dlna_full":"Digital Living Network Alliance (DLNA)","term_protocol_dlna_short":"DLNA"}})JSON";
+    writeFile(directory / L"terms.json", terms);
 }
 
 } // namespace
@@ -134,8 +139,16 @@ int main()
     mcast::shell::TrayTexts texts;
     error.clear();
     check(languages.loadTrayTexts("zh_CN", texts, error)
-              && texts.openMain == "打开主界面",
-          "Chinese tray strings load");
+              && texts.openMain == "打开主界面"
+              && texts.tooltipReceiving == "媒体投屏"
+              && texts.tooltipPaused == "媒体投屏 (paused)",
+          "Chinese tray strings and terminology load");
+    mcast::shell::Terminology terms;
+    error.clear();
+    check(languages.loadTerms("zh_CN", terms, error)
+              && terms.appFull == "媒体投屏接收器"
+              && terms.appShort == "媒体投屏",
+          "Chinese terminology loads");
 
     error.clear();
     const std::string catalog =

@@ -12,8 +12,9 @@ Item {
 
     property string label: ""
     property string value: ""
+    property bool show: true
 
-    visible: label.length > 0 && value.length > 0
+    visible: show && label.length > 0 && value.length > 0
     Layout.fillWidth: true
     Layout.preferredHeight: Math.max(labelText.implicitHeight,
                                      valueText.implicitHeight) + 2

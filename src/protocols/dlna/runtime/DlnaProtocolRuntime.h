@@ -160,6 +160,9 @@ private:
     std::atomic_bool m_broadcasting{true};
     std::atomic<std::int64_t> m_broadcastIntervalMs{10000};
     std::optional<SessionTime> m_disconnectRestartAt;
+    std::optional<SessionTime> m_disconnectOverallDeadline;
+    std::optional<SessionTime> m_disconnectDrainDeadline;
+    std::atomic_bool m_disconnectDrainPending{false};
     bool m_mediaStopping = false;
     std::uint64_t m_mediaGeneration = 0;
 };

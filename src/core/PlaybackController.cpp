@@ -103,7 +103,10 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     });
 
     // 播放器说"文件好了"，才把状态从"正在准备"翻成"正在播放"。
-    connect(m_player, &MediaPlayer::ready, this, [this] {
+    connect(m_player, &MediaPlayer::ready, this,
+            [this](std::uint64_t loadGeneration) {
+        if (loadGeneration != m_loadGeneration)
+            return;
         m_loadWatchdog->stop();
         m_loadStatus = LoadStatus::Ok;
 
@@ -124,8 +127,39 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     // 差别在一件事上：render API 模式下，加载可能要等渲染面就绪才能发出去
     // （见 MpvCore 里那段），中间隔着"把界面拉起来"的时间。从 load() 开始算的话，
     // 界面起得慢一点就会被判成"加载失败"，而其实片子还没开始加载。
-    connect(m_player, &MediaPlayer::loadStarted, this, [this] {
+    connect(m_player, &MediaPlayer::loadStarted, this,
+            [this](std::uint64_t loadGeneration) {
+        if (loadGeneration != m_loadGeneration)
+            return;
         m_loadWatchdog->start(kLoadTimeoutSeconds * 1000);
+    });
+
+    connect(m_player, &MediaPlayer::loadFailed, this,
+            [this](std::uint64_t loadGeneration, const QString &reason) {
+        if (loadGeneration != m_loadGeneration)
+            return;
+        m_loadWatchdog->stop();
+        emit logMessage(
+            QStringLiteral("媒体加载失败：%1").arg(reason));
+        if (m_current.route != MediaLoadRoute::Native
+            && !m_nativeFallbackAttempted) {
+            m_nativeFallbackAttempted = true;
+            MediaRequest fallback = m_current;
+            fallback.route = MediaLoadRoute::Native;
+            fallback.imageSequenceFrames.clear();
+            emit logMessage(
+                QStringLiteral(
+                    "兼容播放路线失败，改按原始地址交给 MPV 重试一次"));
+            startPlaying(
+                fallback, sourceForCurrent(), true);
+            return;
+        }
+        m_loadStatus = LoadStatus::Failed;
+        if (m_state == State::Preparing
+            || m_state == State::Playing
+            || m_state == State::Paused) {
+            setState(State::Stopped);
+        }
     });
 
     // 一条内容播完之后干什么 —— 队列的"自动接上"和两种循环都在这里。
@@ -308,8 +342,13 @@ void PlaybackController::setState(State state)
 
 void PlaybackController::setPeerConnected(bool connected)
 {
-    if (m_peerConnected == connected)
+    if (m_peerConnected == connected) {
+        if (!connected && hasMedia()
+            && sourceForCurrent() == MediaSource::Cast) {
+            endSession();
+        }
         return;
+    }
 
     const CastState castBefore = castState();
 
@@ -331,6 +370,15 @@ void PlaybackController::setPeerConnected(bool connected)
     // 那边已经留了宽限（见 DLNA 会话层的 kPeerGraceMs），
     // 别把那种判断搬到这儿来，那会把协议特有的东西漏进来。
     clearPlaylist();
+
+    // Protocol decides when a peer is really gone. Once that decision reaches
+    // the UI, a remaining CAST item is stale media, not a locally playable item:
+    // unload it so the local Play button cannot revive an ended cast session.
+    // Local playback is intentionally left alone.
+    if (!connected && hasMedia()
+        && sourceForCurrent() == MediaSource::Cast) {
+        endSession();
+    }
 
     emit peerConnectedChanged();
 
@@ -589,10 +637,14 @@ void PlaybackController::setPlayMode(PlayMode mode)
 
 // ── 开播 ─────────────────────────────────────────────────────────────────
 
-void PlaybackController::startPlaying(const MediaRequest &request, const MediaSource &source)
+void PlaybackController::startPlaying(
+    const MediaRequest &request, const MediaSource &source,
+    bool nativeFallback)
 {
     if (!m_player || request.uri.isEmpty())
         return;
+    if (!nativeFallback)
+        m_nativeFallbackAttempted = false;
 
     m_current = request;
 
@@ -653,7 +705,12 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
 
     // 看门狗不在这儿起 —— 由 loadStarted 信号起，理由见构造函数里那段。
     // 这里只把"现在要放这条"交代下去；加载可能被推迟（等渲染面就绪）。
-    m_player->load(request.uri);
+    MediaLoadRequest loadRequest;
+    loadRequest.logicalUri = request.uri;
+    loadRequest.loadGeneration = ++m_loadGeneration;
+    loadRequest.route = request.route;
+    loadRequest.imageSequenceFrames = request.imageSequenceFrames;
+    m_player->load(loadRequest);
 }
 
 NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
@@ -730,6 +787,12 @@ void PlaybackController::endSession()
     // 这里归成 NoMedia 而不是 Stopped，区别很要紧：Stopped 的含义是"媒体还装着，
     // 只是停着"，控制点收到它会认为会话还在、只是没在播 —— 手机上的投屏界面就会
     // 一直挂着。NoMedia 才是"我这儿什么都没有了"。
+    if (hasMedia() && sourceForCurrent() == MediaSource::Local) {
+        emit logMessage(
+            QStringLiteral("本地播放不受投送会话结束影响"));
+        return;
+    }
+
     if (m_player)
         m_player->unload();            // 真的卸掉 —— 会话都断了，不该再留着上一条
 

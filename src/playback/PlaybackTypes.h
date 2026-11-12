@@ -43,6 +43,17 @@ enum class MediaSource {
     Local,
 };
 
+enum class MediaRoute {
+    Native,
+    ImageSequence,
+    WrappedTransportStream,
+};
+
+struct ImageSequenceFrame {
+    std::string uri;
+    double durationSeconds = 0.0;
+};
+
 struct MediaRequest {
     std::string uri;
     std::string metadata;
@@ -57,6 +68,8 @@ struct MediaRequest {
     std::string protocol;
     MediaKind kind = MediaKind::Unknown;
     MediaSource source = MediaSource::Cast;
+    MediaRoute route = MediaRoute::Native;
+    std::vector<ImageSequenceFrame> imageSequenceFrames;
     std::optional<std::uint64_t> mediaSizeBytes;
 };
 
@@ -86,6 +99,7 @@ struct PlaybackSnapshot {
     bool hasPrevious = false;
     bool peerConnected = false;
     bool playerAvailable = true;
+    bool playbackPlanIncluded = true;
     double positionSeconds = 0.0;
     double durationSeconds = 0.0;
     int volumePercent = 100;
@@ -134,6 +148,7 @@ enum class PlaybackSubmissionStatus {
     StaleGeneration,
     WaitingForPlayer,
     SessionEnding,
+    Busy,
 };
 
 struct PlaybackCommandSubmission {

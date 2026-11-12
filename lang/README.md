@@ -9,18 +9,20 @@ lang/
     locale-aliases.txt
     shell.json
     ui.json
+    terms.json
 
   zh_CN/
     manifest.json
     locale-aliases.txt
     shell.json
     ui.json
+    terms.json
 ```
 
 目录名就是语言代码，也是写进 `MediaCast.json` 的
 `ui.language` 值。目录名只允许英文字母、数字和下划线，并且必须以字母开头。
 
-四个文件缺任何一个，整个语言包都无效。程序不会加载半套语言包。
+五个文件缺任何一个，整个语言包都无效。程序不会加载半套语言包。
 
 ## `manifest.json`
 
@@ -79,12 +81,34 @@ zh_Hans_CN
   "tray_pause_receiving": "暂停接收投送",
   "tray_resume_receiving": "恢复接收投送",
   "tray_quit": "退出",
-  "tray_tooltip_receiving": "Media Cast",
-  "tray_tooltip_paused": "Media Cast（已暂停接收投送）"
+  "tray_tooltip_receiving": "{app_short}",
+  "tray_tooltip_paused": "{app_short}（已暂停接收投送）"
 }
 ```
 
 六个键都必须是非空字符串。Shell 直接读取这个文件，不依赖 Qt。
+`{app_short}` 会由 Shell 从 `terms.json` 的 `term_app_short` 替换。
+
+## `terms.json`
+
+公共术语表。UI 和 Shell 都读取这份文件；Protocol 不读取、不本地化，只发送
+稳定协议 ID。
+
+```json
+{
+  "strings": {
+    "term_app_full": "媒体投屏接收器",
+    "term_app_short": "媒体投屏",
+    "term_protocol_dlna_full": "数字生活网络联盟（DLNA）",
+    "term_protocol_dlna_short": "DLNA"
+  }
+}
+```
+
+维护约定是每个已支持协议都提供 `term_protocol_<id>_full` 和
+`term_protocol_<id>_short`，应用名称固定使用 `term_app_full` 和
+`term_app_short`。当前加载器强制要求 `strings` 对象及合法值，但不会枚举全部
+未来协议键逐个强制；缺键由 Ui 记录日志并回退英文。
 
 ## `ui.json`
 
@@ -99,21 +123,23 @@ zh_Hans_CN
 }
 ```
 
-Shell 只检查文件存在且是合法 JSON 对象，并把绝对路径下发给 Ui。Ui 收到后
-自己读取 `ui.json`。Shell 不转发界面正文，也不解析其中的键值。
+`ui.json` 和 `terms.json` 的顶层必须是 `strings` 对象；Shell 扫描语言包时会
+检查其条目均为非空字符串，但不把正文转发给 Ui。Ui 按 Shell 指定的实际语言目录
+读取 `ui.json` 和 `terms.json`；缺失键回退英文，多出的键忽略并记录日志。
 
 ## 启动顺序
 
 ```text
 Shell 扫描 lang/*/
-  -> 校验目录名、manifest、四个文件和区域别名
+  -> 校验目录名、manifest、五个文件和区域别名
   -> 生成完整语言目录
   -> 根据设置和 Windows 首选语言选出实际语言
   -> 加载 shell.json
+  -> 加载 terms.json
   -> Ui 连接
   -> Shell 发送 LanguageCatalog
   -> Shell 发送 SettingsSnapshot（含实际语言代码）
-  -> Ui 读取对应目录的 ui.json
+  -> Ui 读取对应目录的 ui.json + terms.json
   -> Ui 创建 QML
 ```
 
@@ -152,6 +178,8 @@ Shell 下发的语言目录。
 
 - `lang/en_US/shell.json` 编进 Shell 作为英文托盘兜底。
 - `lang/en_US/ui.json` 编进 Ui 作为英文界面兜底。
+- `lang/en_US/terms.json` 编进 Ui 作为英文公共术语兜底；Shell 也有同样的
+  硬编码英文回退。
 
 磁盘上有效的 `en_US` 包优先于内置副本，因此修改英文文案通常不需要重新编译。
 
@@ -162,7 +190,8 @@ Shell 下发的语言目录。
 3. 修改 `locale-aliases.txt`。
 4. 翻译 `shell.json`。
 5. 翻译 `ui.json`。
-6. 重新启动程序。
+6. 翻译 `terms.json`。
+7. 重新启动程序。
 
 不用重新编译。新目录通过校验后会自动出现在语言列表里。
 
@@ -174,7 +203,8 @@ Shell 下发的语言目录。
 |---|---|
 | `tray_` | `shell.json`，原生托盘 |
 | `ui_` | `ui.json`，QML 主界面 |
-| `media_` | 内容类型和来源，供界面及 Windows 媒体面板共用 |
+| `media_` | `ui.json`，内容类型和来源，供界面及 Windows 媒体面板共用 |
+| `term_` | `terms.json`，Ui 与原生 Shell 共用的专有名词 |
 
 后面按“位置_东西”继续写，例如 `ui_settings_language`。
 

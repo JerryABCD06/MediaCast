@@ -37,6 +37,10 @@ add_library(mcast_ipc STATIC
     src/ipc/PlaybackCodec.cpp
     src/ipc/PlaybackPipeGateway.h
     src/ipc/PlaybackPipeGateway.cpp
+    src/playback/PlaybackCommandCoalescer.h
+    src/playback/PlaybackCommandCoalescer.cpp
+    src/playback/PlanningPlaybackGateway.h
+    src/playback/PlanningPlaybackGateway.cpp
     src/playback/LateBindingPlaybackGateway.h
     src/playback/LateBindingPlaybackGateway.cpp
     src/supervisor/RestartController.h
@@ -112,6 +116,8 @@ add_library(mcast_dlna_protocol STATIC
     src/protocols/dlna/runtime/GenaManager.cpp
     src/protocols/dlna/runtime/DlnaProtocolRuntime.h
     src/protocols/dlna/runtime/DlnaProtocolRuntime.cpp
+    src/protocols/dlna/playback/DlnaPlaybackPlanner.h
+    src/protocols/dlna/playback/DlnaPlaybackPlanner.cpp
     src/protocols/dlna/session/DlnaSession.h
     src/protocols/dlna/session/DlnaSession.cpp
     src/protocols/dlna/soap/SoapRouter.h
@@ -125,7 +131,7 @@ target_include_directories(
 target_link_libraries(
     mcast_dlna_protocol
     PUBLIC mcast_dlna_net mcast_cast mcast_ipc
-    PRIVATE xmllite.lib shlwapi.lib ole32.lib)
+    PRIVATE xmllite.lib shlwapi.lib ole32.lib winhttp.lib)
 
 execute_process(
     COMMAND git rev-parse --short=12 HEAD
@@ -291,6 +297,15 @@ if(BUILD_TESTING)
         COMMAND mcast_playback_pipe_gateway_tests)
 
     add_executable(
+        mcast_playback_command_coalescer_tests
+        tests/playback_command_coalescer_tests.cpp)
+    target_link_libraries(
+        mcast_playback_command_coalescer_tests PRIVATE mcast_ipc)
+    add_test(
+        NAME mcast_playback_command_coalescer_tests
+        COMMAND mcast_playback_command_coalescer_tests)
+
+    add_executable(
         mcast_late_binding_playback_gateway_tests
         tests/late_binding_playback_gateway_tests.cpp)
     target_link_libraries(
@@ -325,6 +340,17 @@ if(BUILD_TESTING)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
             -Executable "$<TARGET_FILE:mcast_playback_bridge_tests>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(
+        mcast_planning_playback_gateway_tests
+        tests/planning_playback_gateway_tests.cpp)
+    target_link_libraries(
+        mcast_planning_playback_gateway_tests PRIVATE mcast_ipc)
+    add_test(
+        NAME mcast_planning_playback_gateway_tests
+        COMMAND mcast_planning_playback_gateway_tests)
+    set_tests_properties(
+        mcast_planning_playback_gateway_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_ui_settings_model_tests
@@ -418,6 +444,17 @@ if(BUILD_TESTING)
         NAME mcast_dlna_session_tests
         COMMAND mcast_dlna_session_tests)
     set_tests_properties(mcast_dlna_session_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(
+        mcast_dlna_playback_planner_tests
+        tests/dlna_playback_planner_tests.cpp)
+    target_link_libraries(
+        mcast_dlna_playback_planner_tests PRIVATE mcast_dlna_protocol)
+    add_test(
+        NAME mcast_dlna_playback_planner_tests
+        COMMAND mcast_dlna_playback_planner_tests)
+    set_tests_properties(
+        mcast_dlna_playback_planner_tests PROPERTIES TIMEOUT 10)
 
     add_executable(mcast_soap_router_tests tests/soap_router_tests.cpp)
     target_link_libraries(
@@ -560,6 +597,8 @@ if(BUILD_TESTING)
         src/core/MpvCore.h
         src/core/ImageSequencePlaylist.cpp
         src/core/ImageSequencePlaylist.h
+        src/core/ImageSequenceStrategy.cpp
+        src/core/ImageSequenceStrategy.h
         src/core/WrappedTsProxy.cpp
         src/core/WrappedTsProxy.h)
     target_include_directories(
@@ -731,6 +770,8 @@ qt_add_executable(MCast.Ui
     src/core/MediaPlayer.h
     src/core/ImageSequencePlaylist.h
     src/core/ImageSequencePlaylist.cpp
+    src/core/ImageSequenceStrategy.h
+    src/core/ImageSequenceStrategy.cpp
     src/core/WrappedTsProxy.h
     src/core/WrappedTsProxy.cpp
     src/core/NowPlaying.h

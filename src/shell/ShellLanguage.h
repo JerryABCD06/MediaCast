@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,15 @@ struct TrayTexts {
     std::string tooltipPaused;
 
     bool operator==(const TrayTexts &) const = default;
+};
+
+struct Terminology {
+    std::string appFull;
+    std::string appShort;
+    std::map<std::string, std::string> strings;
+
+    std::string resolve(
+        std::string_view key, std::string_view fallback) const;
 };
 
 class ShellLanguage
@@ -41,6 +51,9 @@ public:
     bool loadTrayTexts(
         std::string_view language, TrayTexts &texts,
         std::string &error) const;
+    bool loadTerms(
+        std::string_view language, Terminology &terms,
+        std::string &error) const;
     std::string catalogJson(
         std::string_view resolvedLanguage,
         std::string &error) const;
@@ -53,6 +66,10 @@ public:
     const TrayTexts &builtInEnglish() const noexcept
     {
         return m_builtInEnglish;
+    }
+    const Terminology &builtInTerms() const noexcept
+    {
+        return m_builtInTerms;
     }
     static std::vector<std::string> preferredSystemLocales();
 
@@ -74,6 +91,7 @@ private:
     std::vector<Entry> m_entries;
     std::vector<std::string> m_conflictedAliases;
     TrayTexts m_builtInEnglish;
+    Terminology m_builtInTerms;
 };
 
 } // namespace mcast::shell

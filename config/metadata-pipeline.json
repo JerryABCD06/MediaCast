@@ -70,7 +70,11 @@
           "file.subtitle",
           "unknown"
         ],
-        "reject_patterns": []
+        "reject_patterns": [
+          "^vid:[A-Za-z0-9]+$",
+          "^[A-Za-z0-9_-]{200,}$",
+          "^Bilibili VXCode Swarm Transcoder(?:\\s+v[\\d.]+)?$"
+        ]
       }
     }
   },

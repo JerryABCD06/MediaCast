@@ -12,6 +12,7 @@ function Start-Shell {
         "--instance=$instance",
         '--test',
         '--test-hold',
+        '--test-persistent',
         "--protocol=$ProtocolExe",
         "--ui=$UiExe"
     )
@@ -37,8 +38,29 @@ try {
         throw "Unexpected primary Shell output: $($readyTask.Result)"
     }
 
+    $initialLines = ''
+    $initialDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    $lineTask = $owner.StandardOutput.ReadLineAsync()
+    while ([DateTime]::UtcNow -lt $initialDeadline) {
+        if (-not $lineTask.Wait(250)) {
+            continue
+        }
+        if ($null -eq $lineTask.Result) {
+            break
+        }
+        $initialLines += $lineTask.Result + "`n"
+        if ($initialLines -match 'SHELL_UI_FIRST_FRAME') {
+            break
+        }
+        $lineTask = $owner.StandardOutput.ReadLineAsync()
+    }
+    if ($initialLines -notmatch 'SHELL_UI_FIRST_FRAME') {
+        throw 'Primary foreground startup did not reach FirstFrame'
+    }
+    Start-Sleep -Milliseconds 500
+
     $second = Start-Shell
-    if (-not $second.WaitForExit(8000)) {
+    if (-not $second.WaitForExit(16000)) {
         Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
         throw 'Second Shell did not complete foreground handoff'
     }

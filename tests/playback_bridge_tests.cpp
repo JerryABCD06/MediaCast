@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <mutex>
@@ -40,11 +41,16 @@ void check(bool condition, const char *message)
 class FakeMediaPlayer final : public MediaPlayer
 {
 public:
-    void load(const QString &uri) override
+    void load(const MediaLoadRequest &request) override
     {
-        m_uri = uri;
-        emit loadStarted();
-        emit ready();
+        m_uri = request.logicalUri;
+        m_loadGeneration = request.loadGeneration;
+        m_lastRoute = request.route;
+        m_lastFrameCount = request.imageSequenceFrames.size();
+        ++m_loadCalls;
+        emit loadStarted(m_loadGeneration);
+        if (m_autoReady)
+            emit ready(m_loadGeneration);
     }
     void play() override { m_paused = false; emit pausedChanged(false); }
     void pause() override { m_paused = true; emit pausedChanged(true); }
@@ -101,6 +107,20 @@ public:
     {
         emit mediaKindChanged(kind, mediaUri);
     }
+    void simulateLoadFailed(const QString &reason)
+    {
+        emit loadFailed(m_loadGeneration, reason);
+    }
+    void simulateLoadFailedForGeneration(
+        std::uint64_t generation, const QString &reason)
+    {
+        emit loadFailed(generation, reason);
+    }
+    void setAutoReady(bool ready) { m_autoReady = ready; }
+    MediaLoadRoute lastRoute() const { return m_lastRoute; }
+    qsizetype lastFrameCount() const { return m_lastFrameCount; }
+    int loadCalls() const { return m_loadCalls; }
+    std::uint64_t loadGeneration() const { return m_loadGeneration; }
 
 private:
     QString m_uri;
@@ -109,6 +129,11 @@ private:
     bool m_muted = false;
     bool m_paused = false;
     int m_brightness = 50;
+    bool m_autoReady = true;
+    MediaLoadRoute m_lastRoute = MediaLoadRoute::Native;
+    qsizetype m_lastFrameCount = 0;
+    int m_loadCalls = 0;
+    std::uint64_t m_loadGeneration = 0;
 };
 
 struct EventState {
@@ -200,12 +225,136 @@ void testStalePlayerSignalsAreIgnored()
           "previous artwork is cleared when switching media");
 }
 
+void testExplicitLoadFailureStopsPreparation()
+{
+    FakeMediaPlayer player;
+    player.setAutoReady(false);
+    PlaybackController controller(&player);
+    PlaybackController::MediaRequest request;
+    request.uri = QStringLiteral("http://example.test/broken.mp4");
+    controller.openUri(request, ::MediaSource::Cast);
+    check(controller.state() == PlaybackController::State::Preparing,
+          "media starts in the preparing state");
+
+    player.simulateLoadFailed(QStringLiteral("decoder rejected media"));
+    check(controller.loadStatus() == PlaybackController::LoadStatus::Failed,
+          "an explicit player failure updates load status");
+    check(controller.state() == PlaybackController::State::Stopped,
+          "an explicit player failure leaves preparing immediately");
+}
+
+void testCompatibilityRouteFallsBackToNativeOnce()
+{
+    FakeMediaPlayer player;
+    player.setAutoReady(false);
+    PlaybackController controller(&player);
+    PlaybackController::MediaRequest request;
+    request.uri = QStringLiteral("http://example.test/show.m3u8");
+    request.kind = ::MediaKind::Video;
+    request.route = MediaLoadRoute::ImageSequence;
+    request.imageSequenceFrames = {
+        {QStringLiteral("http://example.test/frame.png"), 1.0},
+    };
+    controller.openUri(request, ::MediaSource::Cast);
+    check(player.loadCalls() == 1
+              && player.lastRoute() == MediaLoadRoute::ImageSequence,
+          "the requested compatibility strategy is attempted first");
+
+    player.simulateLoadFailed(QStringLiteral("image strategy failed"));
+    check(player.loadCalls() == 2
+              && player.lastRoute() == MediaLoadRoute::Native
+              && player.lastFrameCount() == 0,
+          "a failed compatibility route retries the original URI once");
+    check(controller.state() == PlaybackController::State::Preparing,
+          "the one native fallback remains in loading state");
+
+    player.simulateLoadFailed(QStringLiteral("native fallback failed"));
+    check(player.loadCalls() == 2,
+          "the native fallback cannot loop");
+    check(controller.loadStatus() == PlaybackController::LoadStatus::Failed
+              && controller.state() == PlaybackController::State::Stopped,
+          "failure of the native fallback is final");
+}
+
+void testStaleLoadFailureCannotAffectNewMedia()
+{
+    FakeMediaPlayer player;
+    player.setAutoReady(false);
+    PlaybackController controller(&player);
+
+    PlaybackController::MediaRequest first;
+    first.uri = QStringLiteral("http://example.test/first.m3u8");
+    first.kind = ::MediaKind::Video;
+    controller.openUri(first, ::MediaSource::Cast);
+    const std::uint64_t firstGeneration = player.loadGeneration();
+
+    PlaybackController::MediaRequest second;
+    second.uri = QStringLiteral("http://example.test/second.mp4");
+    second.kind = ::MediaKind::Video;
+    controller.openUri(second, ::MediaSource::Cast);
+    const int loadsBeforeStaleFailure = player.loadCalls();
+
+    player.simulateLoadFailedForGeneration(
+        firstGeneration, QStringLiteral("late failure from old media"));
+    check(player.loadCalls() == loadsBeforeStaleFailure,
+          "a stale load failure cannot trigger another load");
+    check(controller.state() == PlaybackController::State::Preparing,
+          "a stale load failure leaves the new media preparing");
+}
+
+void testPeerLossUnloadsCastMedia()
+{
+    FakeMediaPlayer player;
+    PlaybackController controller(&player);
+    controller.setPeerConnected(true);
+
+    PlaybackController::MediaRequest cast;
+    cast.uri = QStringLiteral("http://example.test/ended-cast.mp4");
+    cast.title = QStringLiteral("Ended cast");
+    controller.openUri(cast, ::MediaSource::Cast);
+    check(controller.state() == PlaybackController::State::Playing
+              && controller.hasMedia(),
+          "cast media is loaded before peer loss");
+
+    controller.setPeerConnected(false);
+    check(controller.state() == PlaybackController::State::NoMedia
+              && !controller.hasMedia()
+              && controller.currentUri().isEmpty(),
+          "peer loss unloads stale cast media");
+
+    controller.setPeerConnected(true);
+    PlaybackController::MediaRequest local;
+    local.uri = QStringLiteral("file:///C:/media/local.wav");
+    local.title = QStringLiteral("Local");
+    controller.openUri(local, ::MediaSource::Local);
+    controller.setPeerConnected(false);
+    check(controller.state() == PlaybackController::State::Playing
+              && controller.hasMedia(),
+          "peer loss does not stop locally opened media");
+    controller.endSession();
+    check(controller.state() == PlaybackController::State::Playing
+              && controller.hasMedia(),
+          "a DLNA end-session command does not unload local playback");
+
+    controller.setPeerConnected(true);
+    controller.openUri(cast, ::MediaSource::Cast);
+    controller.setPeerConnected(false);
+    controller.openUri(cast, ::MediaSource::Cast);
+    controller.setPeerConnected(false);
+    check(controller.state() == PlaybackController::State::NoMedia,
+          "a repeated peer=false still removes an inconsistent cast item");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
     testStalePlayerSignalsAreIgnored();
+    testExplicitLoadFailureStopsPreparation();
+    testCompatibilityRouteFallsBackToNativeOnce();
+    testStaleLoadFailureCannotAffectNewMedia();
+    testPeerLossUnloadsCastMedia();
     const std::wstring pipeName =
         mcast::ipc::makePlaybackPipeName(L"ui-bridge-test");
     mcast::ipc::PipeListener listener(pipeName, 2);
@@ -220,8 +369,10 @@ int main(int argc, char **argv)
     FakeMediaPlayer player;
     PlaybackController controller(&player);
     EventState events;
+    std::atomic_bool endSessionRequested = false;
     PlaybackPipeGateway gateway(
-        std::move(server), [](const std::string &) {});
+        std::move(server), [](const std::string &) {},
+        [&] { endSessionRequested = true; });
     gateway.addEventListener([&](const PlaybackEvent &event) {
         {
             std::scoped_lock lock(events.mutex);
@@ -241,6 +392,11 @@ int main(int argc, char **argv)
                 == PlaybackEventKind::SnapshotChanged;
     }), "initial snapshot");
     check(gateway.snapshot().generation == 42, "activation generation");
+
+    bridge.requestEndSession();
+    check(pumpUntil(application, [&] {
+        return endSessionRequested.load();
+    }), "UI end-session request reaches Protocol through the urgent path");
 
     PlaybackCommand open;
     open.type = PlaybackCommandType::Open;
@@ -379,19 +535,86 @@ int main(int argc, char **argv)
     setNext.media.metadata = "<DIDL-Lite><next/></DIDL-Lite>";
     setNext.media.title = "Next";
     setNext.media.kind = types::MediaKind::Video;
+    setNext.media.route = types::MediaRoute::ImageSequence;
+    setNext.media.imageSequenceFrames = {
+        {"http://example.test/frame-1.png", 1.5},
+        {"http://example.test/frame-2.png", 2.0},
+    };
     check(gateway.submit(setNext).queued, "set next queues");
-    check(pumpUntil(application, [&] {
+    const bool nextPlanReached = pumpUntil(application, [&] {
         const auto snapshot = gateway.snapshot();
         return snapshot.next.uri == "http://example.test/next.mp4"
-            && snapshot.next.title == "Next";
-    }), "complete next request reaches Protocol");
+            && snapshot.next.title == "Next"
+            && snapshot.next.route == types::MediaRoute::ImageSequence
+            && snapshot.next.imageSequenceFrames.size() == 2;
+    });
+    if (!nextPlanReached) {
+        const auto snapshot = gateway.snapshot();
+        std::cerr << "next plan uri=" << snapshot.next.uri
+                  << " title=" << snapshot.next.title
+                  << " route="
+                  << static_cast<int>(snapshot.next.route)
+                  << " frames="
+                  << snapshot.next.imageSequenceFrames.size() << '\n';
+    }
+    check(nextPlanReached, "complete next request reaches Protocol");
+
+    PlaybackCommand planPreservingDelta;
+    planPreservingDelta.type = PlaybackCommandType::SetVolume;
+    planPreservingDelta.intValue = 36;
+    planPreservingDelta.expectedGeneration = 42;
+    check(gateway.submit(planPreservingDelta).queued,
+          "plan-preserving delta queues");
+    check(pumpUntil(application, [&] {
+        const auto snapshot = gateway.snapshot();
+        return snapshot.volumePercent == 36
+            && snapshot.next.route == types::MediaRoute::ImageSequence
+            && snapshot.next.imageSequenceFrames.size() == 2
+            && snapshot.next.imageSequenceFrames[1].durationSeconds == 2.0;
+    }), "state deltas preserve the cached next playback plan");
+
+    PlaybackCommand updatedNext = setNext;
+    updatedNext.media.imageSequenceFrames = {
+        {"http://example.test/frame-1.png", 3.25},
+    };
+    check(gateway.submit(updatedNext).queued,
+          "same-URI plan update queues");
+    const bool updatedPlanReached = pumpUntil(application, [&] {
+        const auto snapshot = gateway.snapshot();
+        return snapshot.next.imageSequenceFrames.size() == 1
+            && snapshot.next.imageSequenceFrames[0].durationSeconds == 3.25;
+    });
+    if (!updatedPlanReached) {
+        const auto snapshot = gateway.snapshot();
+        std::cerr << "updated next frames="
+                  << snapshot.next.imageSequenceFrames.size();
+        if (!snapshot.next.imageSequenceFrames.empty()) {
+            std::cerr << " duration="
+                      << snapshot.next.imageSequenceFrames[0].durationSeconds;
+        }
+        const auto controllerNext = controller.nextRequest();
+        std::cerr << " controllerFrames="
+                  << controllerNext.imageSequenceFrames.size();
+        if (!controllerNext.imageSequenceFrames.isEmpty()) {
+            std::cerr << " controllerDuration="
+                      << controllerNext.imageSequenceFrames[0].durationSeconds;
+        }
+        std::cerr << " stateVersion=" << snapshot.stateVersion << '\n';
+    }
+    check(updatedPlanReached,
+          "same-URI frame-table changes are serialized again");
 
     controller.next();
     check(pumpUntil(application, [&] {
         const auto snapshot = gateway.snapshot();
         return snapshot.current.uri == "http://example.test/next.mp4"
             && snapshot.current.title == "Next"
-            && snapshot.next.uri.empty();
+            && snapshot.next.uri.empty()
+            && snapshot.current.route
+                == types::MediaRoute::ImageSequence
+            && snapshot.current.imageSequenceFrames.size() == 1
+            && snapshot.current.imageSequenceFrames[0].durationSeconds
+                == 3.25;
     }), "controller-driven next updates cache");
 
     controller.endSession();

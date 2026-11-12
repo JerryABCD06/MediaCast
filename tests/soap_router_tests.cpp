@@ -196,7 +196,7 @@ void testDependentCommandsWaitForAppliedState()
     check(session.openMedia(current, SessionTime{0}).queued,
           "dependent-command test opens current media");
     playback.processAll();
-    session.peerActivity(SessionTime{1});
+    session.peerActivity(SessionTime{1}, "192.168.10.3");
     playback.processAll();
 
     std::jthread setNextProcessor([&] {
@@ -739,6 +739,17 @@ int main()
     playback.processAll();
     check(playback.snapshot().state == PlaybackState::Stopped,
           "Stop maps to Playback state");
+    session.tick(SessionTime{8999});
+    check(session.snapshot().peerConnected,
+          "Stop keeps the control point during switch grace");
+    session.tick(SessionTime{9000});
+    check(session.snapshot().peerConnected,
+          "Stop boundary settles before ending the control-point session");
+    session.tick(SessionTime{9250});
+    playback.processAll();
+    check(!session.snapshot().peerConnected
+              && playback.snapshot().state == PlaybackState::NoMedia,
+          "idle Stop ends the control-point session");
 
     response = router.handle(request(
         "AVTransport", "Bogus", body("Bogus")));

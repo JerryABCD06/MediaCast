@@ -117,6 +117,9 @@ bool SsdpService::start(
     }
     if (options.aliveInterval.count() <= 0)
         options.aliveInterval = 10s;
+    m_byeByeInProgress = false;
+    m_sendAliveRequested = false;
+    m_sendByeByeRequested = false;
 
     {
         std::lock_guard lock(m_startMutex);
@@ -158,6 +161,31 @@ void SsdpService::stop() noexcept
         return;
     m_thread.request_stop();
     m_thread.join();
+}
+
+void SsdpService::announceByeBye(
+    std::chrono::milliseconds interval, int rounds) noexcept
+{
+    if (!m_running.load() || rounds <= 0)
+        return;
+    interval = std::clamp(interval, 20ms, 500ms);
+    rounds = std::clamp(rounds, 1, 3);
+    m_byeByeRoundsRequested = rounds;
+    m_byeByeIntervalMs = interval.count();
+    m_byeByeInProgress = true;
+    m_sendAliveRequested = false;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard lock(m_byeByeMutex);
+        generation = ++m_byeByeGeneration;
+        m_byeByeCompleted = generation - 1;
+    }
+    m_sendByeByeRequested = true;
+    std::unique_lock lock(m_byeByeMutex);
+    m_byeByeChanged.wait_for(
+        lock, 1500ms, [&] {
+            return m_byeByeCompleted >= generation;
+        });
 }
 
 std::string SsdpService::interfaceAddress() const
@@ -322,6 +350,9 @@ void SsdpService::run(
     if (options.joinMulticast)
         sendNotify(true);
     auto nextAlive = Clock::now() + 300ms;
+    int byeByeRoundsRemaining = 0;
+    auto nextByeBye = Clock::now();
+    bool explicitByeByeCompleted = false;
     std::vector<PendingReply> pendingReplies;
     std::mt19937 random(std::random_device{}());
     std::uniform_int_distribution<int> responseDelay(0, 200);
@@ -329,6 +360,27 @@ void SsdpService::run(
     completeStart(true, {});
     while (!stop.stop_requested()) {
         const auto now = Clock::now();
+        if (m_sendByeByeRequested.exchange(false)) {
+            byeByeRoundsRemaining = m_byeByeRoundsRequested.load();
+            nextByeBye = now;
+            m_byeByeInProgress = true;
+            m_sendAliveRequested = false;
+        }
+        if (byeByeRoundsRemaining > 0 && now >= nextByeBye) {
+            sendNotify(false);
+            --byeByeRoundsRemaining;
+            nextByeBye = now
+                + std::chrono::milliseconds(
+                    m_byeByeIntervalMs.load());
+            if (byeByeRoundsRemaining == 0) {
+                explicitByeByeCompleted = true;
+                {
+                    std::lock_guard lock(m_byeByeMutex);
+                    m_byeByeCompleted = m_byeByeGeneration;
+                }
+                m_byeByeChanged.notify_all();
+            }
+        }
         auto reply = pendingReplies.begin();
         while (reply != pendingReplies.end()) {
             if (reply->deadline > now) {
@@ -350,13 +402,15 @@ void SsdpService::run(
             reply = pendingReplies.erase(reply);
         }
 
-        if (m_sendAliveRequested.exchange(false)) {
+        if (!m_byeByeInProgress
+            && m_sendAliveRequested.exchange(false)) {
             sendNotify(true);
             nextAlive = now
                 + std::chrono::milliseconds(
                     m_aliveIntervalMs.load());
         }
-        if (m_broadcasting && now >= nextAlive) {
+        if (!m_byeByeInProgress
+            && m_broadcasting && now >= nextAlive) {
             sendNotify(true);
             nextAlive = now
                 + std::chrono::milliseconds(
@@ -364,7 +418,13 @@ void SsdpService::run(
         }
 
         auto timeout = 100ms;
-        if (m_broadcasting) {
+        if (byeByeRoundsRemaining > 0) {
+            timeout = std::min(
+                timeout,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    nextByeBye - now));
+        }
+        if (m_broadcasting && !m_byeByeInProgress) {
             timeout = std::min(
                 timeout,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -443,7 +503,7 @@ void SsdpService::run(
         }
     }
 
-    if (multicastJoined)
+    if (multicastJoined && !explicitByeByeCompleted)
         sendNotify(false);
     loop.remove(socket.handle());
     if (multicastJoined) {

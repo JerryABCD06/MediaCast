@@ -11,6 +11,8 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include <cstdint>
+
 /**
  * 一个"画面调节项"的描述。
  *
@@ -28,6 +30,27 @@ struct PictureControlInfo
     int     min = 0;
     int     max = 0;
     int     neutral = 0;   // 复位到这儿，也是"没调过"的意思。
+};
+
+enum class MediaLoadRoute
+{
+    Native,
+    ImageSequence,
+    WrappedTransportStream,
+};
+
+struct MediaLoadFrame
+{
+    QString uri;
+    double durationSeconds = 0.0;
+};
+
+struct MediaLoadRequest
+{
+    QString logicalUri;
+    std::uint64_t loadGeneration = 0;
+    MediaLoadRoute route = MediaLoadRoute::Native;
+    QVector<MediaLoadFrame> imageSequenceFrames;
 };
 
 /**
@@ -60,8 +83,8 @@ public:
 
     // ── 命令 ──────────────────────────────────────────────────────────────
 
-    /** 加载并开始播放一个地址。可以是本地路径，也可以是 http 地址。 */
-    virtual void load(const QString &uri) = 0;
+    /** 加载并开始播放一条中性媒体计划。 */
+    virtual void load(const MediaLoadRequest &request) = 0;
 
     virtual void play() = 0;
     virtual void pause() = 0;
@@ -135,7 +158,7 @@ signals:
     void logMessage(const QString &text);
 
     /** 文件加载完成、可以播了。 */
-    void ready();
+    void ready(std::uint64_t loadGeneration);
 
     /**
      * **真正**开始加载了。
@@ -147,10 +170,20 @@ signals:
      * 上层用它给"加载超时"计时：从调用 load() 开始算的话，等界面的那段时间
      * 会被算进去，白白超时。
      */
-    void loadStarted();
+    void loadStarted(std::uint64_t loadGeneration);
 
     /** 播放结束：播完了、被停掉了、或者出错。 */
     void ended();
+
+    /**
+     * 加载或当前媒体播放失败。
+     *
+     * 和 ended() 分开：ended() 表示一条媒体正常走完，可以让队列接上下一条；
+     * loadFailed() 表示播放器没有成功建立可播放状态，上层应把本次加载标记为
+     * 失败，而不是留在 Preparing 等超时。
+     */
+    void loadFailed(
+        std::uint64_t loadGeneration, const QString &reason);
 
     /**
      * 播放器没了 —— 进程退出、崩溃，总之播放能力消失了。

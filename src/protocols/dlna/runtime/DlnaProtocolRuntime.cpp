@@ -76,9 +76,7 @@ DlnaProtocolRuntime::DlnaProtocolRuntime(
                   m_session.setSubscriptionCount(
                       count, reason, sessionNow());
               },
-              [this] {
-                  m_session.peerActivity(sessionNow());
-              },
+              [] {},
               [this](const std::string &message) {
                   log("GENA: " + message);
               },
@@ -149,7 +147,13 @@ void DlnaProtocolRuntime::stop() noexcept
         return;
     m_receivingEnabled = false;
     m_surfaceKeptForActiveSession = false;
-    m_disconnectRestartAt.reset();
+    {
+        std::lock_guard receivingLock(m_receivingMutex);
+        m_disconnectRestartAt.reset();
+        m_disconnectOverallDeadline.reset();
+        m_disconnectDrainDeadline.reset();
+        m_disconnectDrainPending = false;
+    }
     {
         std::lock_guard requestLock(m_requestGateMutex);
     }
@@ -264,20 +268,31 @@ bool DlnaProtocolRuntime::requestDisconnect(std::string &error)
         error = "DLNA runtime is not running";
         return false;
     }
-    const auto submission =
-        m_session.endSession(sessionNow());
+    const auto now = sessionNow();
+    const auto submission = m_session.endSession(now);
     if (!submission.queued) {
-        error = submission.error.empty()
-            ? "DLNA could not end the session"
-            : submission.error;
-        return false;
+        const auto state = m_session.snapshot();
+        const bool alreadyEnded =
+            state.disconnectedByUs && !state.ending
+            && state.playback.state == PlaybackState::NoMedia;
+        if (!alreadyEnded) {
+            error = submission.error.empty()
+                ? "DLNA could not end the session"
+                : submission.error;
+            return false;
+        }
     }
-    m_disconnectRestartAt = sessionNow() + SessionTime{1500};
+    m_disconnectRestartAt.reset();
+    m_disconnectOverallDeadline =
+        now + SessionTime{8000};
+    m_disconnectDrainDeadline.reset();
+    m_disconnectDrainPending = true;
+    m_surfaceKeptForActiveSession = true;
     stopConfirmationWorker();
     discardPendingMedia();
-    stopNetworkSurface();
     log(
-        "DLNA disconnect requested; network surface stopped; EndSession command="
+        "DLNA disconnect requested; draining EndSession and GENA before "
+        "network teardown; EndSession command="
         + std::to_string(submission.commandId));
     return true;
 }
@@ -351,7 +366,8 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
                 m_confirmationWorker->requestConfirmation(prompt);
         };
     callbacks.acceptNewMedia = [this] {
-        return m_receivingEnabled.load();
+        return m_receivingEnabled.load()
+            && !m_disconnectDrainPending.load();
     };
     callbacks.executeMedia =
         [this](const claim::DlnaMediaExecution &execution) {
@@ -360,11 +376,12 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
                     execution.operationId, false, castNow());
             }
         };
-    callbacks.playNow = [this] {
+    callbacks.playNow = [this](
+        std::optional<std::uint64_t> ownerEpoch) {
         PlaybackCommand command;
         command.type = PlaybackCommandType::Play;
         const auto result = m_session.submitAndWait(
-            std::move(command), SessionTime{5000});
+            std::move(command), SessionTime{5000}, ownerEpoch);
         if (result.timedOut || !result.outcome
             || *result.outcome != PlaybackOutcomeStatus::Applied) {
             throw std::runtime_error(
@@ -373,11 +390,13 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
                     : result.completionError);
         }
     };
-    callbacks.stopNow = [this] {
+    callbacks.stopNow = [this](
+        const cast::PeerIdentity &peer,
+        std::optional<std::uint64_t> ownerEpoch) {
         PlaybackCommand command;
         command.type = PlaybackCommandType::Stop;
         const auto result = m_session.submitAndWait(
-            std::move(command), SessionTime{5000});
+            std::move(command), SessionTime{5000}, ownerEpoch);
         if (result.timedOut || !result.outcome
             || *result.outcome != PlaybackOutcomeStatus::Applied) {
             throw std::runtime_error(
@@ -385,6 +404,8 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
                     ? "DLNA Stop was not applied"
                     : result.completionError);
         }
+        m_session.transportStopped(
+            sessionNow(), peer.address);
     };
     callbacks.log = [this](const std::string &message) {
         log(message);
@@ -437,7 +458,9 @@ bool DlnaProtocolRuntime::enqueueNewMedia(
     for (const std::uint64_t operationId : cancelledOperations)
         m_handler.mediaReady(operationId, false, castNow());
 
-    m_session.newMediaRequested(sessionNow());
+    m_session.newMediaRequested(
+        sessionNow(), execution.peer.displayName,
+        execution.peer.address);
 
     {
         std::lock_guard lock(m_mediaMutex);
@@ -618,6 +641,7 @@ void DlnaProtocolRuntime::stopNetworkSurface() noexcept
     // An SSDP byebye is a notification, so it must leave before the HTTP and
     // GENA endpoints disappear. Doing this after stopHttp() made control
     // points race against an already-dead LOCATION.
+    m_ssdp.announceByeBye();
     m_ssdp.stop();
     m_gena.stop();
     stopHttpLocked();
@@ -795,6 +819,47 @@ void DlnaProtocolRuntime::sessionLoop(std::stop_token stop)
         if (m_networkRecoveryPending.exchange(false))
             handleNetworkFailure();
         m_session.tick(sessionNow());
+        {
+            std::lock_guard receivingLock(m_receivingMutex);
+            if (m_disconnectDrainPending.load()) {
+                const auto now = sessionNow();
+                const bool forced =
+                    m_disconnectOverallDeadline
+                    && now >= *m_disconnectOverallDeadline;
+                if (forced) {
+                    m_session.abandonEndingSession();
+                    log(
+                        "DLNA disconnect deadline reached; forcing "
+                        "network teardown");
+                }
+                const auto snapshot = m_session.snapshot();
+                const bool finalState =
+                    !snapshot.ending
+                    && snapshot.playback.state
+                        == PlaybackState::NoMedia;
+                if (finalState) {
+                    if (!m_disconnectDrainDeadline) {
+                        m_disconnectDrainDeadline =
+                            now + SessionTime{1000};
+                    }
+                }
+                if (forced
+                    || (finalState
+                        && (m_gena.quiescent()
+                            || now >= *m_disconnectDrainDeadline))) {
+                    m_disconnectDrainPending = false;
+                    m_surfaceKeptForActiveSession = false;
+                    m_disconnectOverallDeadline.reset();
+                    m_disconnectDrainDeadline.reset();
+                    stopNetworkSurface();
+                    m_disconnectRestartAt =
+                        sessionNow() + SessionTime{1500};
+                    log(
+                        "DLNA final GENA drain complete; network "
+                        "surface stopped after EndSession");
+                }
+            }
+        }
         if (!m_receivingEnabled
             && m_surfaceKeptForActiveSession
             && !m_session.snapshot().peerConnected) {

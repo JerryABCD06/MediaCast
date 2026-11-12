@@ -62,7 +62,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginSetUri(
         }
         const cast::ClaimReason reason = outcome.reason;
         DlnaClaimRuntimeActions executed =
-            beginExecute(std::move(outcome), now);
+            beginExecute(std::move(outcome), requestPeer, now);
         if (m_operation) {
             m_operation->setRequests.push_back(requestId);
         } else {
@@ -167,6 +167,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::requestStop(
         return actions;
     }
 
+    const cast::PeerIdentity requestPeer = peer;
     DlnaClaimOutcome outcome =
         m_adapter.requestStop(std::move(peer), now);
     if (outcome.invalidatedPending) {
@@ -175,6 +176,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::requestStop(
     }
     if (outcome.disposition == DlnaClaimDisposition::Execute) {
         actions.stopNow = true;
+        actions.stopPeer = requestPeer;
         actions.http.push_back(completion(
             requestId, true, cast::ClaimReason::None));
     } else if (outcome.disposition == DlnaClaimDisposition::Ignored) {
@@ -191,7 +193,7 @@ DlnaClaimDisposition DlnaClaimRuntime::requestControl(
     cast::PeerIdentity peer, cast::CastTime now)
 {
     static_cast<void>(now);
-    if (m_adapter.ownsPeer(peer)) {
+    if (m_adapter.canControl(peer)) {
         if (m_operation)
             return DlnaClaimDisposition::Pending;
         return DlnaClaimDisposition::Execute;
@@ -207,6 +209,12 @@ bool DlnaClaimRuntime::ownsPeer(
     const cast::PeerIdentity &peer) const
 {
     return m_adapter.ownsPeer(peer);
+}
+
+bool DlnaClaimRuntime::canControl(
+    const cast::PeerIdentity &peer) const
+{
+    return m_adapter.canControl(peer);
 }
 
 DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
@@ -358,7 +366,8 @@ DlnaClaimRuntime::pendingKey() const noexcept
 }
 
 DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
-    DlnaClaimOutcome &&outcome, cast::CastTime now)
+    DlnaClaimOutcome &&outcome, cast::PeerIdentity requestPeer,
+    cast::CastTime now)
 {
     DlnaClaimRuntimeActions actions;
     if (!outcome.media || !outcome.ownerSessionId) {
@@ -387,6 +396,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
         *outcome.media,
         {},
         {},
+        std::move(requestPeer),
     };
     actions.media = DlnaMediaExecution{
         m_operation->id,
@@ -396,6 +406,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
         m_operation->newSession,
         false,
         m_operation->media,
+        m_operation->peer,
     };
     return actions;
 }
@@ -429,6 +440,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         *resolution.media,
         std::move(pending.setRequests),
         std::move(pending.playRequests),
+        pending.peer,
     };
     actions.media = DlnaMediaExecution{
         m_operation->id,
@@ -438,6 +450,7 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         m_operation->newSession,
         m_operation->playRequested,
         m_operation->media,
+        m_operation->peer,
     };
     return actions;
 }

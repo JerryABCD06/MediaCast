@@ -3,6 +3,8 @@
 
 #include "platform/windows/CastConfirmationDialog.h"
 
+#include "core/ProductIdentity.h"
+
 #include <commctrl.h>
 
 #include <algorithm>
@@ -173,8 +175,12 @@ CastConfirmationChoice showCastConfirmationDialog(
     config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION
         | TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER
         | TDF_SIZE_TO_CONTENT;
-    config.pszWindowTitle =
-        prompt.chinese ? L"Media Cast — 投送确认" : L"Media Cast — Cast request";
+    const std::wstring appName = prompt.appName.empty()
+        ? std::wstring(mcast::identity::appFullEnglishWide)
+        : prompt.appName;
+    const std::wstring windowTitle =
+        appName + (prompt.chinese ? L" — 投送确认" : L" — Cast request");
+    config.pszWindowTitle = windowTitle.c_str();
     config.pszMainIcon = TD_INFORMATION_ICON;
     config.pszMainInstruction = prompt.chinese
         ? L"另一个设备想接管投送"

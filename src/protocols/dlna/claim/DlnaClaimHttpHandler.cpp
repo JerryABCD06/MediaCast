@@ -39,10 +39,14 @@ std::string trim(std::string value)
     return value;
 }
 
-bool mutatingAVTransportAction(std::string_view action)
+bool sameAddressControlAction(std::string_view action)
+{
+    return action == "Pause" || action == "Seek";
+}
+
+bool ownerOnlyMutation(std::string_view action)
 {
     return action == "SetNextAVTransportURI"
-        || action == "Pause" || action == "Seek"
         || action == "Next" || action == "Previous"
         || action == "SetPlayMode";
 }
@@ -63,7 +67,6 @@ DlnaClaimHttpHandler::DlnaClaimHttpHandler(
 net::HttpDispatchResult DlnaClaimHttpHandler::handle(
     const core::HttpRequest &request)
 {
-    std::lock_guard operationLock(m_operationMutex);
     if (!m_callbacks.completeHttp
         || !m_callbacks.requestConfirmation
         || !m_callbacks.executeMedia
@@ -74,7 +77,6 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             soap::SoapRouter::faultResponse(501, "Action Failed"),
         };
     }
-    tick(m_now());
 
     net::HttpResponse parseError;
     const auto parsed = m_router.parseRequest(request, parseError);
@@ -86,12 +88,18 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             soap::SoapRouter::faultResponse(501, "Action Failed"),
         };
     }
+    std::unique_lock operationLock(m_operationMutex);
+    tick(m_now());
 
-    if (parsed->service != "AVTransport")
+    if (parsed->service != "AVTransport") {
+        const std::uint64_t ownerEpoch =
+            m_router.ownerEpoch();
+        operationLock.unlock();
         return {
             net::HttpDispatchStatus::Completed,
-            m_router.handleParsed(*parsed),
+            m_router.handleParsed(*parsed, ownerEpoch),
         };
+    }
 
     DlnaClaimRuntimeActions actions;
     if (parsed->action == "SetAVTransportURI") {
@@ -139,9 +147,9 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
                     717, "Play speed not supported"),
             };
         }
-        m_router.notePeerActivity();
+        m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
-        if (m_runtime.ownsPeer(peer)
+        if (m_runtime.canControl(peer)
             && !m_runtime.mediaOpening()
             && !m_router.hasTransportMedia()) {
             return {
@@ -157,9 +165,9 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
                 request.requestId, peer, m_now());
         }
     } else if (parsed->action == "Stop") {
-        m_router.notePeerActivity();
+        m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
-        if (m_runtime.ownsPeer(peer)
+        if (m_runtime.canControl(peer)
             && !m_runtime.mediaOpening()
             && !m_router.hasTransportMedia()) {
             return {
@@ -174,8 +182,8 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             actions = m_runtime.requestStop(
                 request.requestId, peer, m_now());
         }
-    } else if (mutatingAVTransportAction(parsed->action)) {
-        m_router.notePeerActivity();
+    } else if (sameAddressControlAction(parsed->action)) {
+        m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
         DlnaClaimDisposition disposition;
         {
@@ -183,23 +191,63 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             disposition = m_runtime.requestControl(
                 peer, m_now());
         }
-        if (disposition == DlnaClaimDisposition::Execute)
+        if (disposition == DlnaClaimDisposition::Execute) {
+            const std::uint64_t ownerEpoch =
+                m_router.ownerEpoch();
+            log(
+                "DLNA control accepted for " + parsed->action
+                + " from " + peer.address);
+            operationLock.unlock();
             return {
                 net::HttpDispatchStatus::Completed,
-                m_router.handleParsed(*parsed),
+                m_router.handleParsed(*parsed, ownerEpoch),
             };
+        }
+        log(
+            "DLNA control rejected for " + parsed->action
+            + " from " + peer.address + ": peer " + peer.id);
+        return {
+            net::HttpDispatchStatus::Completed,
+            soap::SoapRouter::faultResponse(
+                701, "Transition not available"),
+        };
+    } else if (ownerOnlyMutation(parsed->action)) {
+        m_router.notePeerActivity(request.peerAddress);
+        const cast::PeerIdentity peer = peerIdentity(request);
+        bool ownsPeer = false;
+        {
+            std::lock_guard lock(m_mutex);
+            ownsPeer = m_runtime.ownsPeer(peer);
+        }
+        if (ownsPeer) {
+            const std::uint64_t ownerEpoch =
+                m_router.ownerEpoch();
+            log(
+                "DLNA owner mutation accepted for " + parsed->action
+                + " from " + peer.address);
+            operationLock.unlock();
+            return {
+                net::HttpDispatchStatus::Completed,
+                m_router.handleParsed(*parsed, ownerEpoch),
+            };
+        }
+        log(
+            "DLNA owner mutation rejected for " + parsed->action
+            + " from " + peer.address + ": peer " + peer.id);
         return {
             net::HttpDispatchStatus::Completed,
             soap::SoapRouter::faultResponse(
                 701, "Transition not available"),
         };
     } else {
+        operationLock.unlock();
         return {
             net::HttpDispatchStatus::Completed,
             m_router.handleParsed(*parsed),
         };
     }
 
+    actions.ownerEpoch = m_router.ownerEpoch();
     applyActions(std::move(actions));
     return {net::HttpDispatchStatus::Pending, {}};
 }
@@ -214,6 +262,7 @@ void DlnaClaimHttpHandler::confirmationDecision(
         actions = m_runtime.confirmationDecision(
             key, accepted, now);
     }
+    actions.ownerEpoch = m_router.ownerEpoch();
     applyActions(std::move(actions));
 }
 
@@ -225,6 +274,7 @@ void DlnaClaimHttpHandler::tick(cast::CastTime now)
         std::lock_guard lock(m_mutex);
         actions = m_runtime.tick(now);
     }
+    actions.ownerEpoch = m_router.ownerEpoch();
     applyActions(std::move(actions));
 }
 
@@ -239,6 +289,7 @@ void DlnaClaimHttpHandler::mediaReady(
         actions = m_runtime.mediaReady(
             operationId, success, now);
     }
+    actions.ownerEpoch = m_router.ownerEpoch();
     applyActions(std::move(actions));
 }
 
@@ -250,6 +301,7 @@ void DlnaClaimHttpHandler::controlLost(cast::CastTime now)
         std::lock_guard lock(m_mutex);
         actions = m_runtime.controlLost(now);
     }
+    actions.ownerEpoch = m_router.ownerEpoch();
     applyActions(std::move(actions));
 }
 
@@ -369,15 +421,26 @@ void DlnaClaimHttpHandler::applyActions(
     }
     if (actions.playNow && m_callbacks.playNow) {
         try {
-            m_callbacks.playNow();
+            m_callbacks.playNow(actions.ownerEpoch);
+        } catch (const std::exception &exception) {
+            log(
+                std::string("DLNA play callback failed: ")
+                + exception.what());
+            forceFault = true;
         } catch (...) {
             log("DLNA play callback failed");
             forceFault = true;
         }
     }
-    if (actions.stopNow && m_callbacks.stopNow) {
+    if (actions.stopNow && actions.stopPeer && m_callbacks.stopNow) {
         try {
-            m_callbacks.stopNow();
+            m_callbacks.stopNow(
+                *actions.stopPeer, actions.ownerEpoch);
+        } catch (const std::exception &exception) {
+            log(
+                std::string("DLNA stop callback failed: ")
+                + exception.what());
+            forceFault = true;
         } catch (...) {
             log("DLNA stop callback failed");
             forceFault = true;

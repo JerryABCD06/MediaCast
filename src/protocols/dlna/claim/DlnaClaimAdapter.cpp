@@ -134,7 +134,7 @@ DlnaClaimOutcome DlnaClaimAdapter::requestPlay(
         outcome.media = m_pending->media;
         return outcome;
     }
-    if (ownerMatches(peer)) {
+    if (canControl(peer)) {
         outcome.disposition = DlnaClaimDisposition::Execute;
         outcome.reason = cast::ClaimReason::None;
         publishOwner(
@@ -159,7 +159,7 @@ DlnaClaimOutcome DlnaClaimAdapter::requestStop(
         outcome.deadline = m_pending->deadline;
         return outcome;
     }
-    if (ownerMatches(peer)) {
+    if (canControl(peer)) {
         outcome.disposition = DlnaClaimDisposition::Execute;
         outcome.reason = cast::ClaimReason::None;
         publishOwner(
@@ -291,6 +291,17 @@ bool DlnaClaimAdapter::ownsPeer(
     const cast::PeerIdentity &peer) const
 {
     return ownerMatches(peer);
+}
+
+bool DlnaClaimAdapter::canControl(
+    const cast::PeerIdentity &peer) const
+{
+    if (ownerMatches(peer))
+        return true;
+    const auto &snapshot = m_coordinator.snapshot();
+    return !peer.address.empty() && snapshot.owner
+        && snapshot.owner->protocol == cast::ProtocolKind::Dlna
+        && snapshot.owner->peer.address == peer.address;
 }
 
 bool DlnaClaimAdapter::ownsOperation(

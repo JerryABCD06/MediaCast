@@ -17,7 +17,7 @@ namespace mcast::ipc {
 // Little-endian on the wire: 31 53 43 4D == "MCS1".
 inline constexpr std::uint32_t kProtocolMagic = 0x3153434D;
 inline constexpr std::uint16_t kProtocolVersionMajor = 1;
-inline constexpr std::uint16_t kProtocolVersionMinor = 3;
+inline constexpr std::uint16_t kProtocolVersionMinor = 4;
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kHeaderReservedOffset = 58;
 inline constexpr std::size_t kHeaderReservedSize = 6;

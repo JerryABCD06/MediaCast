@@ -30,7 +30,7 @@ import MediaCast 1.0
 //
 // ── 布局（左 → 右）──────────────────────────────────────────────────────
 //
-//   [Logo][Media Cast][● 正在投屏]  ……  [ⓘ][⚙] │ [—][□][✕]
+//   [Logo][应用简称][● 正在投屏]  ……  [ⓘ][⚙] │ [—][□][✕]
 //    └────── 我们的 ──────┘              └ 我们的 ┘ └ 窗口的（不归我们动）
 //
 // 二级页（设置）时左边换成 [←][设置]，右边我们的按钮收起来（照照片应用的做法）。
@@ -146,10 +146,10 @@ FluAppBar {
             fillMode: Image.PreserveAspectFit
         }
 
-        // 产品名。**不翻译**：这是名字，不是描述。
+        // 当前界面位置使用应用简称，由公共术语表提供。
         FluText {
             Layout.alignment: Qt.AlignVCenter
-            text: "Media Cast"
+            text: Tr.appShortName
             font: FluTextStyle.Body
         }
 

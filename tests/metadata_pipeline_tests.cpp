@@ -136,6 +136,47 @@ void testProtocolArtworkRejectsLocalFiles()
           "protocol artwork cannot reference a local file");
 }
 
+void testVisualSubtitleNoiseFilters()
+{
+    MetadataPipeline pipeline;
+    MetadataPipelineInput input;
+    input.uri = QStringLiteral("http://example.test/video.mp4");
+    input.kind = MediaKind::Video;
+
+    const QStringList rejected = {
+        QStringLiteral("vid:AbC123"),
+        QString(220, QLatin1Char('A')),
+        QStringLiteral("Bilibili VXCode Swarm Transcoder v1.2.3"),
+    };
+    for (const QString &candidate : rejected) {
+        input.protocolSubtitle = candidate;
+        input.protocolDescription = QStringLiteral("Useful fallback");
+        const auto result = pipeline.resolve(input);
+        check(result.subtitle == QStringLiteral("Useful fallback"),
+              "known visual subtitle noise falls through to description");
+    }
+
+    input.protocolSubtitle =
+        QStringLiteral("Bilibili VXCode Swarm Transcoder - Behind the Scenes");
+    auto result = pipeline.resolve(input);
+    check(result.subtitle == input.protocolSubtitle,
+          "subtitle filters only reject the exact known noise forms");
+
+    input.protocolSubtitle = QStringLiteral("vid:AbC123");
+    input.protocolDescription.clear();
+    input.fileTags.clear();
+    result = pipeline.resolve(input);
+    check(result.subtitle == QStringLiteral("media_unknown")
+              || result.subtitle == QStringLiteral("未知"),
+          "rejected visual subtitle ends in the normal unknown fallback");
+
+    input.kind = MediaKind::Audio;
+    input.protocolArtist = QStringLiteral("vid:Artist");
+    result = pipeline.resolve(input);
+    check(result.subtitle == QStringLiteral("vid:Artist"),
+          "visual subtitle filters do not alter audio artist text");
+}
+
 void testExternalJson()
 {
     QTemporaryDir temporary;
@@ -223,6 +264,7 @@ int main(int argc, char **argv)
     testTextPriorityAndFileArtwork();
     testUriAndKindFallback();
     testProtocolArtworkRejectsLocalFiles();
+    testVisualSubtitleNoiseFilters();
     testExternalJson();
     std::cout << "Metadata pipeline tests passed\n";
     return 0;

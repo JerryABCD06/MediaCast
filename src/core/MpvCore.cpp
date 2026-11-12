@@ -4,6 +4,7 @@
 #include "MpvCore.h"
 
 #include "ImageSequencePlaylist.h"
+#include "ImageSequenceStrategy.h"
 #include "WrappedTsProxy.h"
 
 #include <mpv/client.h>
@@ -14,12 +15,8 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QSaveFile>
 #include <QStandardPaths>
-#include <QTimer>
 #include <QUrl>
 #include <QUuid>
 #include <QtGlobal>
@@ -229,7 +226,8 @@ MediaSummary mediaSummaryFromMpv(
                 stringValue(track, "codec").value_or(""));
             video.insert(
                 QStringLiteral("profile"),
-                stringValue(track, "profile").value_or(""));
+                stringValue(track, "codec-profile").value_or(
+                    stringValue(track, "profile").value_or("")));
             if (const auto width = intValue(track, "demux-w"))
                 video.insert(QStringLiteral("width"), *width);
             if (const auto height = intValue(track, "demux-h"))
@@ -261,7 +259,8 @@ MediaSummary mediaSummaryFromMpv(
                 stringValue(track, "codec").value_or(""));
             audio.insert(
                 QStringLiteral("profile"),
-                stringValue(track, "profile").value_or(""));
+                stringValue(track, "codec-profile").value_or(
+                    stringValue(track, "profile").value_or("")));
             if (const auto rate = intValue(track, "demux-samplerate"))
                 audio.insert(QStringLiteral("sample_rate"), *rate);
             if (const auto channels = intValue(track, "demux-channel-count"))
@@ -272,14 +271,6 @@ MediaSummary mediaSummaryFromMpv(
                 audio.insert(QStringLiteral("channel_layout"), layout);
             if (const auto bitrate = intValue(track, "demux-bitrate"))
                 audio.insert(QStringLiteral("bitrate"), *bitrate);
-            for (const char *key : {
-                     "bits-per-sample", "bits_per_raw_sample",
-                     "demux-bits-per-sample"}) {
-                if (const auto bits = intValue(track, key)) {
-                    audio.insert(QStringLiteral("bit_depth"), *bits);
-                    break;
-                }
-            }
             if (hasAudioParams) {
                 if (!audio.contains(QStringLiteral("sample_rate"))) {
                     if (const auto rate =
@@ -309,6 +300,19 @@ MediaSummary mediaSummaryFromMpv(
                 }
             }
         }
+    }
+
+    int64_t videoBitrate = 0;
+    if (mpv_get_property(
+            mpv, "video-bitrate", MPV_FORMAT_INT64, &videoBitrate) >= 0
+        && videoBitrate > 0) {
+        video.insert(QStringLiteral("bitrate"), videoBitrate);
+    }
+    int64_t audioBitrate = 0;
+    if (mpv_get_property(
+            mpv, "audio-bitrate", MPV_FORMAT_INT64, &audioBitrate) >= 0
+        && audioBitrate > 0) {
+        audio.insert(QStringLiteral("bitrate"), audioBitrate);
     }
 
     char *format = mpv_get_property_string(mpv, "file-format");
@@ -509,13 +513,43 @@ void clearTemporaryImageSequences()
 
 MpvCore::MpvCore(QObject *parent)
     : MediaPlayer(parent)
-    , m_network(new QNetworkAccessManager(this))
+    , m_imageSequence(
+          std::make_unique<mcast::core::ImageSequenceStrategy>(this))
 {
-    m_imageTimer = new QTimer(this);
-    m_imageTimer->setInterval(100);
     connect(
-        m_imageTimer, &QTimer::timeout,
-        this, &MpvCore::tickImageTimeline);
+        m_imageSequence.get(),
+        &mcast::core::ImageSequenceStrategy::positionChanged,
+        this, [this](double seconds) {
+            m_positionSec.store(seconds);
+            emit positionChanged(seconds);
+        });
+    connect(
+        m_imageSequence.get(),
+        &mcast::core::ImageSequenceStrategy::durationChanged,
+        this, [this](double seconds) {
+            m_durationSec.store(seconds);
+            emit durationChanged(seconds);
+            refreshMediaInfoSnapshot();
+        });
+    connect(
+        m_imageSequence.get(),
+        &mcast::core::ImageSequenceStrategy::ended,
+        this, &MpvCore::ended);
+    connect(
+        m_imageSequence.get(),
+        &mcast::core::ImageSequenceStrategy::loadFailed,
+        this, [this](const QString &reason) {
+            m_loadFailed.store(true);
+            m_imageSequenceActive.store(false);
+            emit logMessage(
+                QStringLiteral("图片序列加载失败：%1").arg(reason));
+            emit loadFailed(
+                m_pendingLoadGeneration.load(), reason);
+        });
+    connect(
+        m_imageSequence.get(),
+        &mcast::core::ImageSequenceStrategy::logMessage,
+        this, &MpvCore::logMessage);
 }
 
 MpvCore::~MpvCore()
@@ -531,20 +565,41 @@ QVariantMap MpvCore::mediaInfo() const
 
 void MpvCore::refreshMediaInfoSnapshot()
 {
+    publishMediaSummary();
+}
+
+void MpvCore::publishMediaSummary()
+{
     if (!m_mpv)
         return;
     MediaSummary summary =
         mediaSummaryFromMpv(m_mpv, m_durationSec.load());
     if (m_imageSequenceActive.load()) {
+        summary.kind = MediaKind::Video;
         summary.info.insert(
             QStringLiteral("duration_seconds"),
             m_durationSec.load());
+        summary.info.insert(
+            QStringLiteral("kind"), QStringLiteral("video"));
     }
     {
         std::lock_guard lock(m_mediaInfoMutex);
         m_mediaInfo = summary.info;
     }
     emit mediaInfoChanged();
+
+    QString mediaUri = logicalMediaUri(currentMediaUri(m_mpv));
+    {
+        std::lock_guard lock(m_uriMutex);
+        if (mediaUri.isEmpty())
+            mediaUri = m_eventMediaUri;
+        if (mediaUri.isEmpty())
+            mediaUri = m_lastRequestedUri;
+    }
+    if (summary.kind != MediaKind::Unknown
+        && !mediaUri.isEmpty()) {
+        emit mediaKindChanged(summary.kind, mediaUri);
+    }
 }
 
 bool MpvCore::start()
@@ -647,8 +702,6 @@ void MpvCore::shutdown()
     if (m_thread.joinable())
         m_thread.join();
 
-    cancelPlaylistProbe();
-    cancelImagePayloadProbe();
     m_wrappedTsProxy.reset();
     clearTemporaryArtwork();
     if (m_mpv) {
@@ -663,13 +716,21 @@ void MpvCore::shutdown()
 void MpvCore::eventLoop()
 {
     while (true) {
-        // -1 表示"一直等到有事发生"。不轮询，所以事件是零延迟的；
-        // 代价是退出时要靠 mpv_wakeup 把它叫醒。
-        mpv_event *event = mpv_wait_event(m_mpv, -1.0);
+        // A short timeout lets repeated demuxer warnings be collapsed into a
+        // bounded start/end/count log burst instead of flooding the Ui log.
+        mpv_event *event = mpv_wait_event(m_mpv, 0.25);
 
         if (!event || event->event_id == MPV_EVENT_NONE) {
-            if (m_stopRequested.load())
+            if (m_stopRequested.load()) {
+                finishPacketCorruptBurst();
                 break;
+            }
+            if (m_packetCorruptBurstActive
+                && std::chrono::steady_clock::now()
+                    - m_packetCorruptLast
+                    >= std::chrono::seconds(1)) {
+                finishPacketCorruptBurst();
+            }
             continue;
         }
 
@@ -750,7 +811,7 @@ void MpvCore::eventLoop()
                 break;
             }
             case IdTrackList:
-                refreshMediaInfoSnapshot();
+                publishMediaSummary();
                 break;
             default:
                 break;
@@ -784,7 +845,21 @@ void MpvCore::eventLoop()
             }
 
             m_loadFailed = false;
-            emit ready();
+            emit ready(m_activeLoadGeneration.load());
+            if (m_imageSequenceActive.load()) {
+                const std::uint64_t imageGeneration =
+                    m_imageSequenceLoadGeneration.load();
+                QMetaObject::invokeMethod(
+                    m_imageSequence.get(),
+                    [this, imageGeneration] {
+                        if (m_imageSequenceActive.load()
+                            && imageGeneration
+                                == m_imageSequenceLoadGeneration.load()) {
+                            m_imageSequence->markLoaded();
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }
 
             QString loadedMediaUri =
                 logicalMediaUri(currentMediaUri(m_mpv));
@@ -798,21 +873,7 @@ void MpvCore::eventLoop()
                     loadedMediaUri = m_lastRequestedUri;
             }
 
-            MediaSummary summary =
-                mediaSummaryFromMpv(m_mpv, m_durationSec.load());
-            if (m_imageSequenceActive.load())
-                summary.info.insert(
-                    QStringLiteral("duration_seconds"),
-                    m_durationSec.load());
-            {
-                std::lock_guard lock(m_mediaInfoMutex);
-                m_mediaInfo = summary.info;
-            }
-            emit mediaInfoChanged();
-            if (summary.kind != MediaKind::Unknown
-                && !loadedMediaUri.isEmpty()) {
-                emit mediaKindChanged(summary.kind, loadedMediaUri);
-            }
+            publishMediaSummary();
 
             QString artwork = albumArtFileFromTracks(m_mpv);
             QString artworkMediaUri = loadedMediaUri;
@@ -869,6 +930,9 @@ void MpvCore::eventLoop()
         }
 
         case MPV_EVENT_START_FILE: {
+            finishPacketCorruptBurst();
+            m_activeLoadGeneration.store(
+                m_pendingLoadGeneration.load());
             const QString startingUri =
                 logicalMediaUri(currentMediaUri(m_mpv));
             {
@@ -880,28 +944,58 @@ void MpvCore::eventLoop()
         }
 
         case MPV_EVENT_END_FILE: {
+            finishPacketCorruptBurst();
             auto *endFile = static_cast<mpv_event_end_file *>(event->data);
             if (endFile && endFile->error < 0) {
                 m_loadFailed = true;
-                emit logMessage(QStringLiteral("播放失败：") + mpvError(endFile->error));
-            }
-            if (m_imageSequenceActive.load()
-                && (!endFile || endFile->error >= 0)) {
+                const QString reason =
+                    QStringLiteral("播放失败：") + mpvError(endFile->error);
+                emit logMessage(reason);
+                if (m_imageSequenceActive.exchange(false)) {
+                    ++m_imageSequenceLoadGeneration;
+                    QMetaObject::invokeMethod(
+                        m_imageSequence.get(),
+                        [this] { m_imageSequence->reset(); },
+                        Qt::QueuedConnection);
+                }
+                emit loadFailed(
+                    m_activeLoadGeneration.load(), reason);
                 break;
             }
+            if (m_imageSequenceActive.load())
+                break;
             emit ended();
             break;
         }
 
         case MPV_EVENT_LOG_MESSAGE: {
             auto *msg = static_cast<mpv_event_log_message *>(event->data);
-            if (msg)
-                emit logMessage(QStringLiteral("mpv: ")
-                                + QString::fromUtf8(msg->text).trimmed());
+            if (msg) {
+                const QString text =
+                    QString::fromUtf8(msg->text).trimmed();
+                if (text.contains(
+                        QStringLiteral("Packet corrupt"),
+                        Qt::CaseInsensitive)) {
+                    if (!m_packetCorruptBurstActive) {
+                        m_packetCorruptBurstActive = true;
+                        m_packetCorruptCount = 0;
+                        emit logMessage(
+                            QStringLiteral(
+                                "mpv: Packet corrupt 连续错误开始"));
+                    }
+                    ++m_packetCorruptCount;
+                    m_packetCorruptLast =
+                        std::chrono::steady_clock::now();
+                } else {
+                    emit logMessage(
+                        QStringLiteral("mpv: ") + text);
+                }
+            }
             break;
         }
 
         case MPV_EVENT_SHUTDOWN:
+            finishPacketCorruptBurst();
             emit lost();
             break;
 
@@ -914,25 +1008,72 @@ void MpvCore::eventLoop()
     }
 }
 
-void MpvCore::load(const QString &uri)
+void MpvCore::finishPacketCorruptBurst()
 {
-    if (!m_mpv || uri.isEmpty())
+    if (!m_packetCorruptBurstActive)
+        return;
+    emit logMessage(
+        QStringLiteral("mpv: Packet corrupt 连续错误结束，共 %1 条")
+            .arg(m_packetCorruptCount));
+    m_packetCorruptBurstActive = false;
+    m_packetCorruptCount = 0;
+}
+
+void MpvCore::load(const MediaLoadRequest &request)
+{
+    if (!m_mpv || request.logicalUri.isEmpty())
         return;
     {
         std::lock_guard lock(m_uriMutex);
-        m_lastRequestedUri = uri;
+        m_lastRequestedUri = request.logicalUri;
     }
+    m_lastLoadRequest = request;
+    m_pendingLoadGeneration.store(request.loadGeneration);
     m_loadFailed = false;
 
     // 渲染面没就绪就先攒着 —— 现在发出去，mpv 会报
     // "No render context set" 然后放弃，而且不会再重试。详见头文件那段。
     if (!m_rendererAttached) {
-        m_pendingUri = uri;
+        m_pendingLoad = request;
         emit logMessage(QStringLiteral("渲染窗口还没准备好，这条先攒着，等窗口起来再放"));
         return;
     }
 
-    loadNow(uri);
+    activateLoad(request);
+}
+
+void MpvCore::activateLoad(const MediaLoadRequest &request)
+{
+    if (request.route == MediaLoadRoute::ImageSequence) {
+        loadImageSequencePlan(request);
+        return;
+    }
+    if (request.route == MediaLoadRoute::WrappedTransportStream) {
+        QVector<mcast::core::ImageSequenceSegment> segments;
+        segments.reserve(request.imageSequenceFrames.size());
+        for (const MediaLoadFrame &frame :
+             request.imageSequenceFrames) {
+            segments.push_back({
+                QUrl::fromEncoded(frame.uri.toUtf8()),
+                frame.durationSeconds,
+            });
+        }
+        if (segments.isEmpty()) {
+            const QString reason =
+                QStringLiteral("包装传输流计划没有分片");
+            emit logMessage(reason);
+            emit loadFailed(
+                m_pendingLoadGeneration.load(), reason);
+            return;
+        }
+        prepareRouteLoad(request.logicalUri);
+        emit logMessage(
+            QStringLiteral("收到协议指定的包装传输流计划：%1 段")
+                .arg(segments.size()));
+        loadWrappedTransportStream(segments, request.logicalUri);
+        return;
+    }
+    loadNow(request.logicalUri);
 }
 
 void MpvCore::notifyRenderUpdate()
@@ -959,19 +1100,64 @@ void MpvCore::setRendererAttached(bool attached)
     m_rendererAttached = true;
     emit rendererReady();
 
-    QString uri = m_pendingUri;
-    m_pendingUri.clear();
-    if (uri.isEmpty() && m_loadFailed.load()) {
-        std::lock_guard lock(m_uriMutex);
-        uri = m_lastRequestedUri;
+    std::optional<MediaLoadRequest> request = std::move(m_pendingLoad);
+    m_pendingLoad.reset();
+    if ((!request || request->logicalUri.isEmpty())
+        && m_loadFailed.load()
+        && m_lastLoadRequest) {
+        request = m_lastLoadRequest;
         m_loadFailed = false;
     }
-    if (uri.isEmpty())
+    if (!request || request->logicalUri.isEmpty())
         return;
 
     // 攒着的那条现在可以放了。这就是"先拉起界面、等渲染面就绪再投屏"那一步。
     emit logMessage(QStringLiteral("渲染窗口已就绪，把攒着的那条放出去"));
-    loadNow(uri);
+    activateLoad(*request);
+}
+
+bool MpvCore::loadImageSequencePlan(const MediaLoadRequest &request)
+{
+    QVector<mcast::core::ImageSequenceSegment> segments;
+    segments.reserve(request.imageSequenceFrames.size());
+    for (const MediaLoadFrame &frame : request.imageSequenceFrames) {
+        const QUrl uri = QUrl::fromEncoded(frame.uri.toUtf8());
+        segments.push_back({uri, frame.durationSeconds});
+    }
+
+    prepareRouteLoad(request.logicalUri);
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_activeImageListPath.clear();
+    }
+    emit positionChanged(0.0);
+    emit durationChanged(0.0);
+    emit logMessage(
+        QStringLiteral("收到协议指定的图片序列计划：%1 帧")
+            .arg(segments.size()));
+    return loadMfImageSequence(segments, request.logicalUri);
+}
+
+void MpvCore::prepareRouteLoad(const QString &logicalUri)
+{
+    m_playOnLoad.store(true);
+    m_wrappedTsProxy.reset();
+    clearTemporaryImageSequence();
+    resetImageTimeline();
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_lastRequestedUri = logicalUri;
+        m_activeMpvUri.clear();
+        m_eventMediaUri.clear();
+        m_artworkPending = false;
+        m_pendingArtworkUri.clear();
+        m_artworkRetryCount = 0;
+    }
+    {
+        std::lock_guard lock(m_mediaInfoMutex);
+        m_mediaInfo.clear();
+    }
+    emit mediaInfoChanged();
 }
 
 void MpvCore::loadNow(const QString &uri)
@@ -979,8 +1165,6 @@ void MpvCore::loadNow(const QString &uri)
     // 新的一条内容：加载好就该放。stop()/pause() 会把这一位按下去（见头文件），
     // 这里是把它扳回来 —— 不然"停止之后又投一条"就永远等不到自动播放了。
     m_playOnLoad.store(true);
-    cancelPlaylistProbe();
-    cancelImagePayloadProbe();
     m_wrappedTsProxy.reset();
     clearTemporaryImageSequence();
     resetImageTimeline();
@@ -1016,215 +1200,36 @@ void MpvCore::loadNow(const QString &uri)
 
 void MpvCore::beginLoad(const QString &uri)
 {
-    if (mcast::core::isHlsPlaylistUrl(QUrl(uri))) {
-        requestPlaylistProbe(uri);
-        return;
-    }
     loadMpvFile(uri, uri);
 }
 
-void MpvCore::requestPlaylistProbe(const QString &uri)
-{
-    const quint64 requestId = ++m_playlistRequest;
-    QNetworkRequest request{QUrl(uri)};
-    request.setAttribute(
-        QNetworkRequest::RedirectPolicyAttribute,
-        QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setTransferTimeout(15000);
-    m_playlistReply = m_network->get(request);
-    QNetworkReply *reply = m_playlistReply;
-    connect(reply, &QObject::destroyed, this, [this, reply] {
-        if (m_playlistReply == reply)
-            m_playlistReply = nullptr;
-    });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, requestId] {
-        if (m_playlistReply == reply)
-            m_playlistReply = nullptr;
-        reply->deleteLater();
-
-        QString requestedUri;
-        {
-            std::lock_guard lock(m_uriMutex);
-            requestedUri = m_lastRequestedUri;
-        }
-        if (requestId != m_playlistRequest || requestedUri.isEmpty())
-            return;
-
-        const QByteArray body = reply->readAll();
-        const bool successful =
-            reply->error() == QNetworkReply::NoError
-            && reply->attribute(
-                   QNetworkRequest::HttpStatusCodeAttribute)
-                    .toInt()
-                == 200
-            && body.size() <= 8 * 1024 * 1024;
-        if (successful
-            && loadImageSequence(body, reply->url(), requestedUri)) {
-            return;
-        }
-
-        if (successful) {
-            const auto parsed = mcast::core::parseImageSequencePlaylist(
-                QString::fromUtf8(body), reply->url());
-            if (!parsed.error.isEmpty()) {
-                emit logMessage(
-                    QStringLiteral("HLS 图片序列探测未命中：")
-                    + parsed.error + QStringLiteral("；按普通 HLS 播放"));
-            }
-        } else {
-            emit logMessage(
-                QStringLiteral("HLS 播放列表探测失败：")
-                + reply->errorString()
-                + QStringLiteral("；按普通 HLS 播放"));
-        }
-        loadMpvFile(requestedUri, requestedUri);
-    });
-}
-
-bool MpvCore::loadImageSequence(
-    const QByteArray &playlist, const QUrl &playlistUrl,
-    const QString &logicalUri)
-{
-    const auto parsed = mcast::core::parseImageSequencePlaylist(
-        QString::fromUtf8(playlist), playlistUrl);
-    if (!parsed.isValid())
-        return false;
-
-    cancelImagePayloadProbe();
-    m_imageProbeSegments = parsed.segments;
-    m_imageProbeLogicalUri = logicalUri;
-    m_imageProbeWrapped = true;
-    startImagePayloadProbe();
-    return true;
-}
-
-void MpvCore::startImagePayloadProbe()
-{
-    emit logMessage(
-        QStringLiteral("HLS 分片格式探测：")
-        + QString::number(m_imageProbeSegments.size()));
-    probeNextImagePayload();
-}
-
-void MpvCore::probeNextImagePayload()
-{
-    if (m_imageProbeSegments.isEmpty() || m_imageProbeReply)
-        return;
-    const quint64 generation = m_imageProbeGeneration;
-    QNetworkRequest request(m_imageProbeSegments.front().uri);
-    request.setAttribute(
-        QNetworkRequest::RedirectPolicyAttribute,
-        QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("Range", "bytes=0-4095");
-    request.setTransferTimeout(15000);
-    QNetworkReply *reply = m_network->get(request);
-    m_imageProbeReply = reply;
-    connect(
-        reply, &QNetworkReply::finished, this,
-        [this, reply, generation] {
-            if (m_imageProbeReply == reply)
-                m_imageProbeReply = nullptr;
-            reply->deleteLater();
-            if (generation != m_imageProbeGeneration)
-                return;
-
-            const int status =
-                reply->attribute(
-                    QNetworkRequest::HttpStatusCodeAttribute)
-                    .toInt();
-            const QByteArray body = reply->readAll();
-            const auto offset =
-                reply->error() == QNetworkReply::NoError
-                    && (status == 200 || status == 206)
-                ? mcast::core::wrappedTransportStreamOffset(body)
-                : std::nullopt;
-            if (!offset) {
-                m_imageProbeWrapped = false;
-            }
-            finishImagePayloadProbe();
-        });
-}
-
-void MpvCore::finishImagePayloadProbe()
-{
-    emit logMessage(
-        m_imageProbeWrapped
-            ? QStringLiteral("图片分片探测结论：PNG+TS")
-            : QStringLiteral("图片分片探测结论：纯图片"));
-    const auto segments = m_imageProbeSegments;
-    const QString logicalUri = m_imageProbeLogicalUri;
-    if (m_imageProbeWrapped) {
-        loadWrappedTransportStream(segments, logicalUri);
-    } else {
-        loadMfImageSequence(segments, logicalUri);
-    }
-    m_imageProbeSegments.clear();
-    m_imageProbeLogicalUri.clear();
-}
-
-void MpvCore::cancelImagePayloadProbe()
-{
-    ++m_imageProbeGeneration;
-    if (QNetworkReply *reply = m_imageProbeReply) {
-        m_imageProbeReply = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        reply->abort();
-        reply->deleteLater();
-    }
-    m_imageProbeSegments.clear();
-    m_imageProbeLogicalUri.clear();
-    m_imageProbeWrapped = true;
-}
-
-void MpvCore::loadMfImageSequence(
+bool MpvCore::loadMfImageSequence(
     const QVector<mcast::core::ImageSequenceSegment> &segments,
     const QString &logicalUri)
 {
-    QDir directory(imageSequenceDirectory());
-    if (!directory.exists() && !directory.mkpath(QStringLiteral("."))) {
-        emit logMessage(
-            QStringLiteral("无法创建图片序列缓存目录"));
-        return;
-    }
-    const QString path = directory.filePath(
-        QStringLiteral("sequence-")
-        + QUuid::createUuid().toString(QUuid::WithoutBraces)
-        + QStringLiteral(".txt"));
-    QSaveFile file(path);
-    const QByteArray imageList =
-        mcast::core::buildMfImageList(segments);
-    if (!file.open(QIODevice::WriteOnly)
-        || file.write(imageList) != imageList.size()
-        || !file.commit()) {
-        emit logMessage(
-            QStringLiteral("无法写入图片序列清单：") + path);
-        return;
-    }
-
-    double totalDuration = 0.0;
-    for (const auto &segment : segments)
-        totalDuration += std::clamp(segment.durationSeconds, 0.05, 3600.0);
-    const double fps = std::clamp(
-        static_cast<double>(segments.size())
-            / qMax(totalDuration, 0.05),
-        0.01, 60.0);
-    {
-        std::lock_guard lock(m_uriMutex);
-        m_imageSegments = segments;
-        m_imageFps = fps;
-    }
-    const QByteArray fpsText = QByteArray::number(fps, 'f', 6);
-    mpv_set_property_string(m_mpv, "mf-fps", fpsText.constData());
-
-    emit logMessage(
-        QStringLiteral("检测到图片序列 HLS，已接入 ")
-        + QString::number(segments.size())
-        + QStringLiteral(" 帧"));
-    const QString mfUri =
-        QStringLiteral("mf://@") + QDir::toNativeSeparators(path);
-    loadMpvFile(
-        mfUri, logicalUri, path);
-    startImageTimeline();
+    ++m_imageSequenceLoadGeneration;
+    // Set this before loadfile reaches MPV. A very fast image load can publish
+    // duration/time-pos events before start() returns; those values belong to
+    // MPV's one-frame image model and must never overwrite the virtual timeline.
+    m_imageSequenceActive.store(true);
+    const bool started = m_imageSequence->start(
+        segments,
+        [this, logicalUri](
+            const QString &mfUri, const QString &,
+            double fps, bool play) {
+            const QByteArray fpsText =
+                QByteArray::number(fps, 'f', 6);
+            mpv_set_property_string(
+                m_mpv, "mf-fps", fpsText.constData());
+            m_playOnLoad.store(play);
+            loadMpvFile(
+                mfUri, logicalUri, QString(), true);
+            return true;
+        });
+    m_imageSequenceActive.store(started);
+    if (!started)
+        m_loadFailed.store(true);
+    return started;
 }
 
 void MpvCore::loadWrappedTransportStream(
@@ -1237,9 +1242,11 @@ void MpvCore::loadWrappedTransportStream(
         this, &MpvCore::logMessage);
     QString proxyError;
     if (!m_wrappedTsProxy->start(segments, proxyError)) {
-        emit logMessage(
-            QStringLiteral("无法启动本地媒体代理：")
-            + proxyError);
+        const QString reason =
+            QStringLiteral("无法启动本地媒体代理：") + proxyError;
+        emit logMessage(reason);
+        emit loadFailed(
+            m_pendingLoadGeneration.load(), reason);
         return;
     }
 
@@ -1270,19 +1277,7 @@ void MpvCore::loadMpvFile(
         "loadfile", path.constData(), "replace", nullptr};
     mpv_command(m_mpv, command);
     if (emitStarted)
-        emit loadStarted();
-}
-
-void MpvCore::cancelPlaylistProbe()
-{
-    ++m_playlistRequest;
-    if (!m_playlistReply)
-        return;
-    QNetworkReply *reply = m_playlistReply;
-    m_playlistReply = nullptr;
-    disconnect(reply, nullptr, this, nullptr);
-    reply->abort();
-    reply->deleteLater();
+        emit loadStarted(m_pendingLoadGeneration.load());
 }
 
 void MpvCore::clearTemporaryImageSequence()
@@ -1309,167 +1304,10 @@ QString MpvCore::logicalMediaUri(const QString &mpvUri) const
 
 void MpvCore::resetImageTimeline()
 {
-    m_imageTimer->stop();
+    ++m_imageSequenceLoadGeneration;
+    m_imageSequence->reset();
     m_imageSequenceActive.store(false);
-    m_imageSequencePaused.store(false);
-    m_imageBaseMs = 0;
-    {
-        std::lock_guard lock(m_uriMutex);
-        m_imageSegments.clear();
-    }
-}
-
-void MpvCore::startImageTimeline()
-{
-    QVector<mcast::core::ImageSequenceSegment> segments;
-    {
-        std::lock_guard lock(m_uriMutex);
-        segments = m_imageSegments;
-    }
-    if (segments.isEmpty())
-        return;
-
-    double duration = 0.0;
-    for (const auto &segment : segments)
-        duration += std::clamp(segment.durationSeconds, 0.05, 3600.0);
-    m_imageSequenceActive.store(true);
-    m_imageSequencePaused.store(false);
     m_eofReached.store(false);
-    m_imageBaseMs = 0;
-    m_positionSec.store(0.0);
-    m_durationSec.store(duration);
-    m_imageClockStart = std::chrono::steady_clock::now();
-    m_imageTimer->start();
-    emit positionChanged(0.0);
-    emit durationChanged(duration);
-}
-
-void MpvCore::tickImageTimeline()
-{
-    if (!m_imageSequenceActive.load()
-        || m_imageSequencePaused.load()
-        || (m_eofReached.load()
-            && m_positionSec.load() >= m_durationSec.load())) {
-        return;
-    }
-
-    const double duration = m_durationSec.load();
-    if (!std::isfinite(duration)
-        || duration < 0.0 || duration > 1.0e9) {
-        return;
-    }
-    if (m_imageClockStart
-            == std::chrono::steady_clock::time_point{}
-        || m_imageBaseMs < 0
-        || m_imageBaseMs > 24LL * 60 * 60 * 1000) {
-        m_imageClockStart = std::chrono::steady_clock::now();
-        return;
-    }
-    const auto elapsedMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - m_imageClockStart)
-            .count();
-    if (elapsedMs < 0
-        || elapsedMs > 24LL * 60 * 60 * 1000) {
-        m_imageClockStart = std::chrono::steady_clock::now();
-        return;
-    }
-    const double position = qMin(
-        duration,
-        m_imageBaseMs / 1000.0 + elapsedMs / 1000.0);
-    if (!std::isfinite(position))
-        return;
-    m_positionSec.store(position);
-    emit positionChanged(position);
-    if (duration > 0.0 && position >= duration) {
-        m_imageTimer->stop();
-        m_eofReached.store(true);
-        emit ended();
-    }
-}
-
-void MpvCore::seekImageTimeline(double seconds)
-{
-    if (!m_imageSequenceActive.load())
-        return;
-    reloadImageTimeline(qBound(0.0, seconds, m_durationSec.load()));
-}
-
-void MpvCore::reloadImageTimeline(double seconds)
-{
-    QVector<mcast::core::ImageSequenceSegment> segments;
-    double imageFps = 1.0;
-    QString logicalUri;
-    {
-        std::lock_guard lock(m_uriMutex);
-        segments = m_imageSegments;
-        imageFps = m_imageFps;
-        logicalUri = m_lastRequestedUri;
-    }
-    if (segments.isEmpty())
-        return;
-
-    double cursor = 0.0;
-    qsizetype firstSegment = 0;
-    double timelinePosition = 0.0;
-    for (qsizetype index = 0; index < segments.size(); ++index) {
-        const double segmentDuration =
-            std::clamp(segments[index].durationSeconds, 0.05, 3600.0);
-        if (seconds < cursor + segmentDuration) {
-            firstSegment = index;
-            timelinePosition = cursor;
-            break;
-        }
-        cursor += segmentDuration;
-        firstSegment = index + 1;
-        timelinePosition = cursor;
-    }
-    firstSegment = qBound<qsizetype>(0, firstSegment, segments.size() - 1);
-    if (seconds >= m_durationSec.load()) {
-        firstSegment = segments.size() - 1;
-        timelinePosition = m_durationSec.load()
-            - std::clamp(
-                segments.back().durationSeconds, 0.05, 3600.0);
-    }
-
-    QDir directory(imageSequenceDirectory());
-    if (!directory.exists())
-        directory.mkpath(QStringLiteral("."));
-    const QString path = directory.filePath(
-        QStringLiteral("sequence-")
-        + QUuid::createUuid().toString(QUuid::WithoutBraces)
-        + QStringLiteral(".txt"));
-    QSaveFile file(path);
-    const QByteArray imageList =
-        mcast::core::buildMfImageList(segments, firstSegment);
-    if (!file.open(QIODevice::WriteOnly)
-        || file.write(imageList) != imageList.size()
-        || !file.commit()) {
-        emit logMessage(
-            QStringLiteral("无法重新生成图片序列清单"));
-        return;
-    }
-
-    const QByteArray fpsText = QByteArray::number(imageFps, 'f', 6);
-    mpv_set_property_string(m_mpv, "mf-fps", fpsText.constData());
-    m_playOnLoad.store(!m_imageSequencePaused.load());
-    QString oldListPath;
-    {
-        std::lock_guard lock(m_uriMutex);
-        oldListPath = m_activeImageListPath;
-    }
-    loadMpvFile(
-        QStringLiteral("mf://@") + QDir::toNativeSeparators(path),
-        logicalUri, path, false);
-    if (!oldListPath.isEmpty() && oldListPath != path)
-        QFile::remove(oldListPath);
-    m_imageBaseMs = qRound64(timelinePosition * 1000.0);
-    m_positionSec.store(timelinePosition);
-    m_eofReached.store(false);
-    m_imageClockStart = std::chrono::steady_clock::now();
-    emit positionChanged(timelinePosition);
-    if (!m_imageSequencePaused.load())
-        m_imageTimer->start();
 }
 
 void MpvCore::play()
@@ -1477,16 +1315,8 @@ void MpvCore::play()
     if (!m_mpv)
         return;
 
-    if (m_imageSequenceActive.load()) {
-        if (m_positionSec.load() >= m_durationSec.load()
-            && m_durationSec.load() > 0.0) {
-            reloadImageTimeline(0.0);
-        }
-        m_imageSequencePaused.store(false);
-        m_imageBaseMs = qRound64(m_positionSec.load() * 1000.0);
-        m_imageClockStart = std::chrono::steady_clock::now();
-        m_imageTimer->start();
-    }
+    if (m_imageSequenceActive.load())
+        m_imageSequence->play();
 
     // **播完了再按播放，就是"从头再放一遍"。**
     //
@@ -1513,12 +1343,8 @@ void MpvCore::pause()
     if (!m_mpv)
         return;
 
-    if (m_imageSequenceActive.load()) {
-        tickImageTimeline();
-        m_imageBaseMs = qRound64(m_positionSec.load() * 1000.0);
-        m_imageSequencePaused.store(true);
-        m_imageTimer->stop();
-    }
+    if (m_imageSequenceActive.load())
+        m_imageSequence->pause();
 
     // 同上，反着来：加载还没结束就按了暂停，那加载好也别自己开播。
     m_playOnLoad.store(false);
@@ -1532,13 +1358,8 @@ void MpvCore::stop()
     if (!m_mpv)
         return;
 
-    if (m_imageSequenceActive.load()) {
-        m_imageSequencePaused.store(true);
-        m_imageTimer->stop();
-        reloadImageTimeline(0.0);
-        m_positionSec.store(0.0);
-        emit positionChanged(0.0);
-    }
+    if (m_imageSequenceActive.load())
+        m_imageSequence->stop();
 
     // **加载期间就被喊停**的话，这一句是关键：文件还是会加载完，但加载好那一声
     // 不会再把它放开（见 MPV_EVENT_FILE_LOADED 那段）。
@@ -1565,9 +1386,8 @@ void MpvCore::unload()
         return;
 
     m_playOnLoad.store(false);
-    m_pendingUri.clear();
-    cancelPlaylistProbe();
-    cancelImagePayloadProbe();
+    m_pendingLoad.reset();
+    m_lastLoadRequest.reset();
     m_wrappedTsProxy.reset();
     clearTemporaryImageSequence();
     resetImageTimeline();
@@ -1597,7 +1417,7 @@ void MpvCore::seekTo(double seconds)
     if (!m_mpv)
         return;
     if (m_imageSequenceActive.load()) {
-        seekImageTimeline(seconds);
+        m_imageSequence->seek(seconds);
         return;
     }
     const QByteArray target = QByteArray::number(seconds, 'f', 3);

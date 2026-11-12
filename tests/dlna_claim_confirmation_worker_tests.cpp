@@ -185,8 +185,8 @@ struct Harness {
                       std::lock_guard lock(stateMutex);
                       executions.push_back(execution);
                   },
-                  [] {},
-                  [] {},
+                  [](std::optional<std::uint64_t>) {},
+                  [](const PeerIdentity &, std::optional<std::uint64_t>) {},
                   {},
                   {},
               })

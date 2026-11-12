@@ -4,11 +4,24 @@
 #include "platform/MediaControls.h"
 
 #include "core/PlaybackController.h"
+#include "core/ProductIdentity.h"
 #include "platform/windows/WindowsMediaControls.h"
 
+#include <QCoreApplication>
 #include <QWidget>
 
 namespace {
+
+QString appShortName()
+{
+    const QString translated = QCoreApplication::translate(
+        "WindowsMediaControlsService", "term_app_short");
+    if (translated != QStringLiteral("term_app_short"))
+        return translated;
+    return QString::fromLatin1(
+        mcast::identity::appShortEnglish.data(),
+        static_cast<int>(mcast::identity::appShortEnglish.size()));
+}
 
 class WindowsMediaControlsService final : public MediaControls
 {
@@ -30,7 +43,7 @@ public:
 
         m_logSink = logSink;
         m_hostWindow = std::make_unique<QWidget>();
-        m_hostWindow->setWindowTitle(QStringLiteral("Media Cast"));
+        m_hostWindow->setWindowTitle(appShortName());
         m_hostWindow->setWindowFlags(Qt::Tool);
         m_hostWindow->resize(1, 1);
         m_hostWindow->show();

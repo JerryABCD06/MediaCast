@@ -260,10 +260,19 @@ void testSameAddressDifferentControlIsNotOwner()
         CastTime{0});
     check(coordinator.sessionReady(*first.claimedSessionId),
           "control identity test owner ready");
+    check(!adapter.ownsPeer(control("app-b", "192.0.2.10")),
+          "different control identity is not the media owner");
+    check(adapter.canControl(control("app-b", "192.0.2.10")),
+          "control from the owner address may operate the current session");
+    check(
+        adapter.requestPlay(
+            control("app-b", "192.0.2.10"), CastTime{1}).disposition
+            == DlnaClaimDisposition::Execute,
+        "split control traffic on the owner address can play");
 
     const auto other = adapter.beginMedia(
         control("app-b", "192.0.2.10"), media("http://b/two.mp4"),
-        CastTime{1});
+        CastTime{2});
     check(other.disposition == DlnaClaimDisposition::Pending
               && other.confirmation,
           "same IP with another control identity requires confirmation");

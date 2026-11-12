@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -78,7 +79,15 @@ class DlnaSession
 {
 public:
     static constexpr SessionTime kPeerGrace{60000};
-    static constexpr SessionTime kOpenTimeout{10000};
+    // Control points commonly use AVTransport Stop as their de-facto leave
+    // signal. Give a normal Stop -> SetAVTransportURI switch enough time to
+    // arrive before treating the control point as gone.
+    static constexpr SessionTime kStopIdleGrace{8000};
+    static constexpr SessionTime kStopBoundarySettle{250};
+    // Includes Protocol-side compatibility planning before the Ui command can
+    // even be submitted. Ui still has its own 10-second load watchdog after
+    // MPV reports that loading actually started.
+    static constexpr SessionTime kOpenTimeout{20000};
 
     DlnaSession(PlaybackGateway &playback, DlnaSessionCallbacks callbacks);
     ~DlnaSession();
@@ -92,24 +101,36 @@ public:
 
     void setSubscriptionCount(
         std::size_t count, SubscriptionChangeReason reason, SessionTime now);
-    void peerActivity(SessionTime now);
+    void peerActivity(
+        SessionTime now, std::string_view clientAddress = {});
+    void transportStopped(
+        SessionTime now, std::string_view clientAddress = {});
     void observeHttpClient(
         const std::string &name, const std::string &address);
-    void newMediaRequested(SessionTime now);
+    void newMediaRequested(
+        SessionTime now, std::string clientName = {},
+        std::string clientAddress = {});
     void tick(SessionTime now);
 
     PlaybackCommandSubmission openMedia(
         const MediaRequest &request, SessionTime now,
         bool clearPlaylist = false);
-    PlaybackCommandSubmission submit(PlaybackCommand command);
+    PlaybackCommandSubmission submit(
+        PlaybackCommand command,
+        std::optional<std::uint64_t> expectedOwnerEpoch =
+            std::nullopt);
     DlnaCommandResult submitAndWait(
         PlaybackCommand command,
-        SessionTime timeout = SessionTime{5000});
+        SessionTime timeout = SessionTime{5000},
+        std::optional<std::uint64_t> expectedOwnerEpoch =
+            std::nullopt);
     PlaybackCommandSubmission endSession(SessionTime now);
+    void abandonEndingSession();
     void resetForRestart();
 
     void handlePlaybackEvent(const PlaybackEvent &event);
     bool transportTransitionPending() const;
+    std::uint64_t protocolEpoch() const;
     DlnaSessionSnapshot snapshot() const;
 
 private:
@@ -139,12 +160,15 @@ private:
     void queuePeerConnected(bool connected, Lock &lock);
     void startPeerGrace(SessionTime now, Lock &lock);
     void cancelPeerGrace();
+    void cancelStopIdleGrace();
     PlaybackCommandSubmission submitLocked(
         PlaybackCommand command,
         Lock &lock,
         bool allowDefer = true,
         std::optional<std::uint64_t> requiredOpenToken = std::nullopt,
-        std::uint64_t *awaitedCommandId = nullptr);
+        std::uint64_t *awaitedCommandId = nullptr,
+        std::optional<std::uint64_t> expectedOwnerEpoch =
+            std::nullopt);
     void flushDeferredCommands(Lock &lock);
     void clearDeferredCommands();
     PlaybackCommandSubmission requestEnd(
@@ -158,6 +182,7 @@ private:
     void syncProtocolPlayback(const PlaybackSnapshot &playback);
     void consumeEarlyCommand(std::uint64_t commandId, Lock &lock);
     void publishCastSession(Lock &lock);
+    bool isCurrentOwner(std::string_view clientAddress) const noexcept;
 
     PlaybackGateway &m_playback;
     mutable std::recursive_mutex m_mutex;
@@ -168,11 +193,17 @@ private:
     bool m_peerConnected = false;
     bool m_queuePeerDisconnect = false;
     bool m_disconnectedByUs = false;
+    bool m_reconnectAfterEnd = false;
+    bool m_subscriptionEnded = false;
+    std::string m_reconnectClientName;
+    std::string m_reconnectClientAddress;
     std::string m_clientName;
     std::string m_clientAddress;
     playback::CastSessionInfo m_lastPublishedCastSession;
     std::size_t m_subscriptionCount = 0;
     std::optional<SessionTime> m_peerGraceDeadline;
+    std::optional<SessionTime> m_stopIdleDeadline;
+    bool m_stopIdleSettling = false;
     std::uint64_t m_playbackListener = 0;
     std::optional<EndOperation> m_endOperation;
     std::uint64_t m_endToken = 0;

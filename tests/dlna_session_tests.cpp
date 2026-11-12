@@ -361,6 +361,277 @@ void testCastSessionInfoTracksRegistration()
           "control point removal clears the session");
 }
 
+void testExplicitUnsubscribeEndsCastMedia()
+{
+    FakePlaybackGateway playback;
+    int goingAway = 0;
+    DlnaSession session(playback, {
+        {},
+        {},
+        {},
+        [&] { ++goingAway; },
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{0});
+    session.newMediaRequested(SessionTime{0});
+    MediaRequest media;
+    media.uri = "http://example.test/unsubscribe.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "explicit-unsubscribe test opens media");
+    playback.processAll();
+    playback.markReady();
+    check(playback.snapshot().state == PlaybackState::Playing,
+          "explicit-unsubscribe test is playing before removal");
+
+    session.setSubscriptionCount(
+        0, SubscriptionChangeReason::ExplicitRemoval,
+        SessionTime{100});
+    playback.processAll();
+    const auto snapshot = session.snapshot();
+    check(!snapshot.peerConnected
+              && snapshot.playback.state == PlaybackState::NoMedia
+              && !snapshot.ending && goingAway == 1,
+          "explicit unsubscribe ends and unloads the cast session");
+    session.peerActivity(SessionTime{150}, "192.168.10.3");
+    check(!session.snapshot().peerConnected,
+          "a polling query cannot revive an explicit subscription teardown");
+
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{200});
+    check(session.snapshot().peerConnected,
+          "a new subscription can reconnect after explicit removal");
+}
+
+void testSubscriptionDuringEndReconnectsAfterCleanup()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    session.observeHttpClient(
+        "Xiaohongshu", "192.168.10.3");
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{0});
+    session.newMediaRequested(SessionTime{0});
+    MediaRequest media;
+    media.uri = "http://example.test/resubscribe-during-end.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "resubscribe-during-end test opens media");
+    playback.processAll();
+    playback.markReady();
+
+    session.setSubscriptionCount(
+        0, SubscriptionChangeReason::ExplicitRemoval,
+        SessionTime{100});
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{101});
+    session.peerActivity(SessionTime{102}, "192.168.10.3");
+    playback.processAll();
+
+    const auto snapshot = session.snapshot();
+    check(snapshot.subscriptionCount == 1
+              && snapshot.peerConnected
+              && snapshot.playback.state == PlaybackState::NoMedia
+              && snapshot.castSession.controlPointName == "Xiaohongshu"
+              && snapshot.castSession.controlPointAddress == "192.168.10.3",
+          "a subscription added during teardown reconnects the clean idle session");
+    session.peerActivity(SessionTime{103});
+    check(session.snapshot().peerConnected,
+          "the reconnected subscription keeps its peer session");
+}
+
+void testStopIdleGraceEndsSession()
+{
+    FakePlaybackGateway playback;
+    int goingAway = 0;
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        [&] { ++goingAway; },
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "stop-idle test starts network");
+    MediaRequest media;
+    media.uri = "http://example.test/stop-idle.mp4";
+    session.newMediaRequested(SessionTime{0});
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "stop-idle test opens media");
+    playback.processAll();
+    playback.markReady();
+
+    session.transportStopped(SessionTime{100});
+    session.tick(SessionTime{8099});
+    check(session.snapshot().peerConnected,
+          "stop-idle grace does not disconnect early");
+    session.peerActivity(SessionTime{8200});
+    session.tick(SessionTime{9000});
+    check(session.snapshot().peerConnected,
+          "follow-up control traffic cancels stop-idle grace");
+
+    session.transportStopped(SessionTime{10000});
+    session.tick(SessionTime{18000});
+    check(session.snapshot().peerConnected,
+          "Stop boundary leaves a short slot for an arriving new URI");
+    session.tick(SessionTime{18250});
+    playback.processAll();
+    const auto snapshot = session.snapshot();
+    check(!snapshot.peerConnected
+              && snapshot.playback.state == PlaybackState::NoMedia
+              && goingAway == 1,
+          "idle Stop ends the session and clears media");
+}
+
+void testNewMediaWinsAtStopBoundary()
+{
+    FakePlaybackGateway playback;
+    int goingAway = 0;
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        [&] { ++goingAway; },
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "Stop-boundary media test starts");
+    MediaRequest first;
+    first.uri = "http://example.test/boundary-first.mp4";
+    session.newMediaRequested(
+        SessionTime{0}, "Owner", "192.168.10.3");
+    check(session.openMedia(first, SessionTime{0}).queued,
+          "Stop-boundary test opens first media");
+    playback.processAll();
+    playback.markReady();
+    session.transportStopped(SessionTime{100}, "192.168.10.3");
+    session.tick(SessionTime{8100});
+    check(session.snapshot().peerConnected,
+          "Stop boundary is settling, not closed");
+
+    MediaRequest replacement;
+    replacement.uri = "http://example.test/boundary-next.mp4";
+    session.newMediaRequested(
+        SessionTime{8150}, "Owner", "192.168.10.3");
+    check(session.openMedia(replacement, SessionTime{8150}).queued,
+          "new media is accepted at the Stop boundary");
+    session.tick(SessionTime{9000});
+    playback.processAll();
+    const auto snapshot = session.snapshot();
+    check(snapshot.peerConnected && goingAway == 0,
+          "new media cancels the pending idle disconnect");
+}
+
+void testAbandonEndingSessionIsImmediate()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest media;
+    media.uri = "http://example.test/abandon-end.mp4";
+    session.newMediaRequested(
+        SessionTime{0}, "Owner", "192.168.10.3");
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "abandon test opens media");
+    playback.processAll();
+    playback.markReady();
+    check(session.endSession(SessionTime{100}).queued,
+          "abandon test queues session end");
+    session.abandonEndingSession();
+    const auto snapshot = session.snapshot();
+    check(!snapshot.ending && snapshot.disconnectedByUs
+              && !snapshot.peerConnected,
+          "deadline fallback can abandon a stuck EndSession immediately");
+}
+
+void testOwnerEpochRejectsLateControl()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest first;
+    first.uri = "http://example.test/epoch-first.mp4";
+    session.newMediaRequested(
+        SessionTime{0}, "Owner", "192.168.10.3");
+    check(session.openMedia(first, SessionTime{0}).queued,
+          "epoch test opens first media");
+    playback.processAll();
+    playback.markReady();
+    const std::uint64_t ownerEpoch = session.protocolEpoch();
+
+    MediaRequest second;
+    second.uri = "http://example.test/epoch-second.mp4";
+    session.newMediaRequested(
+        SessionTime{1}, "Owner", "192.168.10.3");
+    PlaybackCommand pause;
+    pause.type = PlaybackCommandType::Pause;
+    const auto stale = session.submit(pause, ownerEpoch);
+    check(!stale.queued
+              && stale.status == PlaybackSubmissionStatus::StaleGeneration,
+          "a control command cannot cross a completed media boundary");
+}
+
+void testStopIdleGraceBelongsToCurrentOwner()
+{
+    FakePlaybackGateway playback;
+    int goingAway = 0;
+    DlnaSession session(playback, {
+        {},
+        [] { return true; },
+        {},
+        [&] { ++goingAway; },
+        {},
+        {},
+        {},
+        {},
+        {},
+    });
+    check(session.start(), "owner-aware stop test starts");
+    session.observeHttpClient(
+        "Owner", "192.168.10.3");
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{0});
+    MediaRequest media;
+    media.uri = "http://example.test/owner-stop.mp4";
+    session.newMediaRequested(
+        SessionTime{0}, "Owner", "192.168.10.3");
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "owner-aware stop test opens media");
+    playback.processAll();
+    playback.markReady();
+
+    session.transportStopped(SessionTime{100}, "192.168.10.3");
+    // Neither another address nor a GENA subscription renewal is activity
+    // from the owner and therefore neither may extend the Stop deadline.
+    session.peerActivity(SessionTime{7200}, "192.168.10.99");
+    session.setSubscriptionCount(
+        2, SubscriptionChangeReason::Renewed, SessionTime{7300});
+    session.observeHttpClient(
+        "Intruder", "192.168.10.99");
+    session.tick(SessionTime{8200});
+    check(session.snapshot().peerConnected,
+          "Stop boundary settles before ending");
+    session.tick(SessionTime{8450});
+    playback.processAll();
+
+    const auto snapshot = session.snapshot();
+    check(!snapshot.peerConnected
+              && snapshot.playback.state == PlaybackState::NoMedia
+              && goingAway == 1,
+          "foreign traffic cannot keep the previous owner's Stop grace alive");
+    check(snapshot.castSession.controlPointAddress == "192.168.10.3"
+              || !snapshot.castSession.connected,
+          "foreign query traffic does not steal the active owner identity");
+}
+
 void testQueuedOpenPause()
 {
     FakePlaybackGateway playback;
@@ -670,6 +941,13 @@ int main()
     testNewMediaBoundaryDropsLateQueueAndShowsProtocolPrevious();
     testTimedOutSetNextCannotAppearLater();
     testCastSessionInfoTracksRegistration();
+    testExplicitUnsubscribeEndsCastMedia();
+    testSubscriptionDuringEndReconnectsAfterCleanup();
+    testStopIdleGraceEndsSession();
+    testNewMediaWinsAtStopBoundary();
+    testAbandonEndingSessionIsImmediate();
+    testOwnerEpochRejectsLateControl();
+    testStopIdleGraceBelongsToCurrentOwner();
     testQueuedOpenPause();
     testCallbacksRunOutsideLock();
     testOpenDeadlineClearsAfterSuccess();
@@ -762,10 +1040,14 @@ int main()
     check(!session.snapshot().peerConnected,
           "explicit unsubscribe disconnects immediately");
     playback.processAll();
+    snapshot = session.snapshot();
+    check(snapshot.playback.state == PlaybackState::NoMedia,
+          "explicit unsubscribe unloads the previous cast media");
 
     session.setSubscriptionCount(
         1, SubscriptionChangeReason::Added, SessionTime{400});
-    check(session.snapshot().peerConnected, "new subscription reconnects");
+    check(session.snapshot().peerConnected,
+          "new subscription reconnects after explicit unsubscribe");
     playback.processAll();
     session.setSubscriptionCount(
         0, SubscriptionChangeReason::Unreachable, SessionTime{1000});
@@ -797,7 +1079,7 @@ int main()
     playback.processAll();
     check(playback.snapshot().state == PlaybackState::NoMedia,
           "local end clears media");
-    check(goingAwayCalls == 1 && stopCalls == 0,
+    check(goingAwayCalls == 3 && stopCalls == 0,
           "local end announces byebye without stopping network");
 
     session.peerActivity(SessionTime{64000});
@@ -816,7 +1098,7 @@ int main()
     snapshot = session.snapshot();
     check(snapshot.accepting && snapshot.running,
           "network stays up until pause is confirmed");
-    check(goingAwayCalls == 1 && stopCalls == 0,
+    check(goingAwayCalls == 3 && stopCalls == 0,
           "pause waits for playback completion");
     const int uiRequestsBeforeBlockedOpen = uiRequests;
     const auto blockedOpen =
@@ -836,7 +1118,7 @@ int main()
     check(!networkEnabled, "pause network callback");
     check(snapshot.disconnectedByUs && !snapshot.peerConnected,
           "pause disconnects peer");
-    check(goingAwayCalls == 2 && stopCalls == 1,
+    check(goingAwayCalls == 4 && stopCalls == 1,
           "byebye precedes network stop");
     check(goingAwayAfterNoMedia,
           "byebye happens after playback reaches NoMedia");
@@ -869,7 +1151,7 @@ int main()
     check(!playback.snapshot().hasNext
               && playback.snapshot().playMode == PlayMode::Normal,
           "NoMedia end clears residual queue and play mode");
-    check(goingAwayCalls == 3 && stopCalls == 1,
+    check(goingAwayCalls == 5 && stopCalls == 1,
           "NoMedia end announces without stopping network");
 
     playback.simulatePlayerLost();

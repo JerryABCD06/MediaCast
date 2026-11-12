@@ -157,8 +157,8 @@ int main()
                 || !connection->writeMessage(*reconnect, 2s, error))
                 throw std::runtime_error("reconnected: " + error);
             reconnect->header.messageId = 103;
-            reconnect->header.stateVersion = 2;
-            reconnected.stateVersion = 2;
+            reconnect->header.stateVersion = 1;
+            reconnected.stateVersion = 1;
             reconnect = wire::makePlaybackStateMessage(
                 mcast::ipc::MessageType::PlaybackReconnected,
                 103, reconnected, error);
@@ -186,6 +186,20 @@ int main()
             if (!resultMessage
                 || !connection->writeMessage(*resultMessage, 2s, error))
                 throw std::runtime_error("duplicate result: " + error);
+
+            PlaybackSnapshot secondState;
+            secondState.generation = 2;
+            secondState.stateVersion = 2;
+            secondState.playerAvailable = true;
+            secondState.state = PlaybackState::Preparing;
+            const auto secondStateMessage =
+                wire::makePlaybackStateMessage(
+                    mcast::ipc::MessageType::PlaybackStateDelta,
+                    104, secondState, error);
+            if (!secondStateMessage
+                || !connection->writeMessage(
+                    *secondStateMessage, 2s, error))
+                throw std::runtime_error("second state: " + error);
             std::this_thread::sleep_for(200ms);
 
             if (!connection->readMessage(commandMessage, 2s, error))
@@ -220,6 +234,14 @@ int main()
     PlaybackCommand early;
     early.type = PlaybackCommandType::Play;
     const auto beforeSnapshot = gateway.submit(early);
+    if (beforeSnapshot.queued
+        || beforeSnapshot.status
+            != PlaybackSubmissionStatus::WaitingForPlayer) {
+        std::cerr << "pre-snapshot status="
+                  << static_cast<int>(beforeSnapshot.status)
+                  << " error=" << beforeSnapshot.error
+                  << " connected=" << gateway.connected() << '\n';
+    }
     check(!beforeSnapshot.queued
               && beforeSnapshot.status
                   == PlaybackSubmissionStatus::WaitingForPlayer,
@@ -317,7 +339,14 @@ int main()
         });
     PlaybackCommand third;
     third.type = PlaybackCommandType::Pause;
-    check(gateway.submit(third).queued, "third command queues");
+    const auto thirdSubmission = gateway.submit(third);
+    if (!thirdSubmission.queued) {
+        std::cerr << "third submit status="
+                  << static_cast<int>(thirdSubmission.status)
+                  << " error=" << thirdSubmission.error
+                  << " connected=" << gateway.connected() << '\n';
+    }
+    check(thirdSubmission.queued, "third command queues");
     const bool timeoutArrived = events.waitFor([&](const auto &) {
         return callbackStarted.load();
     }, 10s);

@@ -69,6 +69,39 @@ int main()
     check(!decodeMediaRequest(trailing, decodedMedia, error),
           "media request trailing bytes rejected");
 
+    error.clear();
+    types::MediaRequest sequence = media();
+    sequence.route = types::MediaRoute::ImageSequence;
+    sequence.imageSequenceFrames = {
+        {"http://example.test/frame-1.png", 1.5},
+        {"http://example.test/frame-2.png", 2.0},
+    };
+    const auto sequenceBlob = encodeMediaRequest(sequence, error);
+    check(sequenceBlob.has_value(), "image sequence encodes");
+    types::MediaRequest decodedSequence;
+    if (!decodeMediaRequest(*sequenceBlob, decodedSequence, error)) {
+        std::cerr << "FAIL: image sequence decodes: "
+                  << error << '\n';
+        std::exit(1);
+    }
+    check(decodedSequence.route == types::MediaRoute::ImageSequence,
+          "image sequence route round trip");
+    check(decodedSequence.imageSequenceFrames.size() == 2,
+          "image sequence frame count round trip");
+    check(decodedSequence.imageSequenceFrames[0].uri
+              == "http://example.test/frame-1.png",
+          "image sequence frame uri round trip");
+    check(decodedSequence.imageSequenceFrames[1].durationSeconds == 2.0,
+          "image sequence frame duration round trip");
+    sequence.route = types::MediaRoute::WrappedTransportStream;
+    const auto wrappedBlob = encodeMediaRequest(sequence, error);
+    check(wrappedBlob.has_value(), "wrapped stream plan encodes");
+    types::MediaRequest decodedWrapped;
+    check(decodeMediaRequest(*wrappedBlob, decodedWrapped, error)
+              && decodedWrapped.route
+                  == types::MediaRoute::WrappedTransportStream,
+          "wrapped stream route round trip");
+
     types::PlaybackCommand command;
     command.type = types::PlaybackCommandType::Open;
     command.expectedGeneration = 7;
@@ -152,6 +185,14 @@ int main()
               && decodedSnapshot.castSession.remoteControlRegistered
               && decodedSnapshot.muted,
           "snapshot round trip");
+    auto deltaSnapshot = snapshot;
+    deltaSnapshot.playbackPlanIncluded = false;
+    const auto deltaBlob = encodePlaybackSnapshot(deltaSnapshot, error);
+    check(deltaBlob.has_value(), "plan-omitting snapshot encodes");
+    types::PlaybackSnapshot decodedDelta;
+    check(decodePlaybackSnapshot(*deltaBlob, decodedDelta, error)
+              && !decodedDelta.playbackPlanIncluded,
+          "plan-omitting delta is explicit on the wire");
     auto zeroGenerationSnapshot = snapshot;
     zeroGenerationSnapshot.generation = 0;
     check(!encodePlaybackSnapshot(
@@ -200,6 +241,13 @@ int main()
               && commandId == 100
               && decodedMessageCommand.media.uri == source.uri,
           "command message round trip");
+    auto oldCommandMessage = *commandMessage;
+    oldCommandMessage.header.versionMinor = 3;
+    error.clear();
+    check(!decodePlaybackCommandMessage(
+              oldCommandMessage, commandId,
+              decodedMessageCommand, error),
+          "playback plans cannot be exchanged with a pre-plan peer");
 
     PlaybackCommandResultWire result;
     result.commandId = 100;

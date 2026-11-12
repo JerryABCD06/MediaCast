@@ -60,6 +60,22 @@ std::string lower(std::string_view value)
     return result;
 }
 
+std::string requestClientName(const core::HttpRequest &request)
+{
+    std::string name = trim(
+        request.header("user-agent").value_or(""));
+    name.erase(
+        std::remove_if(
+            name.begin(), name.end(),
+            [](unsigned char ch) {
+                return ch < 0x20 || ch == 0x7f;
+            }),
+        name.end());
+    if (name.size() > 120)
+        name.resize(120);
+    return name;
+}
+
 std::optional<int> parseInt(std::string_view value)
 {
     const std::string text = trim(value);
@@ -477,11 +493,14 @@ std::optional<SoapRequestContext> SoapRouter::parseRequest(
         std::move(service),
         std::move(action),
         std::move(body),
+        requestClientName(request),
+        request.peerAddress,
     };
 }
 
 HttpResponse SoapRouter::handleParsed(
-    const SoapRequestContext &request)
+    const SoapRequestContext &request,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     const bool newMedia =
         request.service == "AVTransport"
@@ -494,27 +513,40 @@ HttpResponse SoapRouter::handleParsed(
         newMedia && requestUri && requestMetadata
         && !requestUri->empty();
     if (structurallyValidNewMedia)
-        noteNewMediaRequest();
+        noteNewMediaRequest(
+            request.clientName, request.clientAddress);
 
     const HttpResponse response = dispatch(
-        request.service, request.action, request.body);
+        request.service, request.action, request.body,
+        expectedOwnerEpoch);
     if (newMedia && structurallyValidNewMedia && response.status == 200) {
         // The media boundary was opened before dispatch so an Open that
         // legitimately waits for the player cannot invalidate its own queue.
+    } else if (
+        request.service == "AVTransport" && request.action == "Stop"
+        && response.status == 200) {
+        // Stop is also used by many control points as "leaving the renderer".
+        // Keep the session alive for a short grace period so a normal
+        // Stop -> SetAVTransportURI switch does not disconnect first.
+        m_session.transportStopped(
+            m_options.now(), request.clientAddress);
     } else {
-        notePeerActivity();
+        notePeerActivity(request.clientAddress);
     }
     return response;
 }
 
-void SoapRouter::notePeerActivity()
+void SoapRouter::notePeerActivity(std::string_view clientAddress)
 {
-    m_session.peerActivity(m_options.now());
+    m_session.peerActivity(m_options.now(), clientAddress);
 }
 
-void SoapRouter::noteNewMediaRequest()
+void SoapRouter::noteNewMediaRequest(
+    std::string clientName, std::string clientAddress)
 {
-    m_session.newMediaRequested(m_options.now());
+    m_session.newMediaRequested(
+        m_options.now(), std::move(clientName),
+        std::move(clientAddress));
 }
 
 bool SoapRouter::hasTransportMedia() const
@@ -522,6 +554,11 @@ bool SoapRouter::hasTransportMedia() const
     return m_session.snapshot().playback.state
             != playback::PlaybackState::NoMedia
         || m_session.transportTransitionPending();
+}
+
+std::uint64_t SoapRouter::ownerEpoch() const
+{
+    return m_session.protocolEpoch();
 }
 
 playback::MediaRequest SoapRouter::mediaRequest(
@@ -544,22 +581,37 @@ HttpResponse SoapRouter::faultResponse(
 
 HttpResponse SoapRouter::dispatch(
     const std::string &service, const std::string &action,
-    const SoapRequestXml &body)
+    const SoapRequestXml &body,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     if (service == "AVTransport")
-        return handleAvTransport(action, body);
+        return handleAvTransport(
+            action, body, expectedOwnerEpoch);
     if (service == "RenderingControl")
-        return handleRenderingControl(action, body);
+        return handleRenderingControl(
+            action, body, expectedOwnerEpoch);
     if (service == "ConnectionManager")
         return handleConnectionManager(action, body);
     return soapFault(kInvalidAction, "Invalid Action");
 }
 
 HttpResponse SoapRouter::handleAvTransport(
-    const std::string &action, const SoapRequestXml &body)
+    const std::string &action, const SoapRequestXml &body,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     const playback::PlaybackSnapshot snapshot =
         m_session.snapshot().playback;
+    const bool controlAction =
+        action == "Play" || action == "Pause" || action == "Stop"
+        || action == "Seek" || action == "Next"
+        || action == "Previous";
+    if (controlAction) {
+        log(
+            "AVTransport control " + action + ": state="
+            + dlnaState(snapshot.state) + " status="
+            + (snapshot.loadStatus == playback::LoadStatus::Failed
+                   ? "ERROR_OCCURRED" : "OK"));
+    }
 
     if (action == "SetAVTransportURI") {
         const auto uriValue = body.value("CurrentURI");
@@ -584,7 +636,9 @@ HttpResponse SoapRouter::handleAvTransport(
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::SetNext;
         command.media = mediaRequest(uri, metadata);
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
 
     if ((action == "Next" && !snapshot.hasNext)
@@ -598,57 +652,79 @@ HttpResponse SoapRouter::handleAvTransport(
         && (action == "Play" || action == "Pause"
             || action == "Stop" || action == "Seek"
             || action == "Next" || action == "Previous")) {
+        log(
+            "AVTransport control " + action
+            + " rejected: no active media");
         return soapFault(
             kTransitionNotAvailable, "Transition not available");
     }
 
     if (action == "Play") {
         const auto speedValue = body.value("Speed");
-        if (!speedValue)
+        if (!speedValue) {
+            log("AVTransport Play rejected: Speed is missing");
             return soapFault(kInvalidArgs, "Invalid Args");
+        }
         const std::string speed = *speedValue;
         if (speed != "1"
             && speed != "1.0" && speed != "1/1") {
+            log("AVTransport Play rejected: unsupported Speed=" + speed);
             return soapFault(
                 kPlaySpeedNotSupported,
                 "Play speed not supported");
         }
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::Play;
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "Pause") {
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::Pause;
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "Stop") {
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::Stop;
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "Next" || action == "Previous") {
         playback::PlaybackCommand command;
         command.type = action == "Next"
             ? playback::PlaybackCommandType::Next
             : playback::PlaybackCommandType::Previous;
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "Seek") {
         const auto unitValue = body.value("Unit");
         const auto targetValue = body.value("Target");
-        if (!unitValue || !targetValue)
+        if (!unitValue || !targetValue) {
+            log("AVTransport Seek rejected: Unit or Target is missing");
             return soapFault(kInvalidArgs, "Invalid Args");
+        }
         const std::string unit = lower(*unitValue);
         const std::string target = *targetValue;
-        if (unit.empty())
+        if (unit.empty()) {
+            log("AVTransport Seek rejected: empty Unit");
             return soapFault(kInvalidArgs, "Invalid Args");
+        }
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::Seek;
         if (unit == "rel_time") {
             const auto seconds = parseUpnpTime(target);
-            if (!seconds)
+            if (!seconds) {
+                log(
+                    "AVTransport Seek rejected: invalid REL_TIME target="
+                    + target);
                 return soapFault(kIllegalSeekTarget, "Illegal seek target");
+            }
             command.doubleValue = *seconds;
         } else if (unit == "track_nr") {
             const auto track = parseInt(target);
@@ -667,10 +743,15 @@ HttpResponse SoapRouter::handleAvTransport(
                 * (static_cast<double>(*byte)
                    / static_cast<double>(*snapshot.current.mediaSizeBytes));
         } else {
+            log(
+                "AVTransport Seek rejected: unsupported Unit=" + *unitValue
+                + " Target=" + target);
             return soapFault(
                 kSeekModeNotSupported, "Seek mode not supported");
         }
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "SetPlayMode") {
         const auto modeValue = body.value("NewPlayMode");
@@ -683,7 +764,9 @@ HttpResponse SoapRouter::handleAvTransport(
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::SetPlayMode;
         command.playMode = *mode;
-        return submit(std::move(command), "AVTransport", action);
+        return submit(
+            std::move(command), "AVTransport", action,
+            expectedOwnerEpoch);
     }
     if (action == "GetTransportSettings") {
         return soapResponse(
@@ -755,7 +838,8 @@ HttpResponse SoapRouter::handleAvTransport(
 }
 
 HttpResponse SoapRouter::handleRenderingControl(
-    const std::string &action, const SoapRequestXml &body)
+    const std::string &action, const SoapRequestXml &body,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
     const playback::PlaybackSnapshot snapshot =
         m_session.snapshot().playback;
@@ -768,7 +852,9 @@ HttpResponse SoapRouter::handleRenderingControl(
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::SetVolume;
         command.intValue = *volume;
-        return submit(std::move(command), "RenderingControl", action);
+        return submit(
+            std::move(command), "RenderingControl", action,
+            expectedOwnerEpoch);
     }
     if (action == "GetVolume") {
         const auto channel = body.value("Channel");
@@ -792,7 +878,9 @@ HttpResponse SoapRouter::handleRenderingControl(
         playback::PlaybackCommand command;
         command.type = playback::PlaybackCommandType::SetMuted;
         command.boolValue = value == "1" || value == "true";
-        return submit(std::move(command), "RenderingControl", action);
+        return submit(
+            std::move(command), "RenderingControl", action,
+            expectedOwnerEpoch);
     }
     if (action == "GetMute") {
         const auto channel = body.value("Channel");
@@ -851,7 +939,8 @@ HttpResponse SoapRouter::handleRenderingControl(
             command.text = std::string(picture.control);
             command.intValue = (*value - 50) * 2;
             return submit(
-                std::move(command), "RenderingControl", action);
+                std::move(command), "RenderingControl", action,
+                expectedOwnerEpoch);
         }
     }
 
@@ -871,7 +960,9 @@ HttpResponse SoapRouter::handleRenderingControl(
         playback::PlaybackCommand command;
         command.type =
             playback::PlaybackCommandType::ResetPictureControls;
-        return submit(std::move(command), "RenderingControl", action);
+        return submit(
+            std::move(command), "RenderingControl", action,
+            expectedOwnerEpoch);
     }
     return soapFault(kInvalidAction, "Invalid Action");
 }
@@ -916,21 +1007,36 @@ HttpResponse SoapRouter::handleConnectionManager(
 
 HttpResponse SoapRouter::submit(
     playback::PlaybackCommand command, const std::string &service,
-    const std::string &action)
+    const std::string &action,
+    std::optional<std::uint64_t> expectedOwnerEpoch)
 {
+    const std::string commandText = service + "#" + action;
+    if (command.type == playback::PlaybackCommandType::SetVolume) {
+        log(
+            "Playback command received for " + commandText
+            + ": volume=" + std::to_string(command.intValue));
+    } else if (command.type == playback::PlaybackCommandType::Seek) {
+        log(
+            "Playback command received for " + commandText
+            + ": target=" + std::to_string(command.doubleValue));
+    } else {
+        log("Playback command received for " + commandText);
+    }
     playback::PlaybackCommandSubmission submission;
     std::optional<playback::PlaybackOutcomeStatus> outcome;
     std::string completionError;
     bool timedOut = false;
     if (m_options.waitForCommandCompletion) {
         auto result = m_session.submitAndWait(
-            std::move(command), m_options.commandTimeout);
+            std::move(command), m_options.commandTimeout,
+            expectedOwnerEpoch);
         submission = std::move(result.submission);
         outcome = result.outcome;
         completionError = std::move(result.completionError);
         timedOut = result.timedOut;
     } else {
-        submission = m_session.submit(std::move(command));
+        submission = m_session.submit(
+            std::move(command), expectedOwnerEpoch);
         if (submission.queued)
             outcome = playback::PlaybackOutcomeStatus::Applied;
     }
@@ -938,6 +1044,7 @@ HttpResponse SoapRouter::submit(
         && !timedOut
         && (!outcome
             || *outcome == playback::PlaybackOutcomeStatus::Applied)) {
+        log("Playback command applied for " + commandText);
         return soapResponse(service, action);
     }
     if (timedOut) {
@@ -958,6 +1065,10 @@ HttpResponse SoapRouter::submit(
     if (submission.status == playback::PlaybackSubmissionStatus::SessionEnding)
         return soapFault(
             kTransitionNotAvailable, "Transition not available");
+    if (submission.status == playback::PlaybackSubmissionStatus::Busy) {
+        log("Playback command rejected because the command queue is busy");
+        return soapFault(kActionFailed, "Action Failed");
+    }
     if (submission.status
         == playback::PlaybackSubmissionStatus::InvalidCommand) {
         return soapFault(kInvalidArgs, "Invalid Args");
@@ -976,6 +1087,8 @@ HttpResponse SoapRouter::submitMedia(
     if (submission.status == playback::PlaybackSubmissionStatus::SessionEnding)
         return soapFault(
             kTransitionNotAvailable, "Transition not available");
+    if (submission.status == playback::PlaybackSubmissionStatus::Busy)
+        return soapFault(kActionFailed, "Action Failed");
     if (submission.status
         == playback::PlaybackSubmissionStatus::InvalidCommand)
         return soapFault(kInvalidArgs, "Invalid Args");

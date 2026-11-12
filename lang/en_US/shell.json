@@ -3,6 +3,6 @@
   "tray_pause_receiving": "Pause receiving",
   "tray_resume_receiving": "Resume receiving",
   "tray_quit": "Quit",
-  "tray_tooltip_receiving": "Media Cast",
-  "tray_tooltip_paused": "Media Cast (receiving paused)"
+  "tray_tooltip_receiving": "{app_short}",
+  "tray_tooltip_paused": "{app_short} (receiving paused)"
 }

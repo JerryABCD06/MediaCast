@@ -14,8 +14,41 @@ using namespace std::chrono_literals;
 namespace {
 
 constexpr auto kCommandTimeout = 5s;
-constexpr std::size_t kMaxPendingCommands = 256;
+constexpr std::size_t kMaxPendingCommands = 1024;
+constexpr auto kCoalesceWindow = 4ms;
 thread_local std::uint64_t t_activeListenerId = 0;
+
+void preservePlaybackPlan(
+    MediaRequest &incoming, const MediaRequest &cached)
+{
+    if (incoming.uri.empty() || incoming.uri != cached.uri)
+        return;
+    incoming.route = cached.route;
+    incoming.imageSequenceFrames = cached.imageSequenceFrames;
+}
+
+void mergePlanOmittedFromDelta(
+    PlaybackSnapshot &incoming, const PlaybackSnapshot &cached)
+{
+    preservePlaybackPlan(incoming.current, cached.current);
+    preservePlaybackPlan(incoming.next, cached.next);
+
+    // next()/previous() shift the cached slots. A state delta intentionally
+    // omits the frame table, so recover the plan from the slot the media just
+    // moved out of.
+    if (!incoming.current.uri.empty()
+        && incoming.current.uri == cached.next.uri) {
+        incoming.current.route = cached.next.route;
+        incoming.current.imageSequenceFrames =
+            cached.next.imageSequenceFrames;
+    }
+    if (!incoming.next.uri.empty()
+        && incoming.next.uri == cached.current.uri) {
+        incoming.next.route = cached.current.route;
+        incoming.next.imageSequenceFrames =
+            cached.current.imageSequenceFrames;
+    }
+}
 
 } // namespace
 
@@ -38,6 +71,8 @@ PlaybackPipeGateway::PlaybackPipeGateway(
     m_snapshot.stateVersion = 0;
     m_readThread = std::jthread(
         [this](std::stop_token stop) { readLoop(stop); });
+    m_writerThread = std::jthread(
+        [this](std::stop_token stop) { writerLoop(stop); });
     m_timeoutThread = std::jthread(
         [this](std::stop_token stop) { timeoutLoop(stop); });
 }
@@ -45,11 +80,15 @@ PlaybackPipeGateway::PlaybackPipeGateway(
 PlaybackPipeGateway::~PlaybackPipeGateway()
 {
     m_readThread.request_stop();
+    m_writerThread.request_stop();
     m_timeoutThread.request_stop();
+    m_outboundReady.notify_all();
     if (m_connection)
         m_connection->close();
     if (m_readThread.joinable())
         m_readThread.join();
+    if (m_writerThread.joinable())
+        m_writerThread.join();
     if (m_timeoutThread.joinable())
         m_timeoutThread.join();
 }
@@ -105,32 +144,77 @@ PlaybackCommandSubmission PlaybackPipeGateway::submit(
         return {false, PlaybackSubmissionStatus::InvalidCommand, 0,
                 current.generation, error, current.stateVersion};
     }
-    const auto message =
-        wire::makePlaybackCommandMessage(commandId, bound, error);
+    std::vector<std::uint64_t> superseded;
+    const auto deadline =
+        std::chrono::steady_clock::now() + kCommandTimeout;
+    bool wasEmpty = false;
     {
-        std::scoped_lock lock(m_pendingMutex);
-        if (m_pendingCommands.size() >= kMaxPendingCommands) {
-            return {false, PlaybackSubmissionStatus::InvalidCommand, 0,
-                    current.generation, "too many pending playback commands",
+        std::scoped_lock outboundLock(m_outboundMutex);
+        if (!m_connected) {
+            return {false, PlaybackSubmissionStatus::PlayerUnavailable, 0,
+                    current.generation, "playback pipe is unavailable",
                     current.stateVersion};
         }
-        m_pendingCommands.emplace(
-            commandId,
-            PendingCommand{
-                current.generation,
-                std::chrono::steady_clock::now() + kCommandTimeout});
-    }
-    if (!message
-        || !m_connection->writeMessage(*message, 2000ms, error)) {
-        {
-            std::scoped_lock lock(m_pendingMutex);
-            m_pendingCommands.erase(commandId);
+        if (bound.type != PlaybackCommandType::EndSession) {
+            std::scoped_lock pendingLock(m_pendingMutex);
+            if (m_pendingCommands.size() >= kMaxPendingCommands) {
+                return {false, PlaybackSubmissionStatus::Busy, 0,
+                        current.generation,
+                        "too many pending playback commands",
+                        current.stateVersion};
+            }
         }
-        return {false, PlaybackSubmissionStatus::PlayerUnavailable, 0,
-                current.generation,
-                error.empty() ? "cannot send playback command" : error,
-                current.stateVersion};
+        wasEmpty = m_outbound.empty();
+        auto queued = m_outbound.enqueue({
+            commandId,
+            bound,
+            {},
+        });
+        if (!queued.queued) {
+            return {false, PlaybackSubmissionStatus::Busy, 0,
+                    current.generation,
+                    "too many pending playback commands",
+                    current.stateVersion};
+        }
+        superseded = std::move(queued.supersededCommandIds);
+        {
+            std::scoped_lock pendingLock(m_pendingMutex);
+            m_pendingCommands[commandId] =
+                PendingCommand{
+                    current.generation, commandId, deadline, false};
+            for (const std::uint64_t id : superseded) {
+                const auto pending = m_pendingCommands.find(id);
+                if (pending != m_pendingCommands.end()) {
+                    pending->second.canonicalId = commandId;
+                    pending->second.deadline = deadline;
+                }
+            }
+        }
+        if (bound.type == PlaybackCommandType::EndSession
+            || wasEmpty) {
+            m_dispatchAfter =
+                bound.type == PlaybackCommandType::EndSession
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::now()
+                    + kCoalesceWindow;
+        }
     }
+    std::vector<std::uint64_t> rejected;
+    {
+        std::scoped_lock lock(m_pendingMutex);
+        if (bound.type == PlaybackCommandType::EndSession) {
+            for (const std::uint64_t id : superseded) {
+                if (id == commandId)
+                    continue;
+                if (m_pendingCommands.erase(id) != 0)
+                    rejected.push_back(id);
+            }
+        }
+    }
+    completeUnsentCommands(
+        rejected, PlaybackOutcomeStatus::Rejected,
+        "superseded by EndSession");
+    m_outboundReady.notify_one();
     return {true, PlaybackSubmissionStatus::Queued, commandId,
             current.generation, {}, current.stateVersion};
 }
@@ -172,8 +256,12 @@ bool PlaybackPipeGateway::requestSnapshot(std::string &error)
     }
     const auto message =
         wire::makePlaybackSnapshotRequestMessage(nextMessageId());
-    return message
-        && m_connection->writeMessage(*message, 2000ms, error);
+    if (!message) {
+        error = "cannot encode playback snapshot request";
+        return false;
+    }
+    std::scoped_lock writeLock(m_writeMutex);
+    return m_connection->writeMessage(*message, 2000ms, error);
 }
 
 void PlaybackPipeGateway::readLoop(std::stop_token stop)
@@ -190,6 +278,84 @@ void PlaybackPipeGateway::readLoop(std::stop_token stop)
     }
 }
 
+void PlaybackPipeGateway::writerLoop(std::stop_token stop)
+{
+    while (!stop.stop_requested()) {
+        PlaybackCommandCoalescer::QueuedCommand queued;
+        {
+            std::unique_lock lock(m_outboundMutex);
+            m_outboundReady.wait(lock, [&] {
+                return stop.stop_requested() || !m_outbound.empty();
+            });
+            if (stop.stop_requested())
+                return;
+            if (std::chrono::steady_clock::now() < m_dispatchAfter) {
+                m_outboundReady.wait_until(
+                    lock, m_dispatchAfter, [&] {
+                        return stop.stop_requested();
+                    });
+                if (stop.stop_requested())
+                    return;
+            }
+            auto next = m_outbound.takeNext();
+            if (!next)
+                continue;
+            {
+                std::scoped_lock pendingLock(m_pendingMutex);
+                bool found = false;
+                for (auto &[id, pending] : m_pendingCommands) {
+                    (void)id;
+                    if (pending.canonicalId != next->commandId)
+                        continue;
+                    pending.inFlight = true;
+                    found = true;
+                }
+                if (!found)
+                    continue;
+            }
+            queued = std::move(*next);
+        }
+
+        std::string error;
+        if (!wire::encodePlaybackCommand(queued.command, error)) {
+            std::vector<std::uint64_t> failedIds = queued.aliases;
+            failedIds.push_back(queued.commandId);
+            completeUnsentCommands(
+                failedIds, PlaybackOutcomeStatus::Rejected,
+                error.empty() ? "invalid playback command" : error);
+            continue;
+        }
+        auto message = wire::makePlaybackCommandMessage(
+            queued.commandId, queued.command, error);
+        bool written = false;
+        if (message) {
+            std::scoped_lock writeLock(m_writeMutex);
+            written = m_connection
+                && m_connection->writeMessage(*message, 2000ms, error);
+        } else if (error.empty()) {
+            error = "cannot encode playback command";
+        }
+        if (!written && !stop.stop_requested()) {
+            markDisconnected(
+                error.empty() ? "cannot send playback command" : error);
+            return;
+        }
+        if (written) {
+            std::scoped_lock outboundLock(m_outboundMutex);
+            std::scoped_lock pendingLock(m_pendingMutex);
+            const auto deadline =
+                std::chrono::steady_clock::now() + kCommandTimeout;
+            for (auto &[id, pending] : m_pendingCommands) {
+                (void)id;
+                if (pending.canonicalId != queued.commandId)
+                    continue;
+                pending.inFlight = false;
+                pending.deadline = deadline;
+            }
+        }
+    }
+}
+
 void PlaybackPipeGateway::timeoutLoop(std::stop_token stop)
 {
     while (!stop.stop_requested()) {
@@ -198,35 +364,46 @@ void PlaybackPipeGateway::timeoutLoop(std::stop_token stop)
         if (stop.stop_requested())
             return;
 
-        std::vector<std::uint64_t> expired;
+        std::map<std::uint64_t, std::vector<std::uint64_t>> expired;
         const auto now = std::chrono::steady_clock::now();
         {
-            std::scoped_lock lock(m_pendingMutex);
+            std::scoped_lock outboundLock(m_outboundMutex);
+            std::scoped_lock pendingLock(m_pendingMutex);
             for (auto it = m_pendingCommands.begin();
                  it != m_pendingCommands.end();) {
-                if (now >= it->second.deadline) {
-                    expired.push_back(it->first);
+                if (!it->second.inFlight
+                    && now >= it->second.deadline) {
+                    expired[it->second.canonicalId].push_back(it->first);
                     it = m_pendingCommands.erase(it);
                 } else {
                     ++it;
                 }
             }
+            for (const auto &[canonicalId, commandIds] : expired) {
+                (void)commandIds;
+                static_cast<void>(m_outbound.discard(canonicalId));
+            }
         }
         const PlaybackSnapshot current = snapshot();
-        for (std::uint64_t commandId : expired) {
-            PlaybackEvent event;
-            event.kind = PlaybackEventKind::CommandCompleted;
-            event.commandId = commandId;
-            event.outcome = PlaybackOutcomeStatus::TimedOut;
-            event.error = "playback command timed out";
-            event.snapshot = current;
-            notify(event);
+        for (const auto &[canonicalId, commandIds] : expired) {
+            (void)canonicalId;
+            for (const std::uint64_t commandId : commandIds) {
+                PlaybackEvent event;
+                event.kind = PlaybackEventKind::CommandCompleted;
+                event.commandId = commandId;
+                event.outcome = PlaybackOutcomeStatus::TimedOut;
+                event.error = "playback command timed out";
+                event.snapshot = current;
+                notify(event);
+            }
         }
     }
 }
 
 void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
 {
+    if (m_disconnectReported)
+        return;
     if (message.header.type == ipc::MessageType::PlaybackUiReady) {
         m_uiReady = true;
         if (m_log)
@@ -263,6 +440,7 @@ void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
             return;
         }
         std::uint64_t expectedGeneration = 0;
+        std::vector<std::uint64_t> commandIds;
         {
             std::scoped_lock lock(m_pendingMutex);
             const auto pending = m_pendingCommands.find(result.commandId);
@@ -272,21 +450,37 @@ void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
                 return;
             }
             expectedGeneration = pending->second.generation;
-            m_pendingCommands.erase(pending);
+            const std::uint64_t canonicalId =
+                pending->second.canonicalId;
+            for (auto it = m_pendingCommands.begin();
+                 it != m_pendingCommands.end();) {
+                if (it->second.canonicalId == canonicalId) {
+                    commandIds.push_back(it->first);
+                    it = m_pendingCommands.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
-        PlaybackEvent event;
-        event.kind = PlaybackEventKind::CommandCompleted;
-        event.commandId = result.commandId;
-        event.outcome = result.outcome;
-        event.error = result.error;
-        event.snapshot = snapshot();
-        if (result.generation < event.snapshot.generation
-            || result.generation != expectedGeneration) {
-            event.outcome = PlaybackOutcomeStatus::StaleGeneration;
-            if (event.error.empty())
-                event.error = "command completed in an old generation";
+
+        const PlaybackSnapshot current = snapshot();
+        for (const std::uint64_t commandId : commandIds) {
+            DeferredCommandResult completed;
+            completed.commandId = commandId;
+            completed.expectedGeneration = expectedGeneration;
+            completed.generation = result.generation;
+            completed.stateVersion = result.stateVersion;
+            completed.submissionStatus = result.submissionStatus;
+            completed.outcome = result.outcome;
+            completed.error = result.error;
+            if (current.stateVersion < completed.stateVersion
+                || current.generation < completed.generation) {
+                std::scoped_lock lock(m_snapshotMutex);
+                m_deferredCommandResults[commandId] = completed;
+            } else {
+                notifyCommandResult(completed, current);
+            }
         }
-        notify(event);
         return;
     }
 
@@ -303,34 +497,98 @@ void PlaybackPipeGateway::handleMessage(const ipc::Message &message)
             m_log("Invalid playback state: " + error);
         return;
     }
-
     PlaybackEventKind kind = PlaybackEventKind::SnapshotChanged;
     if (message.header.type == ipc::MessageType::PlaybackPlayerLost)
         kind = PlaybackEventKind::PlayerLost;
     else if (message.header.type == ipc::MessageType::PlaybackReconnected)
         kind = PlaybackEventKind::Reconnected;
 
+    std::vector<DeferredCommandResult> readyResults;
     {
         std::scoped_lock lock(m_snapshotMutex);
+        const bool includesPlaybackPlan =
+            incoming.playbackPlanIncluded;
+        if (m_hasSnapshot && !includesPlaybackPlan)
+            mergePlanOmittedFromDelta(incoming, m_snapshot);
         if (m_hasSnapshot
-            && ((kind == PlaybackEventKind::Reconnected
-                 && incoming.generation <= m_snapshot.generation)
-                || (kind != PlaybackEventKind::Reconnected
-                    && (incoming.generation < m_snapshot.generation
-                        || (incoming.generation == m_snapshot.generation
-                            && incoming.stateVersion
-                                <= m_snapshot.stateVersion)))))
+            && (incoming.generation < m_snapshot.generation
+                || (incoming.generation == m_snapshot.generation
+                    && incoming.stateVersion
+                        <= m_snapshot.stateVersion)))
+            return;
+        if (m_disconnectReported)
             return;
         m_snapshot = incoming;
         m_hasSnapshot = true;
         m_connected = incoming.playerAvailable;
         if (incoming.playerAvailable)
             m_disconnectReported = false;
+        for (auto it = m_deferredCommandResults.begin();
+             it != m_deferredCommandResults.end();) {
+            const bool newerGeneration =
+                incoming.generation > it->second.generation;
+            const bool sameGenerationReady =
+                incoming.generation == it->second.generation
+                && incoming.stateVersion >= it->second.stateVersion;
+            if (kind == PlaybackEventKind::PlayerLost
+                || newerGeneration || sameGenerationReady) {
+                DeferredCommandResult result = std::move(it->second);
+                if (kind == PlaybackEventKind::PlayerLost) {
+                    result.outcome = PlaybackOutcomeStatus::Rejected;
+                    result.expectedGeneration = incoming.generation;
+                    result.error = "playback player was lost";
+                }
+                readyResults.push_back(std::move(result));
+                it = m_deferredCommandResults.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
     PlaybackEvent event;
     event.kind = kind;
     event.snapshot = incoming;
+    for (const DeferredCommandResult &result : readyResults)
+        notifyCommandResult(result, incoming);
     notify(event);
+}
+
+void PlaybackPipeGateway::notifyCommandResult(
+    const DeferredCommandResult &result,
+    const PlaybackSnapshot &snapshot)
+{
+    PlaybackEvent event;
+    event.kind = PlaybackEventKind::CommandCompleted;
+    event.commandId = result.commandId;
+    event.outcome = result.outcome;
+    event.error = result.error;
+    event.snapshot = snapshot;
+    if (event.outcome == PlaybackOutcomeStatus::Applied
+        && (result.generation < snapshot.generation
+            || result.generation != result.expectedGeneration)) {
+        event.outcome = PlaybackOutcomeStatus::StaleGeneration;
+        if (event.error.empty())
+            event.error = "command completed in an old generation";
+    }
+    notify(event);
+}
+
+void PlaybackPipeGateway::completeUnsentCommands(
+    const std::vector<std::uint64_t> &commandIds,
+    PlaybackOutcomeStatus outcome, const std::string &error)
+{
+    if (commandIds.empty())
+        return;
+    const PlaybackSnapshot current = snapshot();
+    for (const std::uint64_t commandId : commandIds) {
+        PlaybackEvent event;
+        event.kind = PlaybackEventKind::CommandCompleted;
+        event.commandId = commandId;
+        event.outcome = outcome;
+        event.error = error;
+        event.snapshot = current;
+        notify(event);
+    }
 }
 
 void PlaybackPipeGateway::markDisconnected(const std::string &reason)
@@ -339,7 +597,15 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
         return;
     m_connected = false;
     m_uiReady = false;
+    m_readThread.request_stop();
+    m_writerThread.request_stop();
+    {
+        std::scoped_lock lock(m_outboundMutex);
+        m_outbound.clear();
+    }
+    m_outboundReady.notify_all();
     PlaybackSnapshot final;
+    std::vector<DeferredCommandResult> deferred;
     {
         std::scoped_lock lock(m_snapshotMutex);
         const auto generation = m_snapshot.generation;
@@ -358,6 +624,11 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
         m_snapshot.volumePercent = volume;
         m_snapshot.muted = muted;
         m_snapshot.pictureControls = controls;
+        for (auto &[commandId, result] : m_deferredCommandResults) {
+            (void)commandId;
+            deferred.push_back(std::move(result));
+        }
+        m_deferredCommandResults.clear();
         final = m_snapshot;
     }
     PlaybackEvent event;
@@ -377,6 +648,15 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
         PlaybackEvent completed;
         completed.kind = PlaybackEventKind::CommandCompleted;
         completed.commandId = commandId;
+        completed.outcome = PlaybackOutcomeStatus::Rejected;
+        completed.error = "playback pipe disconnected";
+        completed.snapshot = final;
+        notify(completed);
+    }
+    for (const DeferredCommandResult &result : deferred) {
+        PlaybackEvent completed;
+        completed.kind = PlaybackEventKind::CommandCompleted;
+        completed.commandId = result.commandId;
         completed.outcome = PlaybackOutcomeStatus::Rejected;
         completed.error = "playback pipe disconnected";
         completed.snapshot = final;

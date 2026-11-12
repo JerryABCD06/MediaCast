@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 /**
  * SplashWindow —— 主界面加载期间显示的原生启动屏幕。
@@ -50,6 +51,7 @@ public:
      * 强制浅/深时只使用 dark，完全忽略系统主题变化。
      */
     void setTheme(bool followSystem, bool dark);
+    void setTitle(const std::wstring &title);
 
     /** 浅色/深色界面各自使用的强调色，0xRRGGBB。 */
     void setAccent(unsigned int lightRgb, unsigned int darkRgb);

@@ -52,7 +52,7 @@
     "ui_info_control_point": "控制点",
     "ui_info_address": "地址",
     "ui_info_control_mode": "控制方式",
-    "ui_info_push_only": "仅投送",
+    "ui_info_control_unsubscribed": "未订阅远程控制事件",
     "ui_info_registered": "已注册远程控制",
     "ui_info_media": "媒体信息（MPV 实测）",
     "ui_info_not_playing": "未播放",
@@ -72,7 +72,6 @@
     "ui_info_sample_rate": "采样率",
     "ui_info_channels": "声道数",
     "ui_info_channel_layout": "声道布局",
-    "ui_info_bit_depth": "采样位数",
     "ui_info_sample_format": "采样格式",
 
     "ui_mediabar_previous": "上一个",

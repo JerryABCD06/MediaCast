@@ -25,6 +25,7 @@ struct DlnaMediaExecution {
     bool newSession = false;
     bool playRequested = false;
     playback::MediaRequest media;
+    cast::PeerIdentity peer;
 };
 
 struct DlnaClaimRuntimeActions {
@@ -33,6 +34,8 @@ struct DlnaClaimRuntimeActions {
     std::optional<DlnaMediaExecution> media;
     bool playNow = false;
     bool stopNow = false;
+    std::optional<cast::PeerIdentity> stopPeer;
+    std::optional<std::uint64_t> ownerEpoch;
     bool staleOperation = false;
 };
 
@@ -68,6 +71,7 @@ public:
 
     bool mediaOpening() const noexcept { return m_operation.has_value(); }
     bool ownsPeer(const cast::PeerIdentity &peer) const;
+    bool canControl(const cast::PeerIdentity &peer) const;
     std::optional<std::uint64_t> operationId() const noexcept;
     std::optional<cast::ClaimKey> pendingKey() const noexcept;
 
@@ -90,10 +94,12 @@ private:
         playback::MediaRequest media;
         std::vector<std::uint64_t> setRequests;
         std::vector<std::uint64_t> playRequests;
+        cast::PeerIdentity peer;
     };
 
     DlnaClaimRuntimeActions beginExecute(
-        DlnaClaimOutcome &&outcome, cast::CastTime now);
+        DlnaClaimOutcome &&outcome, cast::PeerIdentity requestPeer,
+        cast::CastTime now);
     DlnaClaimRuntimeActions beginResolution(
         DlnaClaimResolution &&resolution, cast::CastTime now);
     void completePending(

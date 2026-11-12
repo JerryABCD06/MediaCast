@@ -35,7 +35,11 @@ Item {
     function protocolName(value) {
         if (!value)
             return ""
-        return translated("protocol_" + normalizedId(value), String(value))
+        const revision = Tr.languageRevision
+        void revision
+        return Tr.resolve(
+            "term_protocol_" + normalizedId(value) + "_full",
+            String(value))
     }
 
     function codecName(value) {
@@ -191,26 +195,26 @@ Item {
                 }
 
                 InfoLine {
-                    visible: cast.connected
+                    show: cast.connected
                     label: qsTr("ui_info_protocol")
                     value: root.protocolName(cast.protocol)
                 }
                 InfoLine {
-                    visible: cast.connected
+                    show: cast.connected
                     label: qsTr("ui_info_control_point")
                     value: cast.controlPointName || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: cast.connected && !!cast.controlPointAddress
+                    show: cast.connected && !!cast.controlPointAddress
                     label: qsTr("ui_info_address")
                     value: cast.controlPointAddress || ""
                 }
                 InfoLine {
-                    visible: cast.connected
+                    show: cast.connected
                     label: qsTr("ui_info_control_mode")
                     value: cast.remoteControlRegistered
                            ? qsTr("ui_info_registered")
-                           : qsTr("ui_info_push_only")
+                           : qsTr("ui_info_control_unsubscribed")
                 }
 
                 FluDivider {
@@ -245,14 +249,16 @@ Item {
                 }
 
                 InfoLine {
-                    visible: !!video || !!audio
+                    show: !!video || !!audio
                     label: qsTr("ui_info_container")
                     value: root.containerName(media.container)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!video || !!audio
+                    show: !!video || !!audio
                     label: qsTr("ui_info_duration")
                     value: root.durationText(media.duration_seconds)
+                           || qsTr("media_unknown")
                 }
 
                 FluText {
@@ -264,39 +270,46 @@ Item {
                     textColor: FluTheme.fontPrimaryColor
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_codec")
                     value: root.codecName(video && video.codec)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_profile")
-                    value: video && video.profile || ""
+                    value: video && video.profile
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_resolution")
                     value: root.resolutionText(video)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_aspect_ratio")
                     value: root.aspectText(video)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_frame_rate")
                     value: root.fpsText(video && video.fps)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_bitrate")
                     value: root.bitrateText(video && video.bitrate)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "video"
+                    show: mediaKind === "video"
                     label: qsTr("ui_info_pixel_format")
-                    value: video && video.pixel_format || ""
+                    value: video && video.pixel_format
+                           || qsTr("media_unknown")
                 }
 
                 FluText {
@@ -308,14 +321,16 @@ Item {
                     textColor: FluTheme.fontPrimaryColor
                 }
                 InfoLine {
-                    visible: mediaKind === "image"
+                    show: mediaKind === "image"
                     label: qsTr("ui_info_codec")
                     value: root.codecName(video && video.codec)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: mediaKind === "image"
+                    show: mediaKind === "image"
                     label: qsTr("ui_info_resolution")
                     value: root.resolutionText(video)
+                           || qsTr("media_unknown")
                 }
 
                 FluText {
@@ -327,45 +342,46 @@ Item {
                     textColor: FluTheme.fontPrimaryColor
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_codec")
                     value: root.codecName(audio && audio.codec)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_profile")
-                    value: audio && audio.profile || ""
+                    value: audio && audio.profile
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_sample_rate")
                     value: root.rateText(audio && audio.sample_rate)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_channels")
                     value: root.channelText(audio)
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_channel_layout")
-                    value: audio && audio.channel_layout || ""
+                    value: audio && audio.channel_layout
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
-                    label: qsTr("ui_info_bit_depth")
-                    value: audio && audio.bit_depth
-                           ? String(audio.bit_depth) + " bit" : ""
-                }
-                InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_sample_format")
-                    value: audio && audio.sample_format || ""
+                    value: audio && audio.sample_format
+                           || qsTr("media_unknown")
                 }
                 InfoLine {
-                    visible: !!audio
+                    show: !!audio
                     label: qsTr("ui_info_bitrate")
                     value: root.bitrateText(audio && audio.bitrate)
+                           || qsTr("media_unknown")
                 }
             }
         }

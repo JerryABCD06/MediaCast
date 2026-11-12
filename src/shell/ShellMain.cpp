@@ -53,6 +53,9 @@ using mcast::ipc::Message;
 using mcast::ipc::MessageType;
 using mcast::ipc::ProcessRole;
 
+constexpr auto kUiOpenReadyTimeout = 7000ms;
+constexpr auto kHandoffAckTimeout = kUiOpenReadyTimeout + 5000ms;
+
 namespace WView = winrt::Windows::UI::ViewManagement;
 
 struct Options {
@@ -536,7 +539,7 @@ bool sendHandoff(
         }
 
         Message ack;
-        if (!connection->readMessage(ack, 4000ms, lastError)
+        if (!connection->readMessage(ack, kHandoffAckTimeout, lastError)
             || ack.header.type != MessageType::ShellHandoffAck
             || ack.header.correlationId != request->header.messageId
             || !mcast::ipc::validateMessageDirection(
@@ -667,6 +670,14 @@ public:
             shellTexts = m_language->builtInEnglish();
         }
         m_trayTexts = toWideTrayTexts(shellTexts);
+        if (!m_language->loadTerms(
+                m_resolvedLanguage, m_terms, languageError)) {
+            std::cerr << "Terminology load failed: "
+                      << languageError << '\n';
+            m_resolvedLanguage = "en_US";
+            m_terms = m_language->builtInTerms();
+        }
+        m_splash.setTitle(widen(m_terms.appShort));
         m_receivingEnabled = m_settings->acceptNewCast();
         m_broadcasting = m_settings->broadcast();
         m_broadcastIntervalMs =
@@ -1248,7 +1259,7 @@ private:
         {
             std::unique_lock lock(m_protocolMutex);
             if (!m_protocolReady.wait_for(
-                    lock, 3000ms, [this] {
+                    lock, kUiOpenReadyTimeout, [this] {
                         return m_protocolAcceptsUiOpen
                             && static_cast<bool>(m_protocolConnection);
                     })) {
@@ -1256,6 +1267,7 @@ private:
                 return false;
             }
             connection = m_protocolConnection;
+            m_protocolAcceptsUiOpen = false;
         }
 
         Message request;
@@ -1266,11 +1278,11 @@ private:
         if (request.header.messageId == 0)
             request.header.messageId = 1;
         request.header.sessionId = 1;
-        if (!connection->writeMessage(request, 2000ms, error))
-            return false;
-        {
+        if (!connection->writeMessage(request, 2000ms, error)) {
             std::scoped_lock lock(m_protocolMutex);
-            m_protocolAcceptsUiOpen = false;
+            if (m_protocolConnection == connection)
+                m_protocolAcceptsUiOpen = true;
+            return false;
         }
         return true;
     }
@@ -1627,12 +1639,21 @@ private:
         }
         if (requestProtocolOpenUi(error))
             return true;
-        const auto startedUi = liveUiProcessId();
-        if (!startedUi)
-            return false;
-        bringProcessWindowToFront(*startedUi);
-        error.clear();
-        return true;
+        // A foreground startup may already have an UiActivateRequest in
+        // flight through Protocol. Wait for that child to appear instead of
+        // starting a second Ui without a Protocol-ready gate.
+        const auto deadline =
+            std::chrono::steady_clock::now() + 4000ms;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(50ms);
+            const auto startedUi = liveUiProcessId();
+            if (startedUi) {
+                bringProcessWindowToFront(*startedUi);
+                error.clear();
+                return true;
+            }
+        }
+        return false;
     }
 
     void requestQuit()
@@ -1996,6 +2017,14 @@ private:
             shellTexts = m_language->builtInEnglish();
         }
         m_trayTexts = toWideTrayTexts(shellTexts);
+        if (!m_language->loadTerms(
+                m_resolvedLanguage, m_terms, languageError)) {
+            std::cerr << "Terminology load failed: "
+                      << languageError << '\n';
+            m_resolvedLanguage = "en_US";
+            m_terms = m_language->builtInTerms();
+        }
+        m_splash.setTitle(widen(m_terms.appShort));
         if (m_tray && previousLanguage != m_resolvedLanguage) {
             m_tray->requestTexts(m_trayTexts);
         }
@@ -2924,6 +2953,7 @@ private:
     std::unique_ptr<mcast::platform::NativeTrayIcon> m_tray;
     std::unique_ptr<mcast::shell::ShellSettings> m_settings;
     std::unique_ptr<mcast::shell::ShellLanguage> m_language;
+    mcast::shell::Terminology m_terms;
     std::string m_resolvedLanguage = "en_US";
     mcast::platform::TrayTexts m_trayTexts;
     std::atomic_bool m_receivingEnabled{true};

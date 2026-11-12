@@ -5,6 +5,8 @@
 // author's NoUninstallIcon project.
 
 #include "SplashWindow.h"
+
+#include "core/ProductIdentity.h"
 #include "AccentPalette.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -45,6 +47,7 @@ constexpr UINT WM_MCAST_SPLASH_FRONT = WM_APP + 0x412;
 constexpr UINT WM_MCAST_SPLASH_DISMISS = WM_APP + 0x413;
 constexpr UINT WM_MCAST_SPLASH_HIDE = WM_APP + 0x414;
 constexpr UINT WM_MCAST_SPLASH_ACCENT = WM_APP + 0x415;
+constexpr UINT WM_MCAST_SPLASH_TITLE = WM_APP + 0x416;
 
 constexpr UINT kSplashLogoResource = 102;
 constexpr wchar_t kWindowClass[] = L"MediaCast.SplashWindow";
@@ -281,6 +284,7 @@ public:
     bool initialize();
     void requestShow(std::uint64_t token);
     void setTheme(bool followSystem, bool dark);
+    void setTitle(const std::wstring &title);
     void setAccent(unsigned int lightRgb, unsigned int darkRgb);
     void bringToFront(std::uint64_t token);
     void requestDismiss(std::uint64_t token);
@@ -373,7 +377,9 @@ bool SplashUi::createNativeWindow()
                           | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
     const DWORD windowStyle = WS_OVERLAPPEDWINDOW
         & ~(WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
-    m_hwnd = CreateWindowExW(exStyle, kWindowClass, L"Media Cast",
+    m_hwnd = CreateWindowExW(
+        exStyle, kWindowClass,
+        mcast::identity::appShortEnglishWide.data(),
                              windowStyle | WS_CLIPCHILDREN,
                              0, 0, 1, 1, nullptr, nullptr, instance, this);
     if (!m_hwnd)
@@ -550,6 +556,12 @@ void SplashUi::setTheme(bool followSystem, bool dark)
     applyTheme();
     if (m_visible)
         render();
+}
+
+void SplashUi::setTitle(const std::wstring &title)
+{
+    if (m_hwnd && !title.empty())
+        SetWindowTextW(m_hwnd, title.c_str());
 }
 
 void SplashUi::setAccent(unsigned int lightRgb, unsigned int darkRgb)
@@ -940,6 +952,16 @@ struct SplashWindow::Impl
                     ui.setAccent(static_cast<unsigned int>(message.wParam),
                                  static_cast<unsigned int>(message.lParam));
                     break;
+                case WM_MCAST_SPLASH_TITLE:
+                    {
+                        std::wstring title;
+                        {
+                            std::scoped_lock lock(m_titleMutex);
+                            title = m_pendingTitle;
+                        }
+                        ui.setTitle(title);
+                    }
+                    break;
                 case WM_MCAST_SPLASH_FRONT:
                     ui.bringToFront(
                         static_cast<std::uint64_t>(message.wParam));
@@ -999,6 +1021,9 @@ struct SplashWindow::Impl
     std::uint64_t m_waitToken = 0;
     std::optional<SplashWindow::State> m_observed;
     bool m_failed = false;
+    std::mutex m_titleMutex;
+    std::wstring m_pendingTitle{
+        mcast::identity::appShortEnglishWide};
 };
 
 SplashWindow::SplashWindow(StateCallback callback)
@@ -1017,6 +1042,17 @@ void SplashWindow::setTheme(bool followSystem, bool dark)
 {
     m_impl->post(WM_MCAST_SPLASH_THEME,
                  followSystem ? 1 : 0, dark ? 1 : 0);
+}
+
+void SplashWindow::setTitle(const std::wstring &title)
+{
+    if (title.empty())
+        return;
+    {
+        std::scoped_lock lock(m_impl->m_titleMutex);
+        m_impl->m_pendingTitle = title;
+    }
+    m_impl->post(WM_MCAST_SPLASH_TITLE);
 }
 
 void SplashWindow::setAccent(unsigned int lightRgb, unsigned int darkRgb)

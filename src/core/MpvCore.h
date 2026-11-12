@@ -8,15 +8,17 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 struct mpv_handle;
-class QNetworkAccessManager;
-class QNetworkReply;
-class QTimer;
 class WrappedTsProxy;
+namespace mcast::core {
+class ImageSequenceStrategy;
+}
 
 /**
  * MpvCore —— libmpv 播放核心。
@@ -132,7 +134,7 @@ public:
 
     // ── MediaPlayer ──────────────────────────────────────────────────────
 
-    void load(const QString &uri) override;
+    void load(const MediaLoadRequest &request) override;
     void play() override;
     void pause() override;
     void stop() override;
@@ -158,26 +160,24 @@ public:
     int    volumePercent()   const override { return m_volumePercent.load(); }
     bool   isMuted()         const override { return m_muted.load(); }
 
-private:
+protected:
     /**
-     * 在 mpv_initialize() 之前设置只能初始化前生效的 render API 选项。
+     * 在 mpv_initialize() 之前设置只能初始化前生效的输出选项。
+     *
+     * 生产 Ui 使用基类的 render API 设置；无头测试或未来的其他渲染壳可以覆盖。
      */
-    void applyStartupOptions(mpv_handle *mpv);
+    virtual void applyStartupOptions(mpv_handle *mpv);
 
+private:
     /** 后台线程：一直等 mpv 的事件，翻成 Qt 信号。 */
     void eventLoop();
 
-    /** 普通媒体直接加载；HLS 先探测它是不是图片序列。 */
+    /** 普通媒体直接加载。协议层负责提前决定是否需要兼容路线。 */
     void beginLoad(const QString &uri);
-    void requestPlaylistProbe(const QString &uri);
-    bool loadImageSequence(
-        const QByteArray &playlist, const QUrl &playlistUrl,
-        const QString &logicalUri);
-    void startImagePayloadProbe();
-    void probeNextImagePayload();
-    void finishImagePayloadProbe();
-    void cancelImagePayloadProbe();
-    void loadMfImageSequence(
+    void activateLoad(const MediaLoadRequest &request);
+    void prepareRouteLoad(const QString &logicalUri);
+    bool loadImageSequencePlan(const MediaLoadRequest &request);
+    bool loadMfImageSequence(
         const QVector<mcast::core::ImageSequenceSegment> &segments,
         const QString &logicalUri);
     void loadWrappedTransportStream(
@@ -187,15 +187,12 @@ private:
         const QString &mpvUri, const QString &logicalUri,
         const QString &temporaryImageListPath = {},
         bool emitStarted = true);
-    void cancelPlaylistProbe();
     void clearTemporaryImageSequence();
     QString logicalMediaUri(const QString &mpvUri) const;
     void resetImageTimeline();
-    void startImageTimeline();
-    void tickImageTimeline();
-    void seekImageTimeline(double seconds);
-    void reloadImageTimeline(double seconds);
+    void publishMediaSummary();
     void refreshMediaInfoSnapshot();
+    void finishPacketCorruptBurst();
 
     /**
      * 锐度走视频滤镜链，不走属性 —— 为什么，见 .cpp 里那段。
@@ -232,13 +229,16 @@ private:
      * 只在 eventLoop 和调用线程之间传，用原子量省得加锁。
      */
     std::atomic<bool> m_playOnLoad{true};
+    std::atomic<std::uint64_t> m_pendingLoadGeneration{0};
+    std::atomic<std::uint64_t> m_activeLoadGeneration{0};
 
     /**
      * 渲染面还没就绪时，先攒在这儿的那条地址。
      *
      * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。
      */
-    QString m_pendingUri;
+    std::optional<MediaLoadRequest> m_pendingLoad;
+    std::optional<MediaLoadRequest> m_lastLoadRequest;
     mutable std::mutex m_uriMutex;
     mutable std::mutex m_mediaInfoMutex;
     QVariantMap m_mediaInfo;
@@ -251,25 +251,17 @@ private:
     int m_artworkRetryCount = 0;
     std::atomic<bool> m_loadFailed{false};
 
-    QNetworkAccessManager *m_network = nullptr;
-    QNetworkReply *m_playlistReply = nullptr;
-    quint64 m_playlistRequest = 0;
-    quint64 m_imageProbeGeneration = 0;
-    QNetworkReply *m_imageProbeReply = nullptr;
-    QVector<mcast::core::ImageSequenceSegment> m_imageProbeSegments;
-    QString m_imageProbeLogicalUri;
-    bool m_imageProbeWrapped = true;
     std::unique_ptr<WrappedTsProxy> m_wrappedTsProxy;
-    QTimer *m_imageTimer = nullptr;
-    std::chrono::steady_clock::time_point m_imageClockStart;
-    QVector<mcast::core::ImageSequenceSegment> m_imageSegments;
-    qint64 m_imageBaseMs = 0;
-    double m_imageFps = 1.0;
+    std::unique_ptr<mcast::core::ImageSequenceStrategy>
+        m_imageSequence;
     std::atomic<bool> m_imageSequenceActive{false};
-    std::atomic<bool> m_imageSequencePaused{false};
+    std::atomic<std::uint64_t> m_imageSequenceLoadGeneration{0};
 
     std::atomic<double> m_positionSec{0.0};
     std::atomic<double> m_durationSec{0.0};
+    bool m_packetCorruptBurstActive = false;
+    int m_packetCorruptCount = 0;
+    std::chrono::steady_clock::time_point m_packetCorruptLast;
     std::atomic<int>    m_volumePercent{100};
     std::atomic<bool>   m_muted{false};
 

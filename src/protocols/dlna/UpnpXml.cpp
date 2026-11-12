@@ -3,6 +3,8 @@
 
 #include "UpnpXml.h"
 
+#include "core/ProductIdentity.h"
+
 #include <array>
 #include <string_view>
 #include <vector>
@@ -57,8 +59,8 @@ constexpr char kDeviceDescription[] = R"XML(<?xml version="1.0" encoding="UTF-8"
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
     <friendlyName>%1</friendlyName>
-    <manufacturer>Media Cast Receiver</manufacturer>
-    <modelName>Media Cast Receiver</modelName>
+    <manufacturer>%3</manufacturer>
+    <modelName>%3</modelName>
     <modelNumber>0.1</modelNumber>
     <UDN>%2</UDN>
     <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>
@@ -90,7 +92,8 @@ constexpr char kDeviceDescription[] = R"XML(<?xml version="1.0" encoding="UTF-8"
 )XML";
 
 std::string formatDeviceDescription(
-    const std::string &name, const std::string &udn)
+    const std::string &name, const std::string &udn,
+    const std::string &modelName)
 {
     std::string result;
     result.reserve(sizeof(kDeviceDescription) + name.size() + udn.size());
@@ -104,6 +107,11 @@ std::string formatDeviceDescription(
             }
             if (kDeviceDescription[index + 1] == '2') {
                 result += udn;
+                ++index;
+                continue;
+            }
+            if (kDeviceDescription[index + 1] == '3') {
+                result += modelName;
                 ++index;
                 continue;
             }
@@ -368,7 +376,8 @@ std::string UpnpXml::deviceDescription(
     const std::string &friendlyName, const std::string &udn)
 {
     return formatDeviceDescription(
-        xmlEscape(friendlyName), xmlEscape(udn));
+        xmlEscape(friendlyName), xmlEscape(udn),
+        xmlEscape(std::string(mcast::identity::appFullEnglish)));
 }
 
 std::string UpnpXml::avTransportScpd()

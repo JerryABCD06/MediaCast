@@ -72,7 +72,8 @@ Item {
                 title: qsTr("ui_about_version")
 
                 FluText {
-                    text: "Media Cast " + Device.appVersion
+                    text: Tr.appShortName
+                          + " " + Device.appVersion
                     font: FluTextStyle.Body
                     textColor: FluTheme.fontSecondaryColor
                 }

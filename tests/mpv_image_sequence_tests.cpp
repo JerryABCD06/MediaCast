@@ -62,7 +62,8 @@ int main(int argc, char **argv)
         bool ready = false;
         bool failed = false;
         QObject::connect(
-            &player, &MpvCore::ready, &app, [&] { ready = true; });
+            &player, &MpvCore::ready, &app,
+            [&](std::uint64_t) { ready = true; });
         QObject::connect(
             &player, &MediaPlayer::logMessage, &app,
             [&](const QString &message) {
@@ -83,11 +84,14 @@ int main(int argc, char **argv)
                       << value.toStdString() << " result=" << result
                       << '\n';
         }
-        player.loadNow(
+        MediaLoadRequest request;
+        request.logicalUri =
             QUrl(wrappedSample).scheme().startsWith(
                 QStringLiteral("http"))
-                ? wrappedSample
-                : QUrl::fromLocalFile(wrappedSample).toString());
+            ? wrappedSample
+            : QUrl::fromLocalFile(wrappedSample).toString();
+        player.setRendererAttached(true);
+        player.load(request);
         const auto wrappedDeadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(25);
         while (!ready && !failed
@@ -197,7 +201,8 @@ int main(int argc, char **argv)
     bool ready = false;
     QString failure;
     QObject::connect(
-        &player, &MpvCore::ready, &app, [&] { ready = true; });
+        &player, &MpvCore::ready, &app,
+        [&](std::uint64_t) { ready = true; });
     QObject::connect(
         &player, &MediaPlayer::lost, &app,
         [&] { failure = QStringLiteral("MPV was lost"); });
@@ -209,7 +214,15 @@ int main(int argc, char **argv)
                 failure = message;
         });
     check(player.start(), "headless MPV starts");
-    player.loadNow(baseUrl + QStringLiteral("/movie.m3u8"));
+    player.setRendererAttached(true);
+    MediaLoadRequest request;
+    request.logicalUri = baseUrl + QStringLiteral("/movie.m3u8");
+    request.route = MediaLoadRoute::ImageSequence;
+    request.imageSequenceFrames = {
+        {baseUrl + QStringLiteral("/frame-1.png"), 1.0},
+        {baseUrl + QStringLiteral("/frame-2.png"), 1.0},
+    };
+    player.load(request);
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(8);
@@ -242,9 +255,8 @@ int main(int argc, char **argv)
     const QString kind =
         info.value(QStringLiteral("kind")).toString();
     check(
-        kind == QStringLiteral("image")
-            || kind == QStringLiteral("video"),
-        "MPV recognizes the sequence as visual media");
+        kind == QStringLiteral("video"),
+        "an image sequence remains a video playback route");
     check(
         imageRequests == 2,
         "the compatibility layer feeds both remote images to MPV");

@@ -26,6 +26,7 @@ enum class CastConfirmationChoice {
 };
 
 struct CastConfirmationPrompt {
+    std::wstring appName;
     std::wstring protocolName;
     std::wstring peerName;
     std::wstring mediaTitle;

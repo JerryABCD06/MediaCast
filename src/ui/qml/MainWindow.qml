@@ -43,9 +43,8 @@ FluWindow {
                ? systemAccent : FluColors.Blue
     }
 
-    // 产品名，不翻译 —— 所以**不套 qsTr**。套了的话哪天有人做了个语言文件
-    // 顺手把它翻成中文，任务栏和窗口标题上的名字就跟着变了。
-    title: "Media Cast"
+    // 当前现有界面这里使用简称；术语缺失时回退到硬编码英文。
+    title: Tr.appShortName
 
     // 默认尺寸。**这两个数说的是"内容区"，不是整扇窗** —— FluWindow 会把顶栏
     // 那 48 像素加上去，所以实际窗口是 1000×798。

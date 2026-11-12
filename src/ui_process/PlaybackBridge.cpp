@@ -7,6 +7,7 @@
 #include "ipc/PlaybackCodec.h"
 
 #include <QMetaObject>
+#include <QStringList>
 
 #include <utility>
 
@@ -15,10 +16,13 @@ using namespace std::chrono_literals;
 namespace {
 
 constexpr std::size_t kMaxOrderedOutbound = 64;
+constexpr std::size_t kMaxUrgentOutbound = 8;
 
 using playback::LoadStatus;
+using playback::ImageSequenceFrame;
 using playback::MediaKind;
 using playback::MediaRequest;
+using playback::MediaRoute;
 using playback::MediaSource;
 using playback::PictureControl;
 using playback::PlayMode;
@@ -75,6 +79,24 @@ PlaybackController::PlayMode controllerPlayMode(PlayMode mode)
     return PlaybackController::PlayMode::Normal;
 }
 
+QString playbackPlanFingerprint(
+    const PlaybackController::MediaRequest &request)
+{
+    QStringList parts;
+    parts.append(request.uri);
+    parts.append(QString::number(
+        static_cast<int>(request.route)));
+    parts.append(QString::number(
+        static_cast<int>(request.kind)));
+    parts.append(QString::number(request.imageSequenceFrames.size()));
+    for (const MediaLoadFrame &frame : request.imageSequenceFrames) {
+        parts.append(frame.uri);
+        parts.append(QString::number(
+            frame.durationSeconds, 'g', 17));
+    }
+    return parts.join(QChar(0x1f));
+}
+
 PlaybackController::MediaRequest controllerRequest(
     const MediaRequest &request)
 {
@@ -104,6 +126,25 @@ PlaybackController::MediaRequest controllerRequest(
     case MediaKind::Image:
         result.kind = ::MediaKind::Image;
         break;
+    }
+    switch (request.route) {
+    case MediaRoute::ImageSequence:
+        result.route = MediaLoadRoute::ImageSequence;
+        break;
+    case MediaRoute::WrappedTransportStream:
+        result.route = MediaLoadRoute::WrappedTransportStream;
+        break;
+    case MediaRoute::Native:
+        result.route = MediaLoadRoute::Native;
+        break;
+    }
+    result.imageSequenceFrames.reserve(
+        static_cast<qsizetype>(request.imageSequenceFrames.size()));
+    for (const ImageSequenceFrame &frame : request.imageSequenceFrames) {
+        result.imageSequenceFrames.push_back(MediaLoadFrame{
+            QString::fromStdString(frame.uri),
+            frame.durationSeconds,
+        });
     }
     return result;
 }
@@ -201,9 +242,10 @@ PlaybackBridge::PlaybackBridge(
         std::string error;
         auto reconnected = playback::wire::makePlaybackStateMessage(
             ipc::MessageType::PlaybackReconnected,
-            m_stateVersion, snapshot(), error);
+            m_stateVersion, snapshot(true), error);
         if (reconnected) {
             sendMessage(std::move(*reconnected), "reconnected");
+            markPlaybackPlanSerialized();
             ++m_stateVersion;
         } else {
             emit logMessage(
@@ -241,14 +283,11 @@ void PlaybackBridge::requestEndSession()
     message.header.destination = ipc::ProcessRole::Protocol;
     message.header.messageId = m_nextRequestId.fetch_add(1);
     message.header.sessionId = 1;
-    std::string error;
-    if (!m_connected || !m_connection
-        || !m_connection->writeMessage(message, 2000ms, error)) {
-        emit logMessage(
-            QStringLiteral("断开连接请求发送失败：%1")
-                .arg(QString::fromStdString(error)));
+    if (sendMessage(
+            std::move(message), "end session", false, true)) {
+        emit logMessage(QStringLiteral("断开当前投送的请求已进入优先发送队列"));
     } else {
-        emit logMessage(QStringLiteral("断开当前投送的请求已发送"));
+        emit logMessage(QStringLiteral("断开连接请求发送失败：发送队列不可用"));
     }
 }
 
@@ -259,20 +298,30 @@ void PlaybackBridge::pauseAndFlushState()
     m_stateTimer.stop();
     ++m_stateVersion;
     std::string error;
+    // This path writes synchronously because the window may be about to exit
+    // and the bridge destructor will close the writer. Always include the
+    // current plan so this direct, higher-version message cannot hide a plan
+    // that was still queued behind the writer.
     auto message = playback::wire::makePlaybackStateMessage(
         ipc::MessageType::PlaybackStateDelta,
-        m_stateVersion, snapshot(), error);
+        m_stateVersion, snapshot(true), error);
     if (!message) {
         emit logMessage(
             QStringLiteral("暂停状态编码失败：%1")
                 .arg(QString::fromStdString(error)));
         return;
     }
-    if (!m_connection
-        || !m_connection->writeMessage(*message, 2000ms, error)) {
+    bool written = false;
+    if (m_connection) {
+        std::scoped_lock writeLock(m_writeMutex);
+        written = m_connection->writeMessage(*message, 2000ms, error);
+    }
+    if (!written) {
         emit logMessage(
             QStringLiteral("暂停状态同步失败：%1")
                 .arg(QString::fromStdString(error)));
+    } else {
+        markPlaybackPlanSerialized();
     }
 }
 
@@ -284,12 +333,9 @@ void PlaybackBridge::notifyUiReady()
     message.header.destination = ipc::ProcessRole::Protocol;
     message.header.messageId = m_nextRequestId.fetch_add(1);
     message.header.sessionId = 1;
-    std::string error;
-    if (!m_connected || !m_connection
-        || !m_connection->writeMessage(message, 2000ms, error)) {
-        emit logMessage(
-            QStringLiteral("Playback UI 就绪上报失败：%1")
-                .arg(QString::fromStdString(error)));
+    if (!sendMessage(
+            std::move(message), "playback UI ready", false, true)) {
+        emit logMessage(QStringLiteral("Playback UI 就绪上报失败：发送队列不可用"));
     }
 }
 
@@ -317,16 +363,22 @@ void PlaybackBridge::writerLoop(std::stop_token stop)
 {
     while (true) {
         std::optional<ipc::Message> message;
+        bool urgent = false;
         {
             std::unique_lock lock(m_outboundMutex);
             m_outboundReady.wait(lock, [&] {
                 return stop.stop_requested() || !m_acceptOutbound
+                    || !m_urgentOutbound.empty()
                     || !m_orderedOutbound.empty()
                     || m_latestState.has_value();
             });
             if (stop.stop_requested() || !m_acceptOutbound)
                 return;
-            if (!m_orderedOutbound.empty()) {
+            if (!m_urgentOutbound.empty()) {
+                message = std::move(m_urgentOutbound.front());
+                m_urgentOutbound.pop_front();
+                urgent = true;
+            } else if (!m_orderedOutbound.empty()) {
                 message = std::move(m_orderedOutbound.front());
                 m_orderedOutbound.pop_front();
             } else if (m_latestState) {
@@ -338,12 +390,29 @@ void PlaybackBridge::writerLoop(std::stop_token stop)
         }
 
         std::string error;
-        if (m_connection
-            && !m_connection->writeMessage(*message, 2000ms, error)) {
+        bool written = false;
+        const int attempts = urgent ? 3 : 1;
+        for (int attempt = 0;
+             attempt < attempts && !written
+             && !stop.stop_requested();
+             ++attempt) {
+            if (attempt > 0)
+                std::this_thread::sleep_for(50ms);
+            if (m_connection) {
+                std::scoped_lock writeLock(m_writeMutex);
+                written = m_connection->writeMessage(
+                    *message, 2000ms, error);
+            }
+        }
+        if (!written) {
             m_connected = false;
+            const QString failureText = urgent
+                ? QStringLiteral("Playback IPC 优先消息写入失败：%1")
+                : QStringLiteral("Playback IPC 写入失败：%1");
             emit logMessage(
-                QStringLiteral("Playback IPC 写入失败：%1")
-                    .arg(QString::fromStdString(error)));
+                failureText.arg(QString::fromStdString(error)));
+            if (urgent)
+                return;
         }
     }
 }
@@ -426,7 +495,7 @@ void PlaybackBridge::sendSnapshotResponse(std::uint64_t requestId)
         m_stateVersion = 1;
     std::string error;
     auto message = playback::wire::makePlaybackSnapshotResponseMessage(
-        requestId + 1, requestId, snapshot(), error);
+        requestId + 1, requestId, snapshot(true), error);
     if (!message) {
         emit logMessage(
             QStringLiteral("Playback Snapshot 编码失败：%1")
@@ -434,6 +503,7 @@ void PlaybackBridge::sendSnapshotResponse(std::uint64_t requestId)
         return;
     }
     sendMessage(*message, "snapshot response");
+    markPlaybackPlanSerialized();
 }
 
 void PlaybackBridge::scheduleState()
@@ -455,9 +525,12 @@ void PlaybackBridge::flushState()
     m_sendPlayerLost = false;
     m_sendReconnected = false;
     std::string error;
+    const bool includePlaybackPlan =
+        playbackPlanNeedsSerialization();
     auto message =
         playback::wire::makePlaybackStateMessage(
-            type, m_stateVersion, snapshot(), error);
+            type, m_stateVersion,
+            snapshot(includePlaybackPlan), error);
     if (!message) {
         emit logMessage(
             QStringLiteral("Playback 状态编码失败：%1")
@@ -466,12 +539,32 @@ void PlaybackBridge::flushState()
     }
     sendMessage(
         std::move(*message), "state",
-        type == ipc::MessageType::PlaybackStateDelta);
+        type == ipc::MessageType::PlaybackStateDelta
+            && !includePlaybackPlan);
+    if (includePlaybackPlan)
+        markPlaybackPlanSerialized();
 }
 
-PlaybackSnapshot PlaybackBridge::snapshot() const
+bool PlaybackBridge::playbackPlanNeedsSerialization() const
+{
+    return playbackPlanFingerprint(m_controller.currentRequest())
+            != m_lastPlanCurrentFingerprint
+        || playbackPlanFingerprint(m_controller.nextRequest())
+            != m_lastPlanNextFingerprint;
+}
+
+void PlaybackBridge::markPlaybackPlanSerialized()
+{
+    m_lastPlanCurrentFingerprint =
+        playbackPlanFingerprint(m_controller.currentRequest());
+    m_lastPlanNextFingerprint =
+        playbackPlanFingerprint(m_controller.nextRequest());
+}
+
+PlaybackSnapshot PlaybackBridge::snapshot(bool includePlaybackPlan) const
 {
     PlaybackSnapshot result;
+    result.playbackPlanIncluded = includePlaybackPlan;
     result.state = playbackState(m_controller.state());
     result.loadStatus = m_controller.loadStatus()
             == PlaybackController::LoadStatus::Failed
@@ -505,6 +598,23 @@ PlaybackSnapshot PlaybackBridge::snapshot() const
     if (result.current.protocol.empty())
         result.current.protocol =
             controllerCurrent.protocol.toStdString();
+    result.current.imageSequenceFrames.clear();
+    if (includePlaybackPlan
+        && controllerCurrent.route != MediaLoadRoute::Native) {
+        result.current.route =
+            controllerCurrent.route == MediaLoadRoute::ImageSequence
+            ? MediaRoute::ImageSequence
+            : MediaRoute::WrappedTransportStream;
+        for (const MediaLoadFrame &frame :
+             controllerCurrent.imageSequenceFrames) {
+            result.current.imageSequenceFrames.push_back(ImageSequenceFrame{
+                frame.uri.toStdString(),
+                frame.durationSeconds,
+            });
+        }
+    } else {
+        result.current.route = MediaRoute::Native;
+    }
     const NowPlaying now = m_controller.nowPlaying();
     if (now.kind != ::MediaKind::Unknown) {
         switch (now.kind) {
@@ -561,6 +671,23 @@ PlaybackSnapshot PlaybackBridge::snapshot() const
     if (result.next.protocol.empty())
         result.next.protocol =
             controllerNext.protocol.toStdString();
+    result.next.imageSequenceFrames.clear();
+    if (includePlaybackPlan
+        && controllerNext.route != MediaLoadRoute::Native) {
+        result.next.route =
+            controllerNext.route == MediaLoadRoute::ImageSequence
+            ? MediaRoute::ImageSequence
+            : MediaRoute::WrappedTransportStream;
+        for (const MediaLoadFrame &frame :
+             controllerNext.imageSequenceFrames) {
+            result.next.imageSequenceFrames.push_back(ImageSequenceFrame{
+                frame.uri.toStdString(),
+                frame.durationSeconds,
+            });
+        }
+    } else {
+        result.next.route = MediaRoute::Native;
+    }
     switch (controllerNext.kind) {
     case ::MediaKind::Unknown:
         break;
@@ -751,7 +878,8 @@ PlaybackOutcomeStatus PlaybackBridge::execute(
 }
 
 bool PlaybackBridge::sendMessage(
-    ipc::Message message, const char *what, bool coalescible)
+    ipc::Message message, const char *what, bool coalescible,
+    bool urgent)
 {
     (void)what;
     if (!m_connected || !m_connection)
@@ -763,9 +891,13 @@ bool PlaybackBridge::sendMessage(
             return false;
         if (coalescible) {
             m_latestState = std::move(message);
+        } else if (urgent) {
+            if (m_urgentOutbound.size() >= kMaxUrgentOutbound)
+                queueOverflow = true;
+            else
+                m_urgentOutbound.push_back(std::move(message));
         } else {
             if (m_orderedOutbound.size() >= kMaxOrderedOutbound) {
-                m_connected = false;
                 queueOverflow = true;
             } else {
                 m_orderedOutbound.push_back(std::move(message));
@@ -774,7 +906,8 @@ bool PlaybackBridge::sendMessage(
     }
     if (queueOverflow) {
         emit logMessage(
-            QStringLiteral("Playback 发送队列已满，PlaybackPipe 已失效"));
+            QStringLiteral("Playback 发送队列已满：%1")
+                .arg(QString::fromUtf8(what)));
         return false;
     }
     m_outboundReady.notify_one();

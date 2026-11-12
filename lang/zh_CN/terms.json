@@ -1,8 +1,18 @@
 {
   "strings": {
-    "protocol_dlna": "数字生活网络联盟（DLNA）",
-    "protocol_airplay": "AirPlay",
-    "protocol_googlecast": "Google Cast",
+    "term_app_full": "媒体投屏接收器",
+    "term_app_short": "媒体投屏",
+
+    "term_protocol_dlna_full": "数字生活网络联盟（DLNA）",
+    "term_protocol_dlna_short": "DLNA",
+    "term_protocol_airplay_full": "AirPlay",
+    "term_protocol_airplay_short": "AirPlay",
+    "term_protocol_google_cast_full": "Google Cast",
+    "term_protocol_google_cast_short": "Google Cast",
+    "term_protocol_miracast_full": "Miracast",
+    "term_protocol_miracast_short": "Miracast",
+    "term_protocol_lelink_full": "LeLink",
+    "term_protocol_lelink_short": "LeLink",
 
     "codec_h264": "H.264 / AVC",
     "codec_hevc": "HEVC / H.265",

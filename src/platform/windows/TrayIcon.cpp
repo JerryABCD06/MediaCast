@@ -3,6 +3,8 @@
 
 #include "platform/windows/TrayIcon.h"
 
+#include "core/ProductIdentity.h"
+
 #include <windowsx.h>
 #include <uxtheme.h>
 #include <winternl.h>
@@ -91,13 +93,15 @@ NativeTrayIcon::NativeTrayIcon(
     , m_quit(std::move(quit))
     , m_themeChanged(std::move(themeChanged))
 {
+    const std::wstring appShort{
+        mcast::identity::appShortEnglishWide};
     m_texts = {
         L"Open main window",
         L"Pause receiving",
         L"Resume receiving",
         L"Quit",
-        L"Media Cast",
-        L"Media Cast (receiving paused)",
+        appShort,
+        appShort + L" (receiving paused)",
     };
 }
 
@@ -124,8 +128,10 @@ bool NativeTrayIcon::initialize(std::string &error)
         return false;
     }
 
+    const std::wstring windowTitle =
+        std::wstring(mcast::identity::appShortEnglishWide) + L" Tray";
     m_window = CreateWindowExW(
-        WS_EX_TOOLWINDOW, kWindowClass, L"Media Cast Tray",
+        WS_EX_TOOLWINDOW, kWindowClass, windowTitle.c_str(),
         WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr,
         GetModuleHandleW(nullptr), this);
     if (!m_window) {

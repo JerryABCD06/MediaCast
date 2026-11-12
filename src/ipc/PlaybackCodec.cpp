@@ -24,12 +24,13 @@ using mcast::ipc::PayloadBuilder;
 using mcast::ipc::PayloadReader;
 using mcast::ipc::ProcessRole;
 
-constexpr std::uint16_t kBlobVersion = 1;
+constexpr std::uint16_t kBlobVersion = 2;
 constexpr std::uint32_t kMaxTextSize = 256 * 1024;
 // A MediaRequest is itself encoded into one IPC field. Its blob limit must
 // match the outer field limit, not the larger HTTP request-body allowance.
 constexpr std::uint32_t kMaxMediaBlobSize = mcast::ipc::kMaxFieldSize;
 constexpr std::uint32_t kMaxPictureControls = 64;
+constexpr std::uint32_t kMaxImageSequenceFrames = 1024;
 constexpr std::uint32_t kSnapshotWireOverhead = 64 * 1024;
 constexpr std::uint32_t kMaxSnapshotBlobSize =
     mcast::ipc::kMaxPayloadSize - kSnapshotWireOverhead;
@@ -47,8 +48,31 @@ bool enumAtMost(Enum value, Enum maximum)
 bool validateMediaRequest(const MediaRequest &request, std::string &error)
 {
     if (!enumAtMost(request.kind, MediaKind::Image)
-        || !enumAtMost(request.source, MediaSource::Local)) {
+        || !enumAtMost(request.source, MediaSource::Local)
+        || !enumAtMost(
+            request.route, MediaRoute::WrappedTransportStream)) {
         error = "invalid media request enum";
+        return false;
+    }
+    if (request.route != MediaRoute::Native) {
+        if (request.kind != MediaKind::Video
+            || request.imageSequenceFrames.empty()
+            || request.imageSequenceFrames.size()
+                > kMaxImageSequenceFrames) {
+            error = "invalid image sequence request";
+            return false;
+        }
+        for (const ImageSequenceFrame &frame :
+             request.imageSequenceFrames) {
+            if (frame.uri.empty() || !std::isfinite(frame.durationSeconds)
+                || frame.durationSeconds <= 0.0
+                || frame.durationSeconds > 3600.0) {
+                error = "invalid image sequence frame";
+                return false;
+            }
+        }
+    } else if (!request.imageSequenceFrames.empty()) {
+        error = "native media request has image sequence frames";
         return false;
     }
     return true;
@@ -310,6 +334,14 @@ bool encodeMediaRequestBlob(
         return false;
     writer.u8(static_cast<std::uint8_t>(request.kind));
     writer.u8(static_cast<std::uint8_t>(request.source));
+    writer.u8(static_cast<std::uint8_t>(request.route));
+    writer.u16(
+        static_cast<std::uint16_t>(request.imageSequenceFrames.size()));
+    for (const ImageSequenceFrame &frame : request.imageSequenceFrames) {
+        if (!writer.string(frame.uri, error))
+            return false;
+        writer.doubleValue(frame.durationSeconds);
+    }
     writer.u8(request.mediaSizeBytes ? 1 : 0);
     if (request.mediaSizeBytes)
         writer.u64(*request.mediaSizeBytes);
@@ -324,6 +356,8 @@ bool decodeMediaRequestBlob(
     std::uint16_t version = 0;
     std::uint8_t kind = 0;
     std::uint8_t source = 0;
+    std::uint8_t route = 0;
+    std::uint16_t frameCount = 0;
     std::uint8_t hasSize = 0;
     if (!reader.u16(version) || version != kBlobVersion
         || !reader.string(request.uri, error)
@@ -339,19 +373,44 @@ bool decodeMediaRequestBlob(
         || !reader.string(request.protocol, error)
         || !reader.u8(kind)
         || !reader.u8(source)
-        || !reader.u8(hasSize)) {
+        || !reader.u8(route)
+        || !reader.u16(frameCount)) {
         if (error.empty())
             error = "invalid media request blob";
         return false;
     }
     if (!enumAtMost(static_cast<MediaKind>(kind), MediaKind::Image)
         || !enumAtMost(static_cast<MediaSource>(source), MediaSource::Local)
-        || hasSize > 1) {
+        || !enumAtMost(
+            static_cast<MediaRoute>(route),
+            MediaRoute::WrappedTransportStream)
+        || frameCount > kMaxImageSequenceFrames) {
         error = "invalid media request enum";
         return false;
     }
     request.kind = static_cast<MediaKind>(kind);
     request.source = static_cast<MediaSource>(source);
+    request.route = static_cast<MediaRoute>(route);
+    request.imageSequenceFrames.clear();
+    request.imageSequenceFrames.reserve(frameCount);
+    for (std::uint16_t index = 0; index < frameCount; ++index) {
+        ImageSequenceFrame frame;
+        if (!reader.string(frame.uri, error)
+            || !reader.doubleValue(frame.durationSeconds)) {
+            if (error.empty())
+                error = "invalid image sequence frame";
+            return false;
+        }
+        request.imageSequenceFrames.push_back(std::move(frame));
+    }
+    if (!reader.u8(hasSize)) {
+        error = "invalid media size flag";
+        return false;
+    }
+    if (hasSize > 1) {
+        error = "invalid media size flag";
+        return false;
+    }
     if (hasSize) {
         std::uint64_t size = 0;
         if (!reader.u64(size)) {
@@ -523,6 +582,7 @@ encodePlaybackSnapshot(const PlaybackSnapshot &snapshot, std::string &error)
     flags |= snapshot.peerConnected ? 1u << 2 : 0;
     flags |= snapshot.playerAvailable ? 1u << 3 : 0;
     flags |= snapshot.muted ? 1u << 4 : 0;
+    flags |= snapshot.playbackPlanIncluded ? 1u << 5 : 0;
     writer.u8(flags);
     writer.u64(snapshot.generation);
     writer.u64(snapshot.stateVersion);
@@ -587,7 +647,7 @@ bool decodePlaybackSnapshot(
             static_cast<LoadStatus>(loadStatus), LoadStatus::Failed)
         || !enumAtMost(
             static_cast<PlayMode>(playMode), PlayMode::Direct)
-        || (flags & ~0x1Fu) != 0
+        || (flags & ~0x3Fu) != 0
         || snapshot.generation == 0
         || snapshot.stateVersion == 0
         || snapshot.volumePercent < 0
@@ -603,6 +663,7 @@ bool decodePlaybackSnapshot(
     snapshot.peerConnected = (flags & (1u << 2)) != 0;
     snapshot.playerAvailable = (flags & (1u << 3)) != 0;
     snapshot.muted = (flags & (1u << 4)) != 0;
+    snapshot.playbackPlanIncluded = (flags & (1u << 5)) != 0;
     snapshot.positionSeconds = static_cast<double>(positionMs) / 1000.0;
     snapshot.durationSeconds = static_cast<double>(durationMs) / 1000.0;
     if (!decodeMediaRequestBlob(currentBytes, snapshot.current, error)
@@ -690,6 +751,10 @@ bool decodePlaybackCommandMessage(
             message, MessageType::PlaybackCommand,
             ProcessRole::Protocol, ConnectionChannel::Playback, error))
         return false;
+    if (message.header.versionMinor < 4) {
+        error = "playback command requires protocol minor 4";
+        return false;
+    }
     if (message.header.messageId == 0) {
         error = "playback command ID is zero";
         return false;
@@ -718,7 +783,7 @@ std::optional<Message> makePlaybackCommandResultMessage(
         || result.stateVersion == 0
         || !enumAtMost(
             result.submissionStatus,
-            PlaybackSubmissionStatus::SessionEnding)
+            PlaybackSubmissionStatus::Busy)
         || !enumAtMost(
             result.outcome, PlaybackOutcomeStatus::StaleGeneration)) {
         error = "invalid playback result";
@@ -773,6 +838,10 @@ bool decodePlaybackCommandResultMessage(
             error = "invalid playback result envelope";
         return false;
     }
+    if (message.header.versionMinor < 4) {
+        error = "playback result requires protocol minor 4";
+        return false;
+    }
     const PayloadReader reader(message.payload);
     const auto generation = reader.getUInt64(
         static_cast<std::uint16_t>(FieldId::PlaybackGeneration));
@@ -786,7 +855,7 @@ bool decodePlaybackCommandResultMessage(
         static_cast<std::uint16_t>(FieldId::ErrorText));
     const auto maxSubmission = static_cast<std::uint64_t>(
         static_cast<std::underlying_type_t<PlaybackSubmissionStatus>>(
-            PlaybackSubmissionStatus::SessionEnding));
+            PlaybackSubmissionStatus::Busy));
     const auto maxOutcome = static_cast<std::uint64_t>(
         static_cast<std::underlying_type_t<PlaybackOutcomeStatus>>(
             PlaybackOutcomeStatus::StaleGeneration));
@@ -828,6 +897,10 @@ bool decodePlaybackSnapshotRequestMessage(
             message, MessageType::PlaybackSnapshotRequest,
             ProcessRole::Protocol, ConnectionChannel::Playback, error))
         return false;
+    if (message.header.versionMinor < 4) {
+        error = "playback snapshot request requires protocol minor 4";
+        return false;
+    }
     if (message.header.messageId == 0) {
         error = "snapshot request ID is zero";
         return false;
@@ -929,6 +1002,10 @@ bool decodePlaybackSnapshotMessage(
         && message.header.type != MessageType::PlaybackPlayerLost
         && message.header.type != MessageType::PlaybackReconnected) {
         error = "message is not a playback snapshot";
+        return false;
+    }
+    if (message.header.versionMinor < 4) {
+        error = "playback state requires protocol minor 4";
         return false;
     }
     if (message.header.messageId == 0) {

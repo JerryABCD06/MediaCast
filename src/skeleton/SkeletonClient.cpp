@@ -8,6 +8,8 @@
 #include "ipc/PlaybackPipeGateway.h"
 #include "ipc/ProtocolControlDispatcher.h"
 #include "playback/LateBindingPlaybackGateway.h"
+#include "playback/PlanningPlaybackGateway.h"
+#include "protocols/dlna/playback/DlnaPlaybackPlanner.h"
 #include "protocols/dlna/runtime/DlnaProtocolRuntime.h"
 #include "skeleton/ProtocolDlnaConfirmationPort.h"
 #include "supervisor/ProcessIdentity.h"
@@ -23,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -40,6 +43,7 @@ namespace mcast::skeleton {
 namespace {
 
 std::string g_protocolLogPath;
+std::mutex g_protocolLogMutex;
 
 using namespace std::chrono_literals;
 using mcast::ipc::ConnectionChannel;
@@ -80,6 +84,7 @@ std::wstring widen(const std::string &value)
 
 void protocolLog(const std::string &text)
 {
+    std::lock_guard lock(g_protocolLogMutex);
     const std::filesystem::path path =
         g_protocolLogPath.empty()
         ? mcast::supervisor::currentExecutablePath()
@@ -90,8 +95,17 @@ void protocolLog(const std::string &text)
                       g_protocolLogPath.data()),
                   g_protocolLogPath.size()));
     std::ofstream log(path, std::ios::app);
-    if (log)
-        log << text << '\n';
+    if (!log)
+        return;
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    char timestamp[32]{};
+    std::snprintf(
+        timestamp, sizeof(timestamp),
+        "%04u-%02u-%02u %02u:%02u:%02u.%03u ",
+        now.wYear, now.wMonth, now.wDay,
+        now.wHour, now.wMinute, now.wSecond, now.wMilliseconds);
+    log << timestamp << text << '\n';
 }
 
 std::optional<HelloInfo> makeSelfHello(const ClientOptions &options)
@@ -829,6 +843,15 @@ int runClient(const ClientOptions &options)
         auto playbackGateway =
             std::make_shared<
                 mcast::playback::LateBindingPlaybackGateway>();
+        mcast::dlna::planning::DlnaPlaybackPlanner dlnaPlaybackPlanner(
+            protocolLog);
+        mcast::playback::PlanningPlaybackGateway planningPlayback(
+            *playbackGateway,
+            [&dlnaPlaybackPlanner](
+                const mcast::playback::MediaRequest &media,
+                std::string &) {
+                return dlnaPlaybackPlanner.plan(media);
+            });
         ProtocolDlnaConfirmationPort dlnaConfirmationPort(
             *dispatcher);
         const bool persistent = options.persistent;
@@ -1053,7 +1076,7 @@ int runClient(const ClientOptions &options)
             };
 
         mcast::dlna::runtime::DlnaProtocolRuntime dlnaRuntime(
-            *playbackGateway, dlnaConfirmationPort,
+            planningPlayback, dlnaConfirmationPort,
             mcast::dlna::runtime::DlnaProtocolRuntimeOptions{
                 options.friendlyName,
                 options.udn,
@@ -1172,7 +1195,11 @@ int runClient(const ClientOptions &options)
                               << activationError << '\n';
                     return 3;
                 }
-            } else if (!dispatcher->sendUiOpenReady(error)) {
+            }
+            // Ready must be re-armed after every activation. Production always
+            // starts Protocol persistently, and a closed Ui is reopened by a
+            // later Shell/tray UiOpenRequest on this same control connection.
+            if (!dispatcher->sendUiOpenReady(error)) {
                 std::cerr << "UiOpenReady failed: "
                           << error << '\n';
                 return 3;

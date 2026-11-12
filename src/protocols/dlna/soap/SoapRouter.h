@@ -22,6 +22,8 @@ struct SoapRequestContext {
     std::string service;
     std::string action;
     SoapRequestXml body;
+    std::string clientName;
+    std::string clientAddress;
 };
 
 struct SoapRouterOptions {
@@ -41,10 +43,14 @@ public:
     std::optional<SoapRequestContext> parseRequest(
         const core::HttpRequest &request,
         HttpResponse &errorResponse);
-    HttpResponse handleParsed(const SoapRequestContext &request);
-    void notePeerActivity();
-    void noteNewMediaRequest();
+    HttpResponse handleParsed(
+        const SoapRequestContext &request,
+        std::optional<std::uint64_t> expectedOwnerEpoch = std::nullopt);
+    void notePeerActivity(std::string_view clientAddress = {});
+    void noteNewMediaRequest(
+        std::string clientName = {}, std::string clientAddress = {});
     bool hasTransportMedia() const;
+    std::uint64_t ownerEpoch() const;
 
     static playback::MediaRequest mediaRequest(
         std::string uri, std::string metadata);
@@ -56,17 +62,21 @@ public:
 private:
     HttpResponse dispatch(
         const std::string &service, const std::string &action,
-        const SoapRequestXml &body);
+        const SoapRequestXml &body,
+        std::optional<std::uint64_t> expectedOwnerEpoch);
     HttpResponse handleAvTransport(
-        const std::string &action, const SoapRequestXml &body);
+        const std::string &action, const SoapRequestXml &body,
+        std::optional<std::uint64_t> expectedOwnerEpoch);
     HttpResponse handleRenderingControl(
-        const std::string &action, const SoapRequestXml &body);
+        const std::string &action, const SoapRequestXml &body,
+        std::optional<std::uint64_t> expectedOwnerEpoch);
     HttpResponse handleConnectionManager(
         const std::string &action, const SoapRequestXml &body);
 
     HttpResponse submit(
         playback::PlaybackCommand command, const std::string &service,
-        const std::string &action);
+        const std::string &action,
+        std::optional<std::uint64_t> expectedOwnerEpoch = std::nullopt);
     HttpResponse submitMedia(
         playback::MediaRequest media, const std::string &service,
         const std::string &action);

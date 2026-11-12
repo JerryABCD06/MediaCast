@@ -372,7 +372,10 @@ void testEndToEndInitialMediaAndConfirmation()
             },
             [](const std::string &) {},
         });
-    check(runtime.start(error), "DLNA runtime starts: " + error);
+    const bool started = runtime.start(error);
+    if (!started)
+        std::cerr << "runtime start error: " << error << '\n';
+    check(started, "DLNA runtime starts: " + error);
     check(runtime.localPort() != 0,
           "DLNA runtime allocates an HTTP port");
 
@@ -961,12 +964,20 @@ void testSubscriptionControlsPeerConnection()
           "resuming does not disturb the current media");
     check(runtime.requestDisconnect(error),
           "an explicit UI disconnect requests a session end: " + error);
-    check(runtime.localPort() == 0,
-          "explicit disconnect briefly stops the DLNA service");
+    check(runtime.localPort() != 0,
+          "explicit disconnect keeps HTTP/GENA alive while EndSession drains");
     playback.processAll();
     check(playback.snapshot().state == PlaybackState::NoMedia
               && !playback.snapshot().peerConnected,
           "explicit disconnect clears media and the peer session");
+    const auto teardownDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (runtime.localPort() != 0
+           && std::chrono::steady_clock::now() < teardownDeadline) {
+        std::this_thread::sleep_for(20ms);
+    }
+    check(runtime.localPort() == 0,
+          "explicit disconnect stops the network only after the final drain");
     const auto restartDeadline =
         std::chrono::steady_clock::now() + 4s;
     while (runtime.localPort() == 0
@@ -1023,6 +1034,51 @@ void testSubscriptionControlsPeerConnection()
     playback.processAll();
     check(playback.snapshot().peerConnected,
           "the stale old SID does not close the newly started session");
+
+    std::string stopResponse;
+    std::atomic_bool stopDone{false};
+    std::jthread stopClient([&] {
+        stopResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.80",
+                soapBody(
+                    "Stop",
+                    "<InstanceID>0</InstanceID>"),
+                "Stop"));
+        stopDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return stopDone.load(); });
+    stopClient.join();
+    const bool stopSucceeded =
+        stopResponse.starts_with("HTTP/1.1 200 OK")
+        && playback.snapshot().state == PlaybackState::Stopped
+        && playback.snapshot().peerConnected;
+    if (!stopSucceeded) {
+        std::cerr << "stop response: "
+                  << stopResponse.substr(
+                         0, std::min<std::size_t>(
+                                stopResponse.size(), 800))
+                  << " state="
+                  << static_cast<int>(playback.snapshot().state)
+                  << " peer=" << playback.snapshot().peerConnected
+                  << '\n';
+    }
+    check(stopSucceeded,
+          "control-point Stop enters the idle grace window");
+
+    const auto idleDeadline =
+        std::chrono::steady_clock::now() + 10s;
+    while (std::chrono::steady_clock::now() < idleDeadline
+           && (playback.snapshot().peerConnected
+               || playback.snapshot().state != PlaybackState::NoMedia)) {
+        playback.processAll();
+        std::this_thread::sleep_for(20ms);
+    }
+    check(!playback.snapshot().peerConnected
+              && playback.snapshot().state == PlaybackState::NoMedia,
+          "an idle control point after Stop ends the session");
     runtime.stop();
 }
 

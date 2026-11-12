@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/ProductIdentity.h"
+
 #include "ipc/IpcProtocol.h"
 
 #include <string>
@@ -13,7 +15,8 @@ struct ClientOptions {
     ipc::ProcessRole role = ipc::ProcessRole::Unknown;
     std::string instance;
     std::string nonce;
-    std::string friendlyName = "Media Cast Receiver";
+    std::string friendlyName{
+        mcast::identity::appFullEnglish};
     std::string udn = "uuid:mcast-default";
     std::uint32_t shellPid = 0;
     std::uint64_t activationId = 0;

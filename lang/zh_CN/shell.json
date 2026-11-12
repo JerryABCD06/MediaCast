@@ -3,6 +3,6 @@
   "tray_pause_receiving": "暂停接收投送",
   "tray_resume_receiving": "恢复接收投送",
   "tray_quit": "退出",
-  "tray_tooltip_receiving": "Media Cast",
-  "tray_tooltip_paused": "Media Cast（已暂停接收投送）"
+  "tray_tooltip_receiving": "{app_short}",
+  "tray_tooltip_paused": "{app_short}（已暂停接收投送）"
 }

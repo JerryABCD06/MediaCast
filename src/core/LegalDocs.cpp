@@ -3,6 +3,8 @@
 
 #include "LegalDocs.h"
 
+#include "ProductIdentity.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -63,7 +65,14 @@ LegalDocs::LegalDocs(QObject *parent)
     // ⚠️ **仓库还是空的**（2026-09-14 他刚建好）。GPL 要求分发二进制时提供"对应
     // 源码的获取方式" —— 所以**在把代码推上去之前，不要对外发这个程序的二进制**，
     // 否则这一栏就是一句空话。推上去之后这里才算数。
-    m_project = component(QStringLiteral("Media Cast Receiver"),
+    QString projectName = QCoreApplication::translate(
+        "LegalDocs", "term_app_full");
+    if (projectName == QStringLiteral("term_app_full")) {
+        projectName = QString::fromLatin1(
+            mcast::identity::appFullEnglish.data(),
+            static_cast<int>(mcast::identity::appFullEnglish.size()));
+    }
+    m_project = component(projectName,
                           QStringLiteral("Copyright (C) 2026 Wang Yunzheng <wyz-mcast@outlook.com>"),
                           QStringLiteral("GPL-3.0-or-later"),
                           QStringLiteral("GPL-3.0.txt"),

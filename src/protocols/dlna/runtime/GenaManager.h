@@ -61,6 +61,7 @@ public:
 
     void updateState(const playback::PlaybackSnapshot &snapshot);
     std::size_t subscriptionCount() const;
+    bool quiescent() const;
 
 private:
     enum class NotifyResult {

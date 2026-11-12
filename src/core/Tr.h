@@ -39,6 +39,9 @@
 class Tr : public QTranslator
 {
     Q_OBJECT
+    Q_PROPERTY(QString appFullName READ appFullName NOTIFY languageChanged)
+    Q_PROPERTY(QString appShortName READ appShortName NOTIFY languageChanged)
+    Q_PROPERTY(int languageRevision READ languageRevision NOTIFY languageChanged)
 
 public:
     explicit Tr(QObject *parent = nullptr);
@@ -50,6 +53,14 @@ public:
     /** 生产 Ui：应用 Shell 下发的语言目录。 */
     bool applyCatalog(
         const QByteArray &json, QString *error = nullptr);
+
+    /** 查一个普通字符串或公共术语；缺键时返回调用方给的硬编码兜底。 */
+    Q_INVOKABLE QString resolve(
+        const QString &key, const QString &fallback) const;
+
+    QString appFullName() const;
+    QString appShortName() const;
+    int languageRevision() const { return m_languageRevision; }
 
     /** Shell 下发的语言：`[{ code: "zh_CN", name: "简体中文" }, ...]`，按代码排序。 */
     Q_INVOKABLE QVariantList languages() const;
@@ -73,6 +84,7 @@ public:
 
 signals:
     void logMessage(const QString &text);
+    void languageChanged();
 
 private:
     /** Shell 语言目录里的条目 —— 只有这些，字符串表另存。 */
@@ -101,4 +113,5 @@ private:
 
     QString m_requested;   // 空 = 跟随系统
     QString m_effective;
+    int m_languageRevision = 0;
 };

@@ -3,6 +3,8 @@
 
 #include "shell/ShellLanguage.h"
 
+#include "core/ProductIdentity.h"
+
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 
@@ -165,6 +167,59 @@ bool validatesUiStrings(
     }
 }
 
+std::optional<Terminology> readTerms(
+    const std::filesystem::path &path, std::string &error)
+{
+    const std::string content = readFile(path, error);
+    if (!error.empty())
+        return std::nullopt;
+    try {
+        const JsonObject root =
+            JsonObject::Parse(winrt::to_hstring(content));
+        if (!root.HasKey(L"strings")) {
+            error = "terms.json has no strings object";
+            return std::nullopt;
+        }
+        const auto stringsValue = root.GetNamedValue(L"strings");
+        if (stringsValue.ValueType() != JsonValueType::Object) {
+            error = "terms.json strings is not an object";
+            return std::nullopt;
+        }
+        Terminology terms;
+        const JsonObject strings = stringsValue.GetObject();
+        for (const auto &[key, value] : strings) {
+            if (key.empty()
+                || value.ValueType() != JsonValueType::String) {
+                error = "terms.json contains an invalid string entry";
+                return std::nullopt;
+            }
+            terms.strings.emplace(
+                winrt::to_string(key),
+                winrt::to_string(value.GetString()));
+        }
+        terms.appFull = terms.resolve(
+            "term_app_full", mcast::identity::appFullEnglish);
+        terms.appShort = terms.resolve(
+            "term_app_short", mcast::identity::appShortEnglish);
+        return terms;
+    } catch (const winrt::hresult_error &exception) {
+        error = "terms.json: " + winrt::to_string(exception.message());
+        return std::nullopt;
+    }
+}
+
+void replaceAll(
+    std::string &text, std::string_view needle, std::string_view value)
+{
+    if (needle.empty())
+        return;
+    std::size_t offset = 0;
+    while ((offset = text.find(needle, offset)) != std::string::npos) {
+        text.replace(offset, needle.size(), value);
+        offset += value.size();
+    }
+}
+
 std::optional<TrayTexts> readTrayTexts(
     const std::filesystem::path &path, std::string &error)
 {
@@ -231,6 +286,14 @@ std::vector<std::string> readAliases(
 
 } // namespace
 
+std::string Terminology::resolve(
+    std::string_view key, std::string_view fallback) const
+{
+    const auto value = strings.find(std::string(key));
+    return value == strings.end() || value->second.empty()
+        ? std::string(fallback) : value->second;
+}
+
 ShellLanguage::ShellLanguage(
     std::filesystem::path languageDirectory, Logger logger)
     : m_directory(std::move(languageDirectory))
@@ -240,9 +303,22 @@ ShellLanguage::ShellLanguage(
           "Pause receiving",
           "Resume receiving",
           "Quit",
-          "Media Cast",
-          "Media Cast (receiving paused)",
+          std::string(mcast::identity::appShortEnglish),
+          std::string(mcast::identity::appShortEnglish)
+              + " (receiving paused)",
       }
+    , m_builtInTerms{
+          std::string(mcast::identity::appFullEnglish),
+          std::string(mcast::identity::appShortEnglish),
+          {
+              {"term_app_full",
+               std::string(mcast::identity::appFullEnglish)},
+              {"term_app_short",
+               std::string(mcast::identity::appShortEnglish)},
+              {"term_protocol_dlna_full",
+               "Digital Living Network Alliance (DLNA)"},
+              {"term_protocol_dlna_short", "DLNA"},
+          }}
 {
 }
 
@@ -314,8 +390,9 @@ bool ShellLanguage::scan(std::string &error)
         const auto aliasesPath = directory / L"locale-aliases.txt";
         const auto shellPath = directory / L"shell.json";
         const auto uiPath = directory / L"ui.json";
+        const auto termsPath = directory / L"terms.json";
         const std::array required{
-            manifestPath, aliasesPath, shellPath, uiPath};
+            manifestPath, aliasesPath, shellPath, uiPath, termsPath};
         bool missing = false;
         for (const auto &path : required) {
             if (!std::filesystem::is_regular_file(
@@ -367,7 +444,8 @@ bool ShellLanguage::scan(std::string &error)
             continue;
         }
         if (!objectParses(shellPath, packError)
-            || !validatesUiStrings(uiPath, packError)) {
+            || !validatesUiStrings(uiPath, packError)
+            || !readTerms(termsPath, packError)) {
             log("Language pack skipped: " + code + ": " + packError);
             continue;
         }
@@ -480,11 +558,37 @@ bool ShellLanguage::loadTrayTexts(
         texts = m_builtInEnglish;
         return true;
     }
+    Terminology terms;
+    if (!loadTerms(language, terms, error))
+        return false;
     const auto loaded =
         readTrayTexts(entry->root / L"shell.json", error);
     if (!loaded)
         return false;
     texts = *loaded;
+    replaceAll(texts.tooltipReceiving, "{app_short}", terms.appShort);
+    replaceAll(texts.tooltipPaused, "{app_short}", terms.appShort);
+    return true;
+}
+
+bool ShellLanguage::loadTerms(
+    std::string_view language, Terminology &terms,
+    std::string &error) const
+{
+    error.clear();
+    const Entry *entry = find(language);
+    if (!entry) {
+        error = "language pack not found: " + std::string(language);
+        return false;
+    }
+    if (entry->builtIn) {
+        terms = m_builtInTerms;
+        return true;
+    }
+    const auto loaded = readTerms(entry->root / L"terms.json", error);
+    if (!loaded)
+        return false;
+    terms = *loaded;
     return true;
 }
 

@@ -39,6 +39,10 @@ public:
 
     bool start(
         SsdpServiceOptions options, Log log, std::string &error);
+    void announceByeBye(
+        std::chrono::milliseconds interval =
+            std::chrono::milliseconds{80},
+        int rounds = 3) noexcept;
     void stop() noexcept;
 
     bool running() const noexcept { return m_running.load(); }
@@ -59,6 +63,8 @@ private:
     std::mutex m_lifecycleMutex;
     mutable std::mutex m_startMutex;
     std::condition_variable m_startChanged;
+    std::mutex m_byeByeMutex;
+    std::condition_variable m_byeByeChanged;
     std::jthread m_thread;
     Log m_log;
     bool m_startComplete = false;
@@ -69,8 +75,14 @@ private:
     std::atomic_bool m_running{false};
     std::atomic_bool m_broadcasting{true};
     std::atomic_bool m_sendAliveRequested{false};
+    std::atomic_bool m_sendByeByeRequested{false};
+    std::atomic_bool m_byeByeInProgress{false};
     std::atomic<std::int64_t> m_aliveIntervalMs{10000};
+    std::atomic_int m_byeByeRoundsRequested{3};
+    std::atomic<std::int64_t> m_byeByeIntervalMs{80};
     std::atomic<std::uint16_t> m_localPort{0};
+    std::uint64_t m_byeByeGeneration = 0;
+    std::uint64_t m_byeByeCompleted = 0;
 };
 
 } // namespace mcast::dlna::net

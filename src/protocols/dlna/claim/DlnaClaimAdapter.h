@@ -87,6 +87,12 @@ public:
     const cast::ArbitrationSnapshot &snapshot() const noexcept;
 
     bool ownsPeer(const cast::PeerIdentity &peer) const;
+    // Control traffic may be split from media traffic by some control points
+    // (for example an Android app without a stable User-Agent). A control
+    // source on the active owner's address may operate the current session,
+    // while ownership of a *new* media request still requires the full peer
+    // identity through ownsPeer().
+    bool canControl(const cast::PeerIdentity &peer) const;
     bool ownsOperation(
         std::uint64_t sessionId, std::uint64_t epoch,
         std::uint64_t mediaGeneration) const;

@@ -137,7 +137,7 @@ public:
         headerRequest.setAttribute(
             QNetworkRequest::RedirectPolicyAttribute,
             QNetworkRequest::NoLessSafeRedirectPolicy);
-        headerRequest.setRawHeader("Range", "bytes=0-4095");
+        headerRequest.setRawHeader("Range", "bytes=0-262143");
         headerRequest.setTransferTimeout(20000);
         QNetworkReply *headerReply = network.get(headerRequest);
         m_headers.insert(socket, headerReply);
