@@ -20,7 +20,13 @@ An open-source license does not automatically grant rights to third-party patent
 
 ## 3. Protocol Compatibility
 
-Media Cast may implement or interoperate with protocols and technologies including DLNA/UPnP, Apple AirPlay, Google Cast/Chromecast-related protocols, Miracast, and vendor-specific casting protocols.
+The current release implements **DLNA/UPnP AV only**. Other protocol names may appear in
+architectural planning or compatibility disclaimers, but they do not describe features
+present in the current binary.
+
+Media Cast may in future implement or interoperate with protocols and technologies
+including DLNA/UPnP, Apple AirPlay, Google Cast/Chromecast-related protocols, Miracast,
+and vendor-specific casting protocols.
 
 Protocol interoperability does not imply endorsement, sponsorship, certification, authorization, or affiliation with the owner of a protocol, product, or service.
 

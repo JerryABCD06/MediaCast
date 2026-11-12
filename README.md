@@ -62,11 +62,16 @@ Qt 6（LGPLv3，动态链接、未修改）、FluentUI（MIT）。
 
 | 文件 | 内容 |
 |---|---|
-| `docs/状态速览.md` | 一屏看完：路径、怎么构建怎么跑、分层、会咬人的约束 |
-| `docs/待办.md` | 现在到哪儿了、下一步干什么、踩过的坑 |
-| `docs/控制点行为.md` | 真实控制点（vivo 相册、BubbleUPnP）**实际**怎么行为 |
-| `docs/DLNA实现情况.md` | 协议实现到什么程度 |
-| `docs/多进程重构交接.md` | 当前三进程边界、启动/重连时序、验证入口和下一步顺序 |
-| `docs/DLNA迁移分阶段.md` | DLNA 迁入无 Qt Protocol 的历史阶段记录 |
-| `docs/配置权威与设置同步.md` | Shell 配置权威、JSON 结构和 UI 设置快照/IPC |
+| `docs/README.md` | 文档索引、权威顺序和维护规则 |
+| `docs/当前实现总览.md` | 当前生产形态、能力、边界和主要风险 |
+| `docs/多进程架构.md` | 三进程、IPC、生命周期和真实故障恢复 |
+| `docs/投送仲裁与确认.md` | owner、抢占、确认窗口和 DLNA 权限矩阵 |
+| `docs/DLNA实现情况.md` | DLNA/UPnP AV 当前实现 |
+| `docs/控制点行为.md` | 各手机应用与参照渲染器的真机观察 |
+| `docs/配置权威与设置同步.md` | Shell 配置、语言包、IPC 版本和设置同步 |
+| `docs/元数据过滤与展示链路.md` | Protocol → UI → QML/SMTC 的元数据与封面 |
+| `docs/构建测试与发布.md` | 构建、CTest、运行和发布缺口 |
+| `docs/待办.md` | 当前未完成事项 |
+| `docs/中文界面文案对照表.md` | 当前语言键的中文快照 |
+| `docs/history/` | 已冻结的重构、迁移、事故和旧待办 |
 | `docs/legal/` | 隐私、法律、商标、编解码器声明 |

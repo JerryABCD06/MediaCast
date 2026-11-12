@@ -19,23 +19,34 @@ inside the local network and only exchanges the protocol traffic required to rec
 
 ## Does it talk to the internet?
 
-No. It does not initiate outbound connections on its own. It listens on local ports and
-accepts connections from the local network.
+No telemetry or update-check connection is initiated by the application. It listens on
+local ports and accepts connections from the local network.
 
-(One exception worth naming: if a media URL points at the internet, the playback backend
-will fetch that stream — because you asked it to play that URL. That is playback of
-content you selected, not the application reporting anything about you.)
+Two content-related exceptions are worth naming:
+
+- if a media or playlist URL points at the internet, the playback backend/planner will
+  fetch it because the sender asked this receiver to play that URL;
+- a remote `albumArtURI` may be fetched to display the sender-provided cover.
+
+These are playback of content selected by the sender, not telemetry or reporting about
+the user.
 
 ## What it leaves on your machine
 
 | What | Where | Contains |
 |---|---|---|
-| Settings | `MediaCast.json`, next to the executable | language, theme, accept/broadcast switches |
-| Log | `MCast.log`, next to the executable | **the computer name, local IP addresses, and the media URLs that were played** (which may be local file paths) |
-| Device identity | `%LOCALAPPDATA%\MCast\renderer.ini` | the device UDID. Delete it and senders will treat this as a new device |
+| Settings | `MediaCast.json`, next to the executable | language, theme, Mica, accept/broadcast settings, device name/UDN, restored picture controls |
+| Shell migration state | `MediaCast.Shell.json`, next to the executable | legacy receiving-state migration marker/state |
+| Protocol log | `MCast.Protocol.log`, next to the executable | computer name, local IP addresses, protocol requests and media/playlist URLs |
+| UI log | `MCast.Ui.log`, next to the executable | QML/mpv state, metadata fields, local/temporary artwork paths and media URLs |
+| Temporary artwork | `%TEMP%\MediaCast\artwork` | extracted/cached cover images |
+| Temporary image sequences | `%TEMP%\MediaCast\image-sequences` | generated playlists for image-sequence playback |
+| Legacy device identity | `%LOCALAPPDATA%\MCast\renderer.ini` | old device UUID imported once if `MediaCast.json` has no valid UDN; not the current authority |
 
-The log is a local file that this program never sends anywhere. Review it before sharing
-it publicly — it contains the names of media you played.
+Logs are local files that the program never uploads. Review them before sharing publicly:
+they contain local addresses and the names/URLs of media played. Temporary media files
+are cleaned during normal operation, but an abnormal process exit can leave residue that
+may be deleted manually.
 
 ## Ports it listens on
 

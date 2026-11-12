@@ -1,10 +1,10 @@
 # DLNA 投送确认接入
 
-最后更新：2026-11-11
+最后更新：2026-11-12
 
 本文固定真实 DLNA `SetAVTransportURI -> Play` 接入投送仲裁时的职责、时序和
-超时边界。上层原则见 `多协议投送与确认架构.md`，仲裁状态见
-`投送仲裁状态机.md`。
+超时边界。上层原则、生产策略和仲裁状态见
+[投送仲裁与确认.md](投送仲裁与确认.md)。
 
 ## 1. 当前分层
 
@@ -159,9 +159,10 @@ namespace、InstanceID 和 XML 校验逻辑。
 | RenderingControl / ConnectionManager | 保持原有同步行为 |
 
 确认或媒体准备完成后，handler 根据原 requestId 生成对应 SOAP success/fault，
-再通过 `HttpServer::completeRequest()` 放行。确认、媒体打开和播放动作的
-callback 在连接 owner 线程执行，只允许投递到 Protocol 串行上下文，不允许在
-callback 内阻塞等待 IPC、创建 UI 或直接执行长时间媒体打开。
+再通过 `HttpServer::completeRequest()` 放行。确认窗口和媒体打开不能在该
+callback 内同步进行，也不能创建 UI；但当前生产实现仍允许 `playNow/stopNow`
+在 HTTP owner 线程内等待 Playback IPC 最多 5 秒。这个等待是已知拥塞风险，
+后续应改成“提交命令 + HTTP Pending + completion 异步回填”。
 
 handler 内部串行化 `DlnaClaimRuntime` 和 requestId 映射；外部 callback 在锁外
 执行，因此可以从 callback 安全地再次投递 handler 事件。入口另有一把递归
@@ -190,11 +191,19 @@ Runtime 还会在媒体打开完成时复核 owner session、epoch 和 mediaGene
 | 发现、GET、`Get*` 查询、GENA 订阅 | 否 |
 | 找不到明确所有者的 `Stop/Pause/Seek/Next/Previous` | 否，且不能操作旧 owner |
 
-来源 IP 只用于 DLNA 内的 best-effort 关联。`peer.id` 和来源 IP 缺一不可，
-空值一律 fail-closed。`peer.id` 应由协议 runtime 从本控制通道能稳定取得的
-信息形成，例如来源地址与控制点 User-Agent/控制通道指纹的组合；adapter 不会
-把 IP 自动冒充成控制点 ID。它仍然不是密码学身份认证，同一 IP 上的两个控制
-应用也可能碰撞，只是不能仅凭 IP 获得当前 owner 的执行权限。
+来源 IP 只用于 DLNA 内的 best-effort 关联。新建媒体仍要求完整 `peer.id` 和来源
+IP，空值 fail-closed。`peer.id` 由协议 runtime 从来源地址和控制通道能稳定取得的
+信息形成，不能由 adapter 把 IP 自动冒充成控制点 ID。
+
+当前会话的兼容矩阵更细：
+
+- 同一 owner 地址的 `Play/Pause/Stop/Seek` 允许，兼容腾讯视频本地模式等控制身份
+  分裂的控制点；
+- 新媒体和 `Next/Previous/SetNext/SetPlayMode` 仍要求完整 peer 身份；
+- RenderingControl 和查询不做 owner 写权限检查。
+
+这不是密码学认证。同一 IP 上的多个控制应用仍可能碰撞；无 User-Agent 且地址下
+存在多个缓存身份时不能猜测。
 
 ## 5. 同一控制点换片
 
@@ -265,16 +274,16 @@ latest MediaRequest
 - Protocol ControlPipe 断开时拒绝待确认候选和正在准备的媒体；
 - 确认后继续 Open，并按媒体就绪/失败结果完成原 HTTP 请求；
 - 暂停接收只阻止新投送，主动断开使用短暂网络离线兼容非标准控制点；
-- Protocol 骨架已经使用 dispatcher 完成 heartbeat、UI Open、activation 和
-  PlaybackPipe 握手；
+- `MCast.Protocol` 生产入口已经使用 dispatcher 完成 heartbeat、UI Open、
+  activation 和 PlaybackPipe 握手；
 - HTTP、DLNA Claim、dispatcher、runtime 和进程级测试；
 - 真实控制点的首条媒体、暂停接收、主动断开和窗口重新唤起回归。
 
 尚未完成：
 
-- 三进程 E2E 已覆盖 description、GENA、SetURI、真实 UI 播放和查询；跨进程
-  UDP 的 M-SEARCH 受本机防火墙影响，改由 `DlnaProtocolRuntime` 动态 SSDP
-  端口测试覆盖；
+- 跨进程 UDP 的 M-SEARCH 仍受本机防火墙影响，当前由
+  `DlnaProtocolRuntime` 动态 SSDP 端口测试覆盖；三进程 E2E 已覆盖 description、
+  GENA、SetURI、真实 UI 播放和查询；
 - 不同真实控制点在确认窗口前的等待时长实测；
 - MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI 的完整冷启动
   故障路径；
