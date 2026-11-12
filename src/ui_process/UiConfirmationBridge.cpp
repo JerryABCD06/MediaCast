@@ -24,6 +24,8 @@ UiConfirmationBridge::UiConfirmationBridge(
     : QObject(parent)
     , m_control(std::move(control))
 {
+    QString pipelineError;
+    m_metadataPipeline.loadNearExecutable(&pipelineError);
     m_reader = std::jthread([this](std::stop_token stop) {
         readLoop(stop);
     });
@@ -152,6 +154,11 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 std::scoped_lock lock(m_pendingMutex);
                 m_pending[message.header.messageId] = *request;
             }
+            MetadataPipelineInput metadata;
+            metadata.protocolTitle =
+                QString::fromStdString(request->mediaTitle);
+            const MetadataPipelineResult resolved =
+                m_metadataPipeline.resolve(metadata);
             QVariantMap fields;
             fields.insert(
                 QStringLiteral("protocol"),
@@ -170,7 +177,7 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 QString::fromStdString(request->peerAddress));
             fields.insert(
                 QStringLiteral("mediaTitle"),
-                QString::fromStdString(request->mediaTitle));
+                resolved.title);
             fields.insert(
                 QStringLiteral("timeoutMs"),
                 QVariant::fromValue<qulonglong>(

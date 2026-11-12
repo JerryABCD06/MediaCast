@@ -203,6 +203,12 @@ DlnaClaimDisposition DlnaClaimRuntime::requestControl(
     return DlnaClaimDisposition::Rejected;
 }
 
+bool DlnaClaimRuntime::ownsPeer(
+    const cast::PeerIdentity &peer) const
+{
+    return m_adapter.ownsPeer(peer);
+}
+
 DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
     cast::ClaimKey key, bool accepted, cast::CastTime now)
 {

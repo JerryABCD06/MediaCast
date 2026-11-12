@@ -3,13 +3,29 @@
 
 #include "MpvCore.h"
 
+#include "ImageSequencePlaylist.h"
+#include "WrappedTsProxy.h"
+
 #include <mpv/client.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QTimer>
+#include <QUrl>
+#include <QUuid>
 #include <QtGlobal>
 
 #include <cmath>
+#include <optional>
 
 namespace {
 
@@ -77,6 +93,7 @@ enum PropertyId {
     IdMute     = 5,
     IdEof      = 6,
     IdMetadata = 7,
+    IdTrackList = 8,
 };
 
 /** 把 mpv 的返回码翻成人能看的话。 */
@@ -108,11 +125,397 @@ QVariantMap metadataFromNode(const mpv_node *node)
     return out;
 }
 
+const mpv_node *mapValue(const mpv_node &map, const char *key)
+{
+    if (map.format != MPV_FORMAT_NODE_MAP || !map.u.list)
+        return nullptr;
+    for (int index = 0; index < map.u.list->num; ++index) {
+        if (map.u.list->keys[index]
+            && qstrcmp(map.u.list->keys[index], key) == 0) {
+            return &map.u.list->values[index];
+        }
+    }
+    return nullptr;
+}
+
+std::optional<QString> stringValue(
+    const mpv_node &map, const char *key)
+{
+    const mpv_node *value = mapValue(map, key);
+    if (!value || value->format != MPV_FORMAT_STRING
+        || !value->u.string) {
+        return std::nullopt;
+    }
+    return QString::fromUtf8(value->u.string);
+}
+
+std::optional<qint64> intValue(
+    const mpv_node &map, const char *key)
+{
+    const mpv_node *value = mapValue(map, key);
+    if (!value || value->format != MPV_FORMAT_INT64)
+        return std::nullopt;
+    return value->u.int64;
+}
+
+std::optional<double> doubleValue(
+    const mpv_node &map, const char *key)
+{
+    const mpv_node *value = mapValue(map, key);
+    if (!value)
+        return std::nullopt;
+    if (value->format == MPV_FORMAT_DOUBLE)
+        return value->u.double_;
+    if (value->format == MPV_FORMAT_INT64)
+        return static_cast<double>(value->u.int64);
+    return std::nullopt;
+}
+
+bool flagValue(const mpv_node &map, const char *key)
+{
+    const mpv_node *value = mapValue(map, key);
+    return value && value->format == MPV_FORMAT_FLAG
+        && value->u.flag != 0;
+}
+
+struct MediaSummary {
+    QVariantMap info;
+    MediaKind kind = MediaKind::Unknown;
+};
+
+MediaSummary mediaSummaryFromMpv(
+    mpv_handle *mpv, double durationSeconds)
+{
+    MediaSummary summary;
+    if (!mpv)
+        return summary;
+
+    mpv_node tracks{};
+    if (mpv_get_property(
+            mpv, "track-list", MPV_FORMAT_NODE, &tracks) < 0
+        || tracks.format != MPV_FORMAT_NODE_ARRAY || !tracks.u.list) {
+        return summary;
+    }
+    struct NodeGuard {
+        mpv_node *node;
+        ~NodeGuard() { mpv_free_node_contents(node); }
+    } tracksGuard{&tracks};
+
+    mpv_node videoParams{};
+    const bool hasVideoParams =
+        mpv_get_property(
+            mpv, "video-params", MPV_FORMAT_NODE, &videoParams) >= 0
+        && videoParams.format == MPV_FORMAT_NODE_MAP;
+    NodeGuard videoGuard{&videoParams};
+
+    mpv_node audioParams{};
+    const bool hasAudioParams =
+        mpv_get_property(
+            mpv, "audio-params", MPV_FORMAT_NODE, &audioParams) >= 0
+        && audioParams.format == MPV_FORMAT_NODE_MAP;
+    NodeGuard audioGuard{&audioParams};
+
+    QVariantMap video;
+    QVariantMap audio;
+    bool image = false;
+    for (int index = 0; index < tracks.u.list->num; ++index) {
+        const mpv_node &track = tracks.u.list->values[index];
+        const QString type = stringValue(track, "type").value_or("");
+        if (type == QStringLiteral("video")
+            && !flagValue(track, "albumart") && video.isEmpty()) {
+            image = flagValue(track, "image");
+            video.insert(
+                QStringLiteral("codec"),
+                stringValue(track, "codec").value_or(""));
+            video.insert(
+                QStringLiteral("profile"),
+                stringValue(track, "profile").value_or(""));
+            if (const auto width = intValue(track, "demux-w"))
+                video.insert(QStringLiteral("width"), *width);
+            if (const auto height = intValue(track, "demux-h"))
+                video.insert(QStringLiteral("height"), *height);
+            if (const auto fps = doubleValue(track, "demux-fps"))
+                video.insert(QStringLiteral("fps"), *fps);
+            if (const auto bitrate = intValue(track, "demux-bitrate"))
+                video.insert(QStringLiteral("bitrate"), *bitrate);
+            if (hasVideoParams) {
+                if (!video.contains(QStringLiteral("width"))) {
+                    if (const auto width = intValue(videoParams, "w"))
+                        video.insert(QStringLiteral("width"), *width);
+                }
+                if (!video.contains(QStringLiteral("height"))) {
+                    if (const auto height = intValue(videoParams, "h"))
+                        video.insert(QStringLiteral("height"), *height);
+                }
+                const QString pixelFormat =
+                    stringValue(videoParams, "pixelformat").value_or("");
+                if (!pixelFormat.isEmpty())
+                    video.insert(QStringLiteral("pixel_format"), pixelFormat);
+                if (const auto aspect = doubleValue(videoParams, "aspect"))
+                    video.insert(QStringLiteral("aspect"), *aspect);
+            }
+        } else if (
+            type == QStringLiteral("audio") && audio.isEmpty()) {
+            audio.insert(
+                QStringLiteral("codec"),
+                stringValue(track, "codec").value_or(""));
+            audio.insert(
+                QStringLiteral("profile"),
+                stringValue(track, "profile").value_or(""));
+            if (const auto rate = intValue(track, "demux-samplerate"))
+                audio.insert(QStringLiteral("sample_rate"), *rate);
+            if (const auto channels = intValue(track, "demux-channel-count"))
+                audio.insert(QStringLiteral("channels"), *channels);
+            const QString layout =
+                stringValue(track, "demux-channels").value_or("");
+            if (!layout.isEmpty())
+                audio.insert(QStringLiteral("channel_layout"), layout);
+            if (const auto bitrate = intValue(track, "demux-bitrate"))
+                audio.insert(QStringLiteral("bitrate"), *bitrate);
+            for (const char *key : {
+                     "bits-per-sample", "bits_per_raw_sample",
+                     "demux-bits-per-sample"}) {
+                if (const auto bits = intValue(track, key)) {
+                    audio.insert(QStringLiteral("bit_depth"), *bits);
+                    break;
+                }
+            }
+            if (hasAudioParams) {
+                if (!audio.contains(QStringLiteral("sample_rate"))) {
+                    if (const auto rate =
+                            intValue(audioParams, "samplerate")) {
+                        audio.insert(QStringLiteral("sample_rate"), *rate);
+                    }
+                }
+                if (!audio.contains(QStringLiteral("channels"))) {
+                    if (const auto channels =
+                            intValue(audioParams, "channel-count")) {
+                        audio.insert(QStringLiteral("channels"), *channels);
+                    }
+                }
+                if (!audio.contains(QStringLiteral("channel_layout"))) {
+                    const QString layout =
+                        stringValue(audioParams, "channels").value_or("");
+                    if (!layout.isEmpty()) {
+                        audio.insert(
+                            QStringLiteral("channel_layout"), layout);
+                    }
+                }
+                const QString sampleFormat =
+                    stringValue(audioParams, "format").value_or("");
+                if (!sampleFormat.isEmpty()) {
+                    audio.insert(
+                        QStringLiteral("sample_format"), sampleFormat);
+                }
+            }
+        }
+    }
+
+    char *format = mpv_get_property_string(mpv, "file-format");
+    if (format) {
+        const QString container = QString::fromUtf8(format).simplified();
+        if (!container.isEmpty())
+            summary.info.insert(QStringLiteral("container"), container);
+        mpv_free(format);
+    }
+    summary.info.insert(
+        QStringLiteral("duration_seconds"), durationSeconds);
+    if (!video.isEmpty()) {
+        summary.info.insert(QStringLiteral("video"), video);
+        summary.kind = image ? MediaKind::Image : MediaKind::Video;
+    }
+    if (!audio.isEmpty()) {
+        summary.info.insert(QStringLiteral("audio"), audio);
+        if (summary.kind == MediaKind::Unknown)
+            summary.kind = MediaKind::Audio;
+    }
+    if (summary.kind == MediaKind::Video)
+        summary.info.insert(QStringLiteral("kind"), QStringLiteral("video"));
+    else if (summary.kind == MediaKind::Audio)
+        summary.info.insert(QStringLiteral("kind"), QStringLiteral("audio"));
+    else if (summary.kind == MediaKind::Image)
+        summary.info.insert(QStringLiteral("kind"), QStringLiteral("image"));
+    return summary;
+}
+
+QString currentMediaUri(mpv_handle *mpv)
+{
+    if (!mpv)
+        return {};
+    char *value = mpv_get_property_string(mpv, "path");
+    if (!value)
+        return {};
+    const QString uri = QString::fromUtf8(value);
+    mpv_free(value);
+    return uri;
+}
+
+QString albumArtFileFromTracks(mpv_handle *mpv)
+{
+    mpv_node root{};
+    if (!mpv || mpv_get_property(
+            mpv, "track-list", MPV_FORMAT_NODE, &root) < 0) {
+        return {};
+    }
+    struct NodeGuard {
+        mpv_node *node;
+        ~NodeGuard() { mpv_free_node_contents(node); }
+    } guard{&root};
+
+    if (root.format != MPV_FORMAT_NODE_ARRAY || !root.u.list)
+        return {};
+    for (int index = 0; index < root.u.list->num; ++index) {
+        const mpv_node &track = root.u.list->values[index];
+        const mpv_node *albumArt = mapValue(track, "albumart");
+        if (!albumArt || albumArt->format != MPV_FORMAT_FLAG
+            || albumArt->u.flag == 0) {
+            continue;
+        }
+        const mpv_node *filename =
+            mapValue(track, "external-filename");
+        if (filename && filename->format == MPV_FORMAT_STRING
+            && filename->u.string && *filename->u.string) {
+            return QUrl::fromLocalFile(
+                QString::fromUtf8(filename->u.string)).toString();
+        }
+        // Embedded artwork has no external filename. Let the caller extract
+        // the current picture through screenshot-raw.
+        return QStringLiteral("embedded:");
+    }
+    return {};
+}
+
+QString saveEmbeddedAlbumArt(mpv_handle *mpv, const QString &mediaUri)
+{
+    const char *args[] = {
+        "screenshot-raw", "video", "bgra", nullptr};
+    mpv_node result{};
+    if (!mpv || mpv_command_ret(mpv, args, &result) < 0)
+        return {};
+    struct NodeGuard {
+        mpv_node *node;
+        ~NodeGuard() { mpv_free_node_contents(node); }
+    } guard{&result};
+    if (result.format != MPV_FORMAT_NODE_MAP)
+        return {};
+
+    const mpv_node *width = mapValue(result, "w");
+    const mpv_node *height = mapValue(result, "h");
+    const mpv_node *stride = mapValue(result, "stride");
+    const mpv_node *format = mapValue(result, "format");
+    const mpv_node *data = mapValue(result, "data");
+    if (!width || !height || !stride || !format || !data
+        || width->format != MPV_FORMAT_INT64
+        || height->format != MPV_FORMAT_INT64
+        || stride->format != MPV_FORMAT_INT64
+        || format->format != MPV_FORMAT_STRING
+        || data->format != MPV_FORMAT_BYTE_ARRAY
+        || !format->u.string || !data->u.ba || !data->u.ba->data) {
+        return {};
+    }
+    if (qstrcmp(format->u.string, "bgra") != 0
+        || width->u.int64 <= 0 || height->u.int64 <= 0
+        || stride->u.int64 <= 0
+        || width->u.int64 > 4096 || height->u.int64 > 4096
+        || width->u.int64 * height->u.int64 > 16'777'216) {
+        return {};
+    }
+
+    const qsizetype required =
+        (height->u.int64 - 1) * stride->u.int64
+        + width->u.int64 * 4;
+    if (required <= 0
+        || static_cast<quint64>(required) > data->u.ba->size) {
+        return {};
+    }
+    QImage view(
+        static_cast<const uchar *>(data->u.ba->data),
+        static_cast<int>(width->u.int64),
+        static_cast<int>(height->u.int64),
+        static_cast<int>(stride->u.int64), QImage::Format_ARGB32);
+    if (view.isNull())
+        return {};
+    const QImage owned = view.copy();
+
+    const QString directory =
+        QStandardPaths::writableLocation(
+            QStandardPaths::TempLocation)
+        + QStringLiteral("/MediaCast/artwork");
+    if (!QDir().mkpath(directory))
+        return {};
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    hasher.addData(QByteArrayView(mediaUri.toUtf8()));
+    hasher.addData(QByteArrayView(
+        reinterpret_cast<const char *>(owned.constBits()),
+        static_cast<qsizetype>(owned.sizeInBytes())));
+    const QByteArray digest = hasher.result().toHex().left(20);
+    const QString path =
+        directory + QStringLiteral("/cover-")
+        + QString::fromLatin1(digest) + QStringLiteral(".png");
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)
+        || !owned.save(&file, "PNG")
+        || !file.commit()) {
+        return {};
+    }
+    const QString currentName = QFileInfo(path).fileName();
+    for (const QString &name :
+         QDir(directory).entryList(
+             {QStringLiteral("cover-*.png")}, QDir::Files)) {
+        if (name != currentName)
+            QFile::remove(directory + QLatin1Char('/') + name);
+    }
+    return QUrl::fromLocalFile(path).toString();
+}
+
+void clearTemporaryArtwork()
+{
+    const QString directory =
+        QStandardPaths::writableLocation(
+            QStandardPaths::TempLocation)
+        + QStringLiteral("/MediaCast/artwork");
+    QDir dir(directory);
+    for (const QString &name :
+         dir.entryList(
+             {QStringLiteral("cover-*.png")},
+             QDir::Files)) {
+        dir.remove(name);
+    }
+}
+
+QString imageSequenceDirectory()
+{
+    return QStandardPaths::writableLocation(
+               QStandardPaths::TempLocation)
+        + QStringLiteral("/MediaCast/image-sequences");
+}
+
+void clearTemporaryImageSequences()
+{
+    QDir dir(imageSequenceDirectory());
+    for (const QString &name :
+         dir.entryList(
+             {
+                 QStringLiteral("sequence-*.txt"),
+                 QStringLiteral("sequence-*.m3u8"),
+                 QStringLiteral("sequence-*.edl"),
+             },
+             QDir::Files)) {
+        dir.remove(name);
+    }
+}
+
 } // namespace
 
 MpvCore::MpvCore(QObject *parent)
     : MediaPlayer(parent)
+    , m_network(new QNetworkAccessManager(this))
 {
+    m_imageTimer = new QTimer(this);
+    m_imageTimer->setInterval(100);
+    connect(
+        m_imageTimer, &QTimer::timeout,
+        this, &MpvCore::tickImageTimeline);
 }
 
 MpvCore::~MpvCore()
@@ -120,11 +523,39 @@ MpvCore::~MpvCore()
     shutdown();
 }
 
+QVariantMap MpvCore::mediaInfo() const
+{
+    const std::scoped_lock lock(m_mediaInfoMutex);
+    return m_mediaInfo;
+}
+
+void MpvCore::refreshMediaInfoSnapshot()
+{
+    if (!m_mpv)
+        return;
+    MediaSummary summary =
+        mediaSummaryFromMpv(m_mpv, m_durationSec.load());
+    if (m_imageSequenceActive.load()) {
+        summary.info.insert(
+            QStringLiteral("duration_seconds"),
+            m_durationSec.load());
+    }
+    {
+        std::lock_guard lock(m_mediaInfoMutex);
+        m_mediaInfo = summary.info;
+    }
+    emit mediaInfoChanged();
+}
+
 bool MpvCore::start()
 {
     if (m_mpv)
         return true;
 
+    // Remove files left behind by a crash before this process writes a new
+    // cover. The active UI process owns this cache directory.
+    clearTemporaryArtwork();
+    clearTemporaryImageSequences();
     m_stopRequested = false;
 
     m_mpv = mpv_create();
@@ -168,7 +599,7 @@ bool MpvCore::start()
     mpv_set_option_string(m_mpv, "cursor-autohide", "always");
     mpv_set_option_string(m_mpv, "terminal", "no");
 
-    // 把"只能初始化前设"的那几个选项交给子类 —— 基类不知道画面要往哪出。
+    // render API 必须在 mpv 初始化前设好视频输出参数。
     applyStartupOptions(m_mpv);
 
     const int rc = mpv_initialize(m_mpv);
@@ -191,8 +622,10 @@ bool MpvCore::start()
     mpv_observe_property(m_mpv, IdMute,     "mute",     MPV_FORMAT_FLAG);
     // 文件自带的标签。和协议给的元数据是两回事，见 MediaPlayer::metadataChanged。
     mpv_observe_property(m_mpv, IdMetadata, "metadata", MPV_FORMAT_NODE);
+    mpv_observe_property(
+        m_mpv, IdTrackList, "track-list", MPV_FORMAT_NODE);
 
-    // 窗口标题。以前这行写在 main() 里，那属于界面越界去碰 mpv 的细节。
+    // 窗口标题。播放核心自己处理，避免界面层越界去碰 mpv 细节。
     mpv_set_property_string(m_mpv, "title",
                             QCoreApplication::applicationName().toUtf8().constData());
 
@@ -214,11 +647,17 @@ void MpvCore::shutdown()
     if (m_thread.joinable())
         m_thread.join();
 
+    cancelPlaylistProbe();
+    cancelImagePayloadProbe();
+    m_wrappedTsProxy.reset();
+    clearTemporaryArtwork();
     if (m_mpv) {
         mpv_terminate_destroy(m_mpv);
         m_mpv = nullptr;
         emit runningChanged();
     }
+    clearTemporaryImageSequence();
+    clearTemporaryImageSequences();
 }
 
 void MpvCore::eventLoop()
@@ -244,15 +683,25 @@ void MpvCore::eventLoop()
             // 当成 0 处理，界面才会正确地归零。
             switch (event->reply_userdata) {
             case IdTimePos: {
+                if (m_imageSequenceActive.load())
+                    break;
                 const double v = prop->data ? *static_cast<double *>(prop->data) : 0.0;
+                if (!std::isfinite(v) || std::abs(v) > 1.0e9) {
+                    emit logMessage(
+                        QStringLiteral("忽略异常的 MPV 播放位置"));
+                    break;
+                }
                 m_positionSec.store(v);
                 emit positionChanged(v);
                 break;
             }
             case IdDuration: {
+                if (m_imageSequenceActive.load())
+                    break;
                 const double v = prop->data ? *static_cast<double *>(prop->data) : 0.0;
                 m_durationSec.store(v);
                 emit durationChanged(v);
+                refreshMediaInfoSnapshot();
                 break;
             }
             case IdPause: {
@@ -261,6 +710,8 @@ void MpvCore::eventLoop()
                 break;
             }
             case IdEof: {
+                if (m_imageSequenceActive.load())
+                    break;
                 const bool eof = prop->data && (*static_cast<int *>(prop->data) != 0);
                 const bool wasEof = m_eofReached.exchange(eof);
 
@@ -288,10 +739,19 @@ void MpvCore::eventLoop()
             case IdMetadata: {
                 // 文件自带的标签（标题/艺术家/专辑/歌词……）。**没有的话就是空的**，
                 // 别指望它有东西 —— 图片和视频实测基本都是空的。
+                QString mediaUri;
+                {
+                    std::lock_guard lock(m_uriMutex);
+                    mediaUri = m_eventMediaUri;
+                }
                 emit metadataChanged(
-                    metadataFromNode(static_cast<mpv_node *>(prop->data)));
+                    metadataFromNode(static_cast<mpv_node *>(prop->data)),
+                    mediaUri);
                 break;
             }
+            case IdTrackList:
+                refreshMediaInfoSnapshot();
+                break;
             default:
                 break;
             }
@@ -324,20 +784,110 @@ void MpvCore::eventLoop()
             }
 
             m_loadFailed = false;
-            m_lastRequestedUri.clear();
             emit ready();
+
+            QString loadedMediaUri =
+                logicalMediaUri(currentMediaUri(m_mpv));
+            {
+                std::lock_guard lock(m_uriMutex);
+                if (!loadedMediaUri.isEmpty())
+                    m_eventMediaUri = loadedMediaUri;
+                else
+                    loadedMediaUri = m_eventMediaUri;
+                if (loadedMediaUri.isEmpty())
+                    loadedMediaUri = m_lastRequestedUri;
+            }
+
+            MediaSummary summary =
+                mediaSummaryFromMpv(m_mpv, m_durationSec.load());
+            if (m_imageSequenceActive.load())
+                summary.info.insert(
+                    QStringLiteral("duration_seconds"),
+                    m_durationSec.load());
+            {
+                std::lock_guard lock(m_mediaInfoMutex);
+                m_mediaInfo = summary.info;
+            }
+            emit mediaInfoChanged();
+            if (summary.kind != MediaKind::Unknown
+                && !loadedMediaUri.isEmpty()) {
+                emit mediaKindChanged(summary.kind, loadedMediaUri);
+            }
+
+            QString artwork = albumArtFileFromTracks(m_mpv);
+            QString artworkMediaUri = loadedMediaUri;
+            if (artwork == QStringLiteral("embedded:")) {
+                {
+                    std::lock_guard lock(m_uriMutex);
+                    m_pendingArtworkUri = artworkMediaUri;
+                    m_artworkPending = true;
+                    m_artworkRetryCount = 0;
+                }
+                artwork = saveEmbeddedAlbumArt(
+                    m_mpv, artworkMediaUri);
+                if (!artwork.isEmpty()) {
+                    std::lock_guard lock(m_uriMutex);
+                    m_artworkPending = false;
+                }
+            }
+            emit artworkChanged(artwork, artworkMediaUri);
             break;
         }
 
-        case MPV_EVENT_START_FILE:
+        case MPV_EVENT_PLAYBACK_RESTART: {
+            const QString currentUri =
+                logicalMediaUri(currentMediaUri(m_mpv));
+            QString pendingUri;
+            {
+                std::lock_guard lock(m_uriMutex);
+                if (!m_artworkPending)
+                    break;
+                pendingUri = m_pendingArtworkUri;
+                if (currentUri.isEmpty()
+                    || (!pendingUri.isEmpty()
+                        && currentUri != pendingUri)
+                    || m_artworkRetryCount >= 2) {
+                    m_artworkPending = false;
+                    m_pendingArtworkUri.clear();
+                    m_artworkRetryCount = 0;
+                    break;
+                }
+                ++m_artworkRetryCount;
+            }
+            const QString artwork = saveEmbeddedAlbumArt(
+                m_mpv, pendingUri);
+            if (artwork.isEmpty())
+                break;
+            {
+                std::lock_guard lock(m_uriMutex);
+                m_artworkPending = false;
+                m_pendingArtworkUri.clear();
+                m_artworkRetryCount = 0;
+            }
+            emit artworkChanged(artwork, currentUri);
+            break;
+        }
+
+        case MPV_EVENT_START_FILE: {
+            const QString startingUri =
+                logicalMediaUri(currentMediaUri(m_mpv));
+            {
+                std::lock_guard lock(m_uriMutex);
+                m_eventMediaUri = startingUri;
+            }
             emit logMessage(QStringLiteral("开始加载媒体 ..."));
             break;
+        }
 
         case MPV_EVENT_END_FILE: {
             auto *endFile = static_cast<mpv_event_end_file *>(event->data);
             if (endFile && endFile->error < 0) {
                 m_loadFailed = true;
                 emit logMessage(QStringLiteral("播放失败：") + mpvError(endFile->error));
+            }
+            if (m_imageSequenceActive.load()
+                && (!endFile || endFile->error >= 0)) {
+                break;
             }
             emit ended();
             break;
@@ -368,12 +918,15 @@ void MpvCore::load(const QString &uri)
 {
     if (!m_mpv || uri.isEmpty())
         return;
-    m_lastRequestedUri = uri;
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_lastRequestedUri = uri;
+    }
     m_loadFailed = false;
 
-    // render API 模式下，渲染面没就绪就先攒着 —— 现在发出去，mpv 会报
+    // 渲染面没就绪就先攒着 —— 现在发出去，mpv 会报
     // "No render context set" 然后放弃，而且不会再重试。详见头文件那段。
-    if (m_outputMode == RenderApiOutput && !m_rendererAttached) {
+    if (!m_rendererAttached) {
         m_pendingUri = uri;
         emit logMessage(QStringLiteral("渲染窗口还没准备好，这条先攒着，等窗口起来再放"));
         return;
@@ -409,6 +962,7 @@ void MpvCore::setRendererAttached(bool attached)
     QString uri = m_pendingUri;
     m_pendingUri.clear();
     if (uri.isEmpty() && m_loadFailed.load()) {
+        std::lock_guard lock(m_uriMutex);
         uri = m_lastRequestedUri;
         m_loadFailed = false;
     }
@@ -425,6 +979,28 @@ void MpvCore::loadNow(const QString &uri)
     // 新的一条内容：加载好就该放。stop()/pause() 会把这一位按下去（见头文件），
     // 这里是把它扳回来 —— 不然"停止之后又投一条"就永远等不到自动播放了。
     m_playOnLoad.store(true);
+    cancelPlaylistProbe();
+    cancelImagePayloadProbe();
+    m_wrappedTsProxy.reset();
+    clearTemporaryImageSequence();
+    resetImageTimeline();
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_lastRequestedUri = uri;
+        m_activeMpvUri.clear();
+        m_eventMediaUri.clear();
+    }
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_artworkPending = false;
+        m_pendingArtworkUri.clear();
+        m_artworkRetryCount = 0;
+    }
+    {
+        std::lock_guard lock(m_mediaInfoMutex);
+        m_mediaInfo.clear();
+    }
+    emit mediaInfoChanged();
 
     // 换片子的时候先把缓存的进度清掉。
     //
@@ -435,20 +1011,482 @@ void MpvCore::loadNow(const QString &uri)
     m_positionSec = 0.0;
     m_durationSec = 0.0;
 
-    // 用数组形式传参，不拼字符串 —— URL 里带引号或反斜杠时，拼字符串迟早出错。
-    const QByteArray path = uri.toUtf8();
-    const char *command[] = {"loadfile", path.constData(), "replace", nullptr};
-    mpv_command(m_mpv, command);
+    beginLoad(uri);
+}
 
-    // 上层靠这个给"加载超时"计时 —— 它要的是"真的发出去了"这一刻，
-    // 不是调用 load() 那一刻（两者之间可能隔着一个等界面的过程）。
-    emit loadStarted();
+void MpvCore::beginLoad(const QString &uri)
+{
+    if (mcast::core::isHlsPlaylistUrl(QUrl(uri))) {
+        requestPlaylistProbe(uri);
+        return;
+    }
+    loadMpvFile(uri, uri);
+}
+
+void MpvCore::requestPlaylistProbe(const QString &uri)
+{
+    const quint64 requestId = ++m_playlistRequest;
+    QNetworkRequest request{QUrl(uri)};
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(15000);
+    m_playlistReply = m_network->get(request);
+    QNetworkReply *reply = m_playlistReply;
+    connect(reply, &QObject::destroyed, this, [this, reply] {
+        if (m_playlistReply == reply)
+            m_playlistReply = nullptr;
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestId] {
+        if (m_playlistReply == reply)
+            m_playlistReply = nullptr;
+        reply->deleteLater();
+
+        QString requestedUri;
+        {
+            std::lock_guard lock(m_uriMutex);
+            requestedUri = m_lastRequestedUri;
+        }
+        if (requestId != m_playlistRequest || requestedUri.isEmpty())
+            return;
+
+        const QByteArray body = reply->readAll();
+        const bool successful =
+            reply->error() == QNetworkReply::NoError
+            && reply->attribute(
+                   QNetworkRequest::HttpStatusCodeAttribute)
+                    .toInt()
+                == 200
+            && body.size() <= 8 * 1024 * 1024;
+        if (successful
+            && loadImageSequence(body, reply->url(), requestedUri)) {
+            return;
+        }
+
+        if (successful) {
+            const auto parsed = mcast::core::parseImageSequencePlaylist(
+                QString::fromUtf8(body), reply->url());
+            if (!parsed.error.isEmpty()) {
+                emit logMessage(
+                    QStringLiteral("HLS 图片序列探测未命中：")
+                    + parsed.error + QStringLiteral("；按普通 HLS 播放"));
+            }
+        } else {
+            emit logMessage(
+                QStringLiteral("HLS 播放列表探测失败：")
+                + reply->errorString()
+                + QStringLiteral("；按普通 HLS 播放"));
+        }
+        loadMpvFile(requestedUri, requestedUri);
+    });
+}
+
+bool MpvCore::loadImageSequence(
+    const QByteArray &playlist, const QUrl &playlistUrl,
+    const QString &logicalUri)
+{
+    const auto parsed = mcast::core::parseImageSequencePlaylist(
+        QString::fromUtf8(playlist), playlistUrl);
+    if (!parsed.isValid())
+        return false;
+
+    cancelImagePayloadProbe();
+    m_imageProbeSegments = parsed.segments;
+    m_imageProbeLogicalUri = logicalUri;
+    m_imageProbeWrapped = true;
+    startImagePayloadProbe();
+    return true;
+}
+
+void MpvCore::startImagePayloadProbe()
+{
+    emit logMessage(
+        QStringLiteral("HLS 分片格式探测：")
+        + QString::number(m_imageProbeSegments.size()));
+    probeNextImagePayload();
+}
+
+void MpvCore::probeNextImagePayload()
+{
+    if (m_imageProbeSegments.isEmpty() || m_imageProbeReply)
+        return;
+    const quint64 generation = m_imageProbeGeneration;
+    QNetworkRequest request(m_imageProbeSegments.front().uri);
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("Range", "bytes=0-4095");
+    request.setTransferTimeout(15000);
+    QNetworkReply *reply = m_network->get(request);
+    m_imageProbeReply = reply;
+    connect(
+        reply, &QNetworkReply::finished, this,
+        [this, reply, generation] {
+            if (m_imageProbeReply == reply)
+                m_imageProbeReply = nullptr;
+            reply->deleteLater();
+            if (generation != m_imageProbeGeneration)
+                return;
+
+            const int status =
+                reply->attribute(
+                    QNetworkRequest::HttpStatusCodeAttribute)
+                    .toInt();
+            const QByteArray body = reply->readAll();
+            const auto offset =
+                reply->error() == QNetworkReply::NoError
+                    && (status == 200 || status == 206)
+                ? mcast::core::wrappedTransportStreamOffset(body)
+                : std::nullopt;
+            if (!offset) {
+                m_imageProbeWrapped = false;
+            }
+            finishImagePayloadProbe();
+        });
+}
+
+void MpvCore::finishImagePayloadProbe()
+{
+    emit logMessage(
+        m_imageProbeWrapped
+            ? QStringLiteral("图片分片探测结论：PNG+TS")
+            : QStringLiteral("图片分片探测结论：纯图片"));
+    const auto segments = m_imageProbeSegments;
+    const QString logicalUri = m_imageProbeLogicalUri;
+    if (m_imageProbeWrapped) {
+        loadWrappedTransportStream(segments, logicalUri);
+    } else {
+        loadMfImageSequence(segments, logicalUri);
+    }
+    m_imageProbeSegments.clear();
+    m_imageProbeLogicalUri.clear();
+}
+
+void MpvCore::cancelImagePayloadProbe()
+{
+    ++m_imageProbeGeneration;
+    if (QNetworkReply *reply = m_imageProbeReply) {
+        m_imageProbeReply = nullptr;
+        disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        reply->deleteLater();
+    }
+    m_imageProbeSegments.clear();
+    m_imageProbeLogicalUri.clear();
+    m_imageProbeWrapped = true;
+}
+
+void MpvCore::loadMfImageSequence(
+    const QVector<mcast::core::ImageSequenceSegment> &segments,
+    const QString &logicalUri)
+{
+    QDir directory(imageSequenceDirectory());
+    if (!directory.exists() && !directory.mkpath(QStringLiteral("."))) {
+        emit logMessage(
+            QStringLiteral("无法创建图片序列缓存目录"));
+        return;
+    }
+    const QString path = directory.filePath(
+        QStringLiteral("sequence-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces)
+        + QStringLiteral(".txt"));
+    QSaveFile file(path);
+    const QByteArray imageList =
+        mcast::core::buildMfImageList(segments);
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(imageList) != imageList.size()
+        || !file.commit()) {
+        emit logMessage(
+            QStringLiteral("无法写入图片序列清单：") + path);
+        return;
+    }
+
+    double totalDuration = 0.0;
+    for (const auto &segment : segments)
+        totalDuration += std::clamp(segment.durationSeconds, 0.05, 3600.0);
+    const double fps = std::clamp(
+        static_cast<double>(segments.size())
+            / qMax(totalDuration, 0.05),
+        0.01, 60.0);
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_imageSegments = segments;
+        m_imageFps = fps;
+    }
+    const QByteArray fpsText = QByteArray::number(fps, 'f', 6);
+    mpv_set_property_string(m_mpv, "mf-fps", fpsText.constData());
+
+    emit logMessage(
+        QStringLiteral("检测到图片序列 HLS，已接入 ")
+        + QString::number(segments.size())
+        + QStringLiteral(" 帧"));
+    const QString mfUri =
+        QStringLiteral("mf://@") + QDir::toNativeSeparators(path);
+    loadMpvFile(
+        mfUri, logicalUri, path);
+    startImageTimeline();
+}
+
+void MpvCore::loadWrappedTransportStream(
+    const QVector<mcast::core::ImageSequenceSegment> &segments,
+    const QString &logicalUri)
+{
+    m_wrappedTsProxy = std::make_unique<WrappedTsProxy>();
+    connect(
+        m_wrappedTsProxy.get(), &WrappedTsProxy::logMessage,
+        this, &MpvCore::logMessage);
+    QString proxyError;
+    if (!m_wrappedTsProxy->start(segments, proxyError)) {
+        emit logMessage(
+            QStringLiteral("无法启动本地媒体代理：")
+            + proxyError);
+        return;
+    }
+
+    emit logMessage(
+        QStringLiteral("检测到 PNG 包装的 MPEG-TS，已恢复 ")
+        + QString::number(segments.size())
+        + QStringLiteral(" 段视频"));
+    loadMpvFile(
+        m_wrappedTsProxy->playlistUrl().toString(QUrl::FullyEncoded),
+        logicalUri);
+}
+
+void MpvCore::loadMpvFile(
+    const QString &mpvUri, const QString &logicalUri,
+    const QString &temporaryImageListPath, bool emitStarted)
+{
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_lastRequestedUri = logicalUri;
+        m_activeMpvUri = mpvUri;
+        m_activeImageListPath = temporaryImageListPath;
+        m_eventMediaUri = logicalUri;
+    }
+
+    // 用数组形式传参，不拼字符串 —— URL 里带引号或反斜杠时，拼字符串迟早出错。
+    const QByteArray path = mpvUri.toUtf8();
+    const char *command[] = {
+        "loadfile", path.constData(), "replace", nullptr};
+    mpv_command(m_mpv, command);
+    if (emitStarted)
+        emit loadStarted();
+}
+
+void MpvCore::cancelPlaylistProbe()
+{
+    ++m_playlistRequest;
+    if (!m_playlistReply)
+        return;
+    QNetworkReply *reply = m_playlistReply;
+    m_playlistReply = nullptr;
+    disconnect(reply, nullptr, this, nullptr);
+    reply->abort();
+    reply->deleteLater();
+}
+
+void MpvCore::clearTemporaryImageSequence()
+{
+    std::lock_guard lock(m_uriMutex);
+    if (!m_activeImageListPath.isEmpty()
+        && QFile::remove(m_activeImageListPath)) {
+        m_activeImageListPath.clear();
+    }
+}
+
+QString MpvCore::logicalMediaUri(const QString &mpvUri) const
+{
+    std::lock_guard lock(m_uriMutex);
+    const QString effectiveUri =
+        mpvUri.isEmpty() ? m_activeMpvUri : mpvUri;
+    if (!m_activeMpvUri.isEmpty()
+        && effectiveUri == m_activeMpvUri
+        && !m_lastRequestedUri.isEmpty()) {
+        return m_lastRequestedUri;
+    }
+    return mpvUri;
+}
+
+void MpvCore::resetImageTimeline()
+{
+    m_imageTimer->stop();
+    m_imageSequenceActive.store(false);
+    m_imageSequencePaused.store(false);
+    m_imageBaseMs = 0;
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_imageSegments.clear();
+    }
+}
+
+void MpvCore::startImageTimeline()
+{
+    QVector<mcast::core::ImageSequenceSegment> segments;
+    {
+        std::lock_guard lock(m_uriMutex);
+        segments = m_imageSegments;
+    }
+    if (segments.isEmpty())
+        return;
+
+    double duration = 0.0;
+    for (const auto &segment : segments)
+        duration += std::clamp(segment.durationSeconds, 0.05, 3600.0);
+    m_imageSequenceActive.store(true);
+    m_imageSequencePaused.store(false);
+    m_eofReached.store(false);
+    m_imageBaseMs = 0;
+    m_positionSec.store(0.0);
+    m_durationSec.store(duration);
+    m_imageClockStart = std::chrono::steady_clock::now();
+    m_imageTimer->start();
+    emit positionChanged(0.0);
+    emit durationChanged(duration);
+}
+
+void MpvCore::tickImageTimeline()
+{
+    if (!m_imageSequenceActive.load()
+        || m_imageSequencePaused.load()
+        || (m_eofReached.load()
+            && m_positionSec.load() >= m_durationSec.load())) {
+        return;
+    }
+
+    const double duration = m_durationSec.load();
+    if (!std::isfinite(duration)
+        || duration < 0.0 || duration > 1.0e9) {
+        return;
+    }
+    if (m_imageClockStart
+            == std::chrono::steady_clock::time_point{}
+        || m_imageBaseMs < 0
+        || m_imageBaseMs > 24LL * 60 * 60 * 1000) {
+        m_imageClockStart = std::chrono::steady_clock::now();
+        return;
+    }
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - m_imageClockStart)
+            .count();
+    if (elapsedMs < 0
+        || elapsedMs > 24LL * 60 * 60 * 1000) {
+        m_imageClockStart = std::chrono::steady_clock::now();
+        return;
+    }
+    const double position = qMin(
+        duration,
+        m_imageBaseMs / 1000.0 + elapsedMs / 1000.0);
+    if (!std::isfinite(position))
+        return;
+    m_positionSec.store(position);
+    emit positionChanged(position);
+    if (duration > 0.0 && position >= duration) {
+        m_imageTimer->stop();
+        m_eofReached.store(true);
+        emit ended();
+    }
+}
+
+void MpvCore::seekImageTimeline(double seconds)
+{
+    if (!m_imageSequenceActive.load())
+        return;
+    reloadImageTimeline(qBound(0.0, seconds, m_durationSec.load()));
+}
+
+void MpvCore::reloadImageTimeline(double seconds)
+{
+    QVector<mcast::core::ImageSequenceSegment> segments;
+    double imageFps = 1.0;
+    QString logicalUri;
+    {
+        std::lock_guard lock(m_uriMutex);
+        segments = m_imageSegments;
+        imageFps = m_imageFps;
+        logicalUri = m_lastRequestedUri;
+    }
+    if (segments.isEmpty())
+        return;
+
+    double cursor = 0.0;
+    qsizetype firstSegment = 0;
+    double timelinePosition = 0.0;
+    for (qsizetype index = 0; index < segments.size(); ++index) {
+        const double segmentDuration =
+            std::clamp(segments[index].durationSeconds, 0.05, 3600.0);
+        if (seconds < cursor + segmentDuration) {
+            firstSegment = index;
+            timelinePosition = cursor;
+            break;
+        }
+        cursor += segmentDuration;
+        firstSegment = index + 1;
+        timelinePosition = cursor;
+    }
+    firstSegment = qBound<qsizetype>(0, firstSegment, segments.size() - 1);
+    if (seconds >= m_durationSec.load()) {
+        firstSegment = segments.size() - 1;
+        timelinePosition = m_durationSec.load()
+            - std::clamp(
+                segments.back().durationSeconds, 0.05, 3600.0);
+    }
+
+    QDir directory(imageSequenceDirectory());
+    if (!directory.exists())
+        directory.mkpath(QStringLiteral("."));
+    const QString path = directory.filePath(
+        QStringLiteral("sequence-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces)
+        + QStringLiteral(".txt"));
+    QSaveFile file(path);
+    const QByteArray imageList =
+        mcast::core::buildMfImageList(segments, firstSegment);
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(imageList) != imageList.size()
+        || !file.commit()) {
+        emit logMessage(
+            QStringLiteral("无法重新生成图片序列清单"));
+        return;
+    }
+
+    const QByteArray fpsText = QByteArray::number(imageFps, 'f', 6);
+    mpv_set_property_string(m_mpv, "mf-fps", fpsText.constData());
+    m_playOnLoad.store(!m_imageSequencePaused.load());
+    QString oldListPath;
+    {
+        std::lock_guard lock(m_uriMutex);
+        oldListPath = m_activeImageListPath;
+    }
+    loadMpvFile(
+        QStringLiteral("mf://@") + QDir::toNativeSeparators(path),
+        logicalUri, path, false);
+    if (!oldListPath.isEmpty() && oldListPath != path)
+        QFile::remove(oldListPath);
+    m_imageBaseMs = qRound64(timelinePosition * 1000.0);
+    m_positionSec.store(timelinePosition);
+    m_eofReached.store(false);
+    m_imageClockStart = std::chrono::steady_clock::now();
+    emit positionChanged(timelinePosition);
+    if (!m_imageSequencePaused.load())
+        m_imageTimer->start();
 }
 
 void MpvCore::play()
 {
     if (!m_mpv)
         return;
+
+    if (m_imageSequenceActive.load()) {
+        if (m_positionSec.load() >= m_durationSec.load()
+            && m_durationSec.load() > 0.0) {
+            reloadImageTimeline(0.0);
+        }
+        m_imageSequencePaused.store(false);
+        m_imageBaseMs = qRound64(m_positionSec.load() * 1000.0);
+        m_imageClockStart = std::chrono::steady_clock::now();
+        m_imageTimer->start();
+    }
 
     // **播完了再按播放，就是"从头再放一遍"。**
     //
@@ -457,7 +1495,7 @@ void MpvCore::play()
     //
     // 注意这里只看"播没播到头"。用户自己按的「停止」走的是 stop()，那条路会把
     // 位置归零，eof-reached 也是 false，不会误判。
-    if (m_eofReached.load()) {
+    if (!m_imageSequenceActive.load() && m_eofReached.load()) {
         const char *args[] = { "seek", "0", "absolute", nullptr };
         mpv_command(m_mpv, args);
         m_eofReached.store(false);
@@ -475,6 +1513,13 @@ void MpvCore::pause()
     if (!m_mpv)
         return;
 
+    if (m_imageSequenceActive.load()) {
+        tickImageTimeline();
+        m_imageBaseMs = qRound64(m_positionSec.load() * 1000.0);
+        m_imageSequencePaused.store(true);
+        m_imageTimer->stop();
+    }
+
     // 同上，反着来：加载还没结束就按了暂停，那加载好也别自己开播。
     m_playOnLoad.store(false);
 
@@ -486,6 +1531,14 @@ void MpvCore::stop()
 {
     if (!m_mpv)
         return;
+
+    if (m_imageSequenceActive.load()) {
+        m_imageSequencePaused.store(true);
+        m_imageTimer->stop();
+        reloadImageTimeline(0.0);
+        m_positionSec.store(0.0);
+        emit positionChanged(0.0);
+    }
 
     // **加载期间就被喊停**的话，这一句是关键：文件还是会加载完，但加载好那一声
     // 不会再把它放开（见 MPV_EVENT_FILE_LOADED 那段）。
@@ -513,7 +1566,25 @@ void MpvCore::unload()
 
     m_playOnLoad.store(false);
     m_pendingUri.clear();
-    m_lastRequestedUri.clear();
+    cancelPlaylistProbe();
+    cancelImagePayloadProbe();
+    m_wrappedTsProxy.reset();
+    clearTemporaryImageSequence();
+    resetImageTimeline();
+    {
+        std::lock_guard lock(m_uriMutex);
+        m_lastRequestedUri.clear();
+        m_activeMpvUri.clear();
+        m_eventMediaUri.clear();
+        m_pendingArtworkUri.clear();
+        m_artworkPending = false;
+        m_artworkRetryCount = 0;
+    }
+    {
+        std::lock_guard lock(m_mediaInfoMutex);
+        m_mediaInfo.clear();
+    }
+    emit mediaInfoChanged();
     m_loadFailed = false;
 
     // 这个才是"卸掉"。会话结束（挂断投送）时用。
@@ -525,6 +1596,10 @@ void MpvCore::seekTo(double seconds)
 {
     if (!m_mpv)
         return;
+    if (m_imageSequenceActive.load()) {
+        seekImageTimeline(seconds);
+        return;
+    }
     const QByteArray target = QByteArray::number(seconds, 'f', 3);
     const char *command[] = {"seek", target.constData(), "absolute", nullptr};
     mpv_command(m_mpv, command);
@@ -560,26 +1635,8 @@ qint64 MpvCore::mediaSizeBytes() const
     return size > 0 ? size : 0;
 }
 
-void MpvCore::setVideoWindow(quintptr windowId)
-{
-    // 核心这一层不知道怎么把画面送进一个窗口 —— 那是外壳的事（LibMpvPlayer
-    // 覆盖了它，去设 mpv 的 wid 选项）。
-    //
-    // 留一个空实现而不是做成纯虚函数，是为了让这个类**能被直接实例化**：
-    // QML 那边的视频区不继承它（它要继承 QQuickFramebufferObject，两个 QObject
-    // 没法多重继承），只是持有一个，走 render API 自己渲染。
-    //
-    // 走到这儿说明有人给了一个窗口号，但当前这个后端不接管它 —— 这多半是接错
-    // 了线，说一声，别让它悄悄失效。
-    if (windowId != 0)
-        emit logMessage(QStringLiteral("画面输出：当前后端不通过窗口输出，已忽略窗口号"));
-}
-
 void MpvCore::applyStartupOptions(mpv_handle *mpv)
 {
-    if (m_outputMode != RenderApiOutput)
-        return;   // WindowOutput：vo 用 mpv 自己的默认，窗口由子类用 wid 指定
-
     // ── render API 这条路要设的两项 ──────────────────────────────────────
     //
     // vo=libmpv 是硬性前提。不设它，mpv 会自己去开视频输出 —— 而那时候

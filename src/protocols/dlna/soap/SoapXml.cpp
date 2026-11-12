@@ -164,6 +164,16 @@ std::optional<std::string> nodeValue(IXmlReader *reader)
     return utf8(value, length);
 }
 
+std::optional<std::string> attributeValue(
+    IXmlReader *reader, const wchar_t *name)
+{
+    if (reader->MoveToAttributeByName(name, nullptr) != S_OK)
+        return std::nullopt;
+    const auto value = nodeValue(reader);
+    reader->MoveToElement();
+    return value;
+}
+
 std::string trim(std::string_view value)
 {
     while (!value.empty()
@@ -381,6 +391,7 @@ bool parseDidlMetadata(
         std::string text;
     };
     std::optional<Field> active;
+    std::optional<DidlResource> activeResource;
     std::map<std::string, std::optional<std::string> *> fields{
         {"title", &metadata.title},
         {"class", &metadata.upnpClass},
@@ -390,6 +401,7 @@ bool parseDidlMetadata(
         {"subtitle", &metadata.subtitle},
         {"description", &metadata.description},
         {"longDescription", &metadata.longDescription},
+        {"albumArtURI", &metadata.albumArtUri},
     };
     std::size_t nodes = 0;
     HRESULT result = reader.read();
@@ -410,6 +422,19 @@ bool parseDidlMetadata(
             const auto name = localName(reader.get());
             if (!name)
                 return false;
+            if (*name == "res") {
+                activeResource.emplace();
+                const auto protocolInfo =
+                    attributeValue(reader.get(), L"protocolInfo");
+                if (protocolInfo && !protocolInfo->empty())
+                    activeResource->protocolInfo =
+                        trim(*protocolInfo);
+                const auto resolution =
+                    attributeValue(reader.get(), L"resolution");
+                if (resolution && !resolution->empty())
+                    activeResource->resolution =
+                        trim(*resolution);
+            }
             if (!active) {
                 const auto found = fields.find(*name);
                 if (found != fields.end() && !*found->second) {
@@ -423,12 +448,23 @@ bool parseDidlMetadata(
                 if (!value)
                     return false;
                 active->text += *value;
+            } else if (activeResource) {
+                const auto value = nodeValue(reader.get());
+                if (!value)
+                    return false;
+                activeResource->uri += *value;
             }
         } else if (type == XmlNodeType_EndElement) {
             const auto name = localName(reader.get());
             if (active && name && *name == active->name) {
                 *active->target = trim(active->text);
                 active.reset();
+            } else if (activeResource && name && *name == "res") {
+                activeResource->uri = trim(activeResource->uri);
+                if (!activeResource->uri.empty())
+                    metadata.resources.push_back(
+                        std::move(*activeResource));
+                activeResource.reset();
             }
         }
         result = reader.read();

@@ -279,7 +279,7 @@ latest MediaRequest
 - MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI 的完整冷启动
   故障路径；
 - 接收/确认策略完全收归 Shell 的持久配置数据面；
-- 新三进程入口替换旧 `MCast.exe` 前需要补足的长稳和故障注入。
+- 三进程生产入口的长稳和故障注入。
 
 MainWindow 已存在时，真实 DLNA 投送已经可以触发 QML 确认窗口；冷启动和无 UI
 场景尚未完成全路径验证。

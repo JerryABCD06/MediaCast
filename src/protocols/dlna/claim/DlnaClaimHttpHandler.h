@@ -18,9 +18,10 @@ namespace mcast::dlna::claim {
 struct DlnaClaimHttpCallbacks {
     // These callbacks are serialized across every handler entry point, but
     // may run on either the HTTP owner thread or the Protocol event thread.
-    // They must only enqueue work or complete already-decided requests;
-    // blocking IPC waits, UI creation and media opening belong on the
-    // Protocol serial context.
+    // executeMedia stays asynchronous. playNow/stopNow may wait for the
+    // PlaybackPipe acknowledgement so the SOAP success is not sent before the
+    // transport state becomes visible. UI creation and media opening do not
+    // belong here.
     std::function<bool(
         std::uint64_t requestId, net::HttpResponse response)>
         completeHttp;

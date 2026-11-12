@@ -3,7 +3,12 @@
 
 #include "WindowsMediaControls.h"
 
+#include <QCoreApplication>
+#include <QFile>
+#include <QFileInfo>
 #include <QMetaObject>
+#include <QPointer>
+#include <QUrl>
 
 #include <chrono>
 #include <cstdint>
@@ -14,6 +19,8 @@
 #  define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shcore.h>
+#include <shlwapi.h>
 
 #include <roapi.h>
 #include <systemmediatransportcontrolsinterop.h>
@@ -21,10 +28,12 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 // 别写 using namespace Windows::Media —— SDK 的 winrt/roapi.h 和 cppwinrt 投影里
 // 各有一个叫 Windows 的东西，不加限定的写法会撞名。
 namespace WMedia = winrt::Windows::Media;
+namespace WStorage = winrt::Windows::Storage::Streams;
 
 namespace {
 
@@ -43,6 +52,55 @@ winrt::hstring toHString(const QString &text)
 {
     return winrt::hstring(reinterpret_cast<wchar_t const *>(text.utf16()),
                           static_cast<std::uint32_t>(text.size()));
+}
+
+WStorage::RandomAccessStreamReference localArtworkReference(
+    const QString &path)
+{
+    constexpr qint64 maxEncodedBytes = 16 * 1024 * 1024;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw winrt::hresult_error(
+            HRESULT_FROM_WIN32(ERROR_OPEN_FAILED));
+    }
+    const qint64 declaredSize = file.size();
+    if (declaredSize <= 0 || declaredSize > maxEncodedBytes) {
+        throw winrt::hresult_error(E_INVALIDARG);
+    }
+    const QByteArray bytes = file.read(maxEncodedBytes + 1);
+    if (bytes.size() != declaredSize
+        || file.error() != QFileDevice::NoError) {
+        throw winrt::hresult_error(E_FAIL);
+    }
+
+    const bool png = bytes.startsWith(
+        QByteArrayLiteral("\x89PNG\r\n\x1a\n"));
+    const bool jpeg = bytes.startsWith(
+        QByteArrayLiteral("\xFF\xD8\xFF"));
+    const bool webp = bytes.size() >= 12
+        && bytes.startsWith(QByteArrayLiteral("RIFF"))
+        && bytes.mid(8, 4) == QByteArrayLiteral("WEBP");
+    if (!png && !jpeg && !webp) {
+        throw winrt::hresult_error(E_INVALIDARG);
+    }
+
+    IStream *memoryStream = ::SHCreateMemStream(
+        reinterpret_cast<const BYTE *>(bytes.constData()),
+        static_cast<UINT>(bytes.size()));
+    if (!memoryStream) {
+        throw winrt::hresult_error(E_OUTOFMEMORY);
+    }
+    winrt::com_ptr<IStream> stream;
+    stream.attach(memoryStream);
+
+    WStorage::IRandomAccessStream randomAccessStream{nullptr};
+    winrt::check_hresult(::CreateRandomAccessStreamOverStream(
+        stream.get(), BSOS_DEFAULT,
+        winrt::guid_of<WStorage::IRandomAccessStream>(),
+        winrt::put_abi(randomAccessStream)));
+    return WStorage::RandomAccessStreamReference::CreateFromStream(
+        randomAccessStream);
 }
 
 } // namespace
@@ -165,25 +223,40 @@ bool WindowsMediaControls::attachToWindow(quintptr windowId)
         m_impl->smtc.IsPreviousEnabled(false);
 
         // 按钮按下。回调可能在别的线程上，所以这里只做一件事：把动作甩回界面线程。
+        const QPointer<WindowsMediaControls> guard(this);
         m_impl->buttonToken = m_impl->smtc.ButtonPressed(
-            [this](WMedia::SystemMediaTransportControls const &,
-                   WMedia::SystemMediaTransportControlsButtonPressedEventArgs const &args) {
+            [guard](WMedia::SystemMediaTransportControls const &,
+                    WMedia::SystemMediaTransportControlsButtonPressedEventArgs const &args) {
                 const int button = static_cast<int>(args.Button());
+                QCoreApplication *application = QCoreApplication::instance();
+                if (!application)
+                    return;
                 QMetaObject::invokeMethod(
-                    this, [this, button] { emitActionForButton(this, button); },
+                    application,
+                    [guard, button] {
+                        if (guard)
+                            emitActionForButton(guard.data(), button);
+                    },
                     Qt::QueuedConnection);
             });
         m_impl->buttonSubscribed = true;
 
         // 面板里拖进度条。同样要甩回界面线程。
         m_impl->seekToken = m_impl->smtc.PlaybackPositionChangeRequested(
-            [this](WMedia::SystemMediaTransportControls const &,
-                   WMedia::PlaybackPositionChangeRequestedEventArgs const &args) {
+            [guard](WMedia::SystemMediaTransportControls const &,
+                    WMedia::PlaybackPositionChangeRequestedEventArgs const &args) {
                 const auto hundredNs = std::chrono::duration_cast<
                     std::chrono::duration<double>>(args.RequestedPlaybackPosition());
                 const double seconds = hundredNs.count();
+                QCoreApplication *application = QCoreApplication::instance();
+                if (!application)
+                    return;
                 QMetaObject::invokeMethod(
-                    this, [this, seconds] { emit seekRequested(seconds); },
+                    application,
+                    [guard, seconds] {
+                        if (guard)
+                            emit guard->seekRequested(seconds);
+                    },
                     Qt::QueuedConnection);
             });
         m_impl->seekSubscribed = true;
@@ -199,6 +272,7 @@ bool WindowsMediaControls::attachToWindow(quintptr windowId)
     }
     catch (winrt::hresult_error const &e)
     {
+        detach();
         emit logMessage(QStringLiteral("Windows 媒体面板没接上：0x%1")
                             .arg(static_cast<unsigned>(e.code().value), 8, 16, QLatin1Char('0')));
         return false;
@@ -211,7 +285,7 @@ bool WindowsMediaControls::attachToWindow(quintptr windowId)
 
 void WindowsMediaControls::detach()
 {
-    if (!m_impl || !m_attached)
+    if (!m_impl)
         return;
 
     try
@@ -222,20 +296,30 @@ void WindowsMediaControls::detach()
             m_impl->smtc.IsEnabled(false);
             m_impl->enabled = false;
         }
-        if (m_impl->buttonSubscribed)
-        {
-            m_impl->smtc.ButtonPressed(m_impl->buttonToken);
-            m_impl->buttonSubscribed = false;
-        }
-        if (m_impl->seekSubscribed)
-        {
-            m_impl->smtc.PlaybackPositionChangeRequested(m_impl->seekToken);
-            m_impl->seekSubscribed = false;
-        }
     }
     catch (winrt::hresult_error const &)
     {
-        // 收摊时的失败没什么可做的：进程本来就要走了。
+    }
+
+    if (m_impl->buttonSubscribed)
+    {
+        try {
+            m_impl->smtc.ButtonPressed(m_impl->buttonToken);
+        }
+        catch (winrt::hresult_error const &)
+        {
+        }
+        m_impl->buttonSubscribed = false;
+    }
+    if (m_impl->seekSubscribed)
+    {
+        try {
+            m_impl->smtc.PlaybackPositionChangeRequested(m_impl->seekToken);
+        }
+        catch (winrt::hresult_error const &)
+        {
+        }
+        m_impl->seekSubscribed = false;
     }
 
     m_impl->smtc = nullptr;
@@ -326,6 +410,33 @@ void WindowsMediaControls::pushDisplay()
             break;
         }
 
+        if (!info.artworkSource.isEmpty()) {
+            try {
+                const QUrl artworkUrl(info.artworkSource);
+                if (artworkUrl.isLocalFile()) {
+                    const QFileInfo artworkFile(artworkUrl.toLocalFile());
+                    if (artworkFile.exists() && artworkFile.isFile()
+                        && artworkFile.size() > 0
+                        && artworkFile.size() <= 16 * 1024 * 1024) {
+                        updater.Thumbnail(localArtworkReference(
+                            artworkFile.absoluteFilePath()));
+                    }
+                } else {
+                    const winrt::Windows::Foundation::Uri uri(
+                        toHString(info.artworkSource));
+                    updater.Thumbnail(
+                        WStorage::RandomAccessStreamReference::
+                            CreateFromUri(uri));
+                }
+            } catch (winrt::hresult_error const &e) {
+                emit logMessage(
+                    QStringLiteral("Windows 媒体面板封面设置失败：%1")
+                        .arg(QString::fromWCharArray(e.message().c_str())));
+            } catch (...) {
+                emit logMessage(
+                    QStringLiteral("Windows 媒体面板封面设置失败"));
+            }
+        }
         updater.Update();
 
         emit logMessage(QStringLiteral("Windows 媒体面板 -> %1 ｜ %2 ｜ %3")

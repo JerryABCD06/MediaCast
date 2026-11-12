@@ -79,17 +79,17 @@ private:
     struct MediaTask {
         enum class Kind {
             ExecuteMedia,
-            PlayNow,
-            StopNow,
         };
 
         Kind kind = Kind::ExecuteMedia;
         claim::DlnaMediaExecution media;
+        std::uint64_t generation = 0;
     };
 
     struct PendingMedia {
         claim::DlnaMediaExecution execution;
         std::uint64_t baselineStateVersion = 0;
+        std::uint64_t generation = 0;
         std::uint64_t commandId = 0;
         bool waitingForPlayer = false;
         bool waitingForSnapshot = false;
@@ -98,6 +98,7 @@ private:
     DlnaSessionCallbacks sessionCallbacks();
     claim::DlnaClaimHttpCallbacks httpCallbacks();
     void enqueue(MediaTask task);
+    bool enqueueNewMedia(claim::DlnaMediaExecution execution);
     void mediaLoop(std::stop_token stop);
     void httpLoop(std::stop_token stop);
     void sessionLoop(std::stop_token stop);
@@ -135,6 +136,7 @@ private:
     std::unique_ptr<DlnaClaimConfirmationWorker> m_confirmationWorker;
 
     mutable std::mutex m_mediaMutex;
+    std::mutex m_mediaStartMutex;
     mutable std::mutex m_networkMutex;
     std::mutex m_receivingMutex;
     std::mutex m_requestGateMutex;
@@ -159,6 +161,7 @@ private:
     std::atomic<std::int64_t> m_broadcastIntervalMs{10000};
     std::optional<SessionTime> m_disconnectRestartAt;
     bool m_mediaStopping = false;
+    std::uint64_t m_mediaGeneration = 0;
 };
 
 } // namespace mcast::dlna::runtime

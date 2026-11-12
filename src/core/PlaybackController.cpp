@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QTimer>
+#include <QUrl>
 
 namespace {
 
@@ -58,6 +59,15 @@ const QStringList &lyricsTagKeys()
     return keys;
 }
 
+bool sameMediaUri(const QString &left, const QString &right)
+{
+    if (left == right)
+        return true;
+    const QUrl leftUrl(left);
+    const QUrl rightUrl(right);
+    return !leftUrl.isEmpty() && leftUrl == rightUrl;
+}
+
 } // namespace
 
 PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
@@ -66,6 +76,13 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
 {
     if (!m_player)
         return;
+
+    QString pipelineError;
+    if (!m_metadataPipeline.loadNearExecutable(&pipelineError)) {
+        emit logMessage(
+            QStringLiteral("元数据管线使用内置规则：%1")
+                .arg(pipelineError));
+    }
 
     m_loadWatchdog = new QTimer(this);
     m_loadWatchdog->setSingleShot(true);
@@ -173,7 +190,11 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
     // 那份元数据，文件得等打开才知道里面写了什么。所以到这儿要重算一遍：
     // 标题、歌手可能是文件里才有的，歌词也只可能在这儿。
     connect(m_player, &MediaPlayer::metadataChanged, this,
-            [this](const QVariantMap &tags) {
+            [this](const QVariantMap &tags, const QString &mediaUri) {
+        if (mediaUri.isEmpty()
+            || !sameMediaUri(mediaUri, m_current.uri)) {
+            return;
+        }
         if (m_fileTags == tags)
             return;
 
@@ -195,6 +216,39 @@ PlaybackController::PlaybackController(MediaPlayer *player, QObject *parent)
         }
 
         rebuildNowPlaying();
+    });
+
+    connect(m_player, &MediaPlayer::artworkChanged, this,
+            [this](const QString &source, const QString &mediaUri) {
+        if (mediaUri.isEmpty()
+            || !sameMediaUri(mediaUri, m_current.uri)) {
+            return;
+        }
+        if (m_fileArtworkSource == source)
+            return;
+        m_fileArtworkSource = source;
+        emit logMessage(source.isEmpty()
+                            ? QStringLiteral("播放器没有提供封面")
+                            : QStringLiteral("播放器封面：%1").arg(source));
+        rebuildNowPlaying();
+    });
+
+    connect(m_player, &MediaPlayer::mediaKindChanged, this,
+            [this](MediaKind kind, const QString &mediaUri) {
+        if (kind == MediaKind::Unknown
+            || mediaUri.isEmpty()
+            || !sameMediaUri(mediaUri, m_current.uri)
+            || m_playerKind == kind) {
+            return;
+        }
+        const CastState castBefore = castState();
+        const bool pictureBefore = showsPicture();
+        m_playerKind = kind;
+        rebuildNowPlaying();
+        if (castState() != castBefore)
+            emit castStateChanged();
+        if (showsPicture() != pictureBefore)
+            emit showsPictureChanged();
     });
 
     // 播放器整个没了（进程退出、崩溃）—— 这是状态机的事，不该让上层去记。
@@ -274,7 +328,7 @@ void PlaybackController::setPeerConnected(bool connected)
     //           有下一条，它会自己发 SetNextAVTransportURI）。
     //
     // **这一层只认"谁连着变了"。** 网络抖一下算不算断开，是协议层的事 ——
-    // 那边已经留了宽限（见 DlnaRenderer::refreshPeerConnected 和 kPeerGraceMs），
+    // 那边已经留了宽限（见 DLNA 会话层的 kPeerGraceMs），
     // 别把那种判断搬到这儿来，那会把协议特有的东西漏进来。
     clearPlaylist();
 
@@ -282,6 +336,39 @@ void PlaybackController::setPeerConnected(bool connected)
 
     if (castState() != castBefore)
         emit castStateChanged();
+}
+
+void PlaybackController::setCastSession(
+    bool connected, const QString &protocol,
+    const QString &controlPointName,
+    const QString &controlPointAddress,
+    bool remoteControlRegistered)
+{
+    if (m_peerConnected == connected
+        && m_castProtocol == protocol
+        && m_controlPointName == controlPointName
+        && m_controlPointAddress == controlPointAddress
+        && m_remoteControlRegistered == remoteControlRegistered) {
+        return;
+    }
+    m_castProtocol = protocol;
+    m_controlPointName = controlPointName;
+    m_controlPointAddress = controlPointAddress;
+    m_remoteControlRegistered = remoteControlRegistered;
+    setPeerConnected(connected);
+    emit castSessionChanged();
+}
+
+QVariantMap PlaybackController::castSession() const
+{
+    return QVariantMap{
+        {QStringLiteral("connected"), m_peerConnected},
+        {QStringLiteral("protocol"), m_castProtocol},
+        {QStringLiteral("controlPointName"), m_controlPointName},
+        {QStringLiteral("controlPointAddress"), m_controlPointAddress},
+        {QStringLiteral("remoteControlRegistered"),
+         m_remoteControlRegistered},
+    };
 }
 
 PlaybackController::CastState PlaybackController::castState() const
@@ -516,6 +603,8 @@ void PlaybackController::startPlaying(const MediaRequest &request, const MediaSo
     // 到了才更正。本机文件是几十毫秒的事，局域网地址慢的时候那一会儿看得见。
     // （实测：放本地一首歌，界面先显示上一首的标题，20 毫秒后才更正。）
     m_fileTags.clear();
+    m_fileArtworkSource.clear();
+    m_playerKind = MediaKind::Unknown;
 
     // 换了内容就报一声。控制点靠这个知道渲染器现在装的是哪一条 ——
     // 少了它，我们这边的「上一首/下一首」在手机看来就像没发生过。
@@ -578,94 +667,39 @@ NowPlaying PlaybackController::buildNowPlaying(const MediaRequest &request,
     //
     // 这不只是显示问题：Windows 媒体面板按类型决定卡片是音乐样式还是视频样式，
     // 一律报成音乐的话，投过来的图片在面板里显示得驴唇不对马嘴。
-    info.kind = request.kind;
+    info.kind =
+        m_playerKind == MediaKind::Unknown ? request.kind : m_playerKind;
     if (info.kind == MediaKind::Unknown)
         info.kind = mediaKindFromUri(request.uri);
 
-    info.title = request.title;
-    info.artist = request.artist;
-    info.album = request.album;
-    // 协议给的"副标题"（视频/图片那一路用，音频不用它）。存成局部变量就够 ——
-    // 算完落到 info.subtitle 里，界面上只要那一份。
-    const QString description = request.description;
+    MetadataPipelineInput pipelineInput;
+    pipelineInput.uri = request.uri;
+    pipelineInput.kind = info.kind;
+    pipelineInput.protocolTitle = request.title;
+    pipelineInput.protocolArtist = request.artist;
+    pipelineInput.protocolCreator = request.creator;
+    pipelineInput.protocolAlbum = request.album;
+    pipelineInput.protocolSubtitle = request.subtitle;
+    pipelineInput.protocolDescription = request.description;
+    pipelineInput.protocolLongDescription = request.longDescription;
+    pipelineInput.protocolArtworkUri = request.artworkUri;
+    pipelineInput.fileTags = m_fileTags;
+    pipelineInput.fileArtworkSource = m_fileArtworkSource;
 
-    // ── 协议没给的那几样，拿文件自带的标签补 ────────────────────────────
-    //
-    // **只补空着的**：协议层明确说了什么就以它为准（那是控制点眼里这条内容的
-    // 名字），文件里的只在它没给的时候顶上。
-    //
-    // 这张标签表是后到的（见构造函数里那个 metadataChanged）：投送刚起来的时候
-    // 它还是空的，等文件打开才会来，那时候会重算一遍。
-    if (info.title.isEmpty()) {
-        const QString fromFile = tagValue(m_fileTags, { QStringLiteral("title") });
-        // 文件里的标题**也要过同一道筛子**。有些文件是被工具批量打过标签的，
-        // title 里装的就是文件名本身（"Screenshot_20260905_232916"）——
-        // 那种东西显示出来比"图片"两个字还糟，宁可往后退。
-        if (looksLikeATitle(fromFile)) {
-            info.title = fromFile;
-        } else if (!fromFile.isEmpty() && !quiet) {
-            emit logMessage(QStringLiteral("文件里的标题「%1」不像标题，跳过").arg(fromFile));
-        }
-    }
-    if (info.artist.isEmpty())
-        info.artist = tagValue(m_fileTags, { QStringLiteral("artist") });
-    if (info.album.isEmpty())
-        info.album = tagValue(m_fileTags, { QStringLiteral("album") });
-
-    // 文件标签里的作者也可能是占位符（有些文件的标签就是随手写的）。
-    if (looksLikePlaceholder(info.artist))
-        info.artist.clear();
-
-    // 歌词**只可能在文件里** —— DLNA 协议的元数据里根本没有这一项。
+    const MetadataPipelineResult resolved =
+        m_metadataPipeline.resolve(pipelineInput);
+    info.title = resolved.title;
+    info.subtitle = resolved.subtitle;
+    info.artist = resolved.artist;
+    info.album = resolved.album;
+    info.artworkSource = resolved.artworkSource;
     info.lyrics = tagValue(m_fileTags, lyricsTagKeys());
 
-    // ── 标题的回退 ──────────────────────────────────────────────────────
-    // 协议层给的就是空的（或者它压根没有标题这个概念），那就从文件名推。
-    // 推出来的也要过"像不像标题"那道筛子 —— 很多 App 拿内部编号当文件名。
-    if (info.title.isEmpty()) {
-        const QString guess = titleFromUri(request.uri);
-        if (looksLikeATitle(guess)) {
-            info.title = guess;
-            if (!quiet)
-                emit logMessage(QStringLiteral("没给标题，从文件名推出「%1」").arg(guess));
-        } else if (!guess.isEmpty() && !quiet) {
-            emit logMessage(QStringLiteral("文件名「%1」不像标题，跳过").arg(guess));
-        }
+    if (!quiet && !resolved.rejected.isEmpty()) {
+        emit logMessage(
+            QStringLiteral("元数据过滤：%1")
+                .arg(resolved.rejected.join(QStringLiteral("；"))));
     }
-
-    // 还是没有，就用类型名顶上。标题空着在 Windows 媒体面板里会显示成"未知"，
-    // 比一个中性的类型名还难懂 —— 至少"图片"这两个字说清了现在在放什么。
-    //
-    // **这里要的是译文，不是日志那种中文**：这个字会直接显示在界面上，
-    // 所以走语言文件那一套（mediaKindKey -> 译文）。这也是切语言时得重算
-    // 一遍的原因，见 retranslate()。
-    if (info.title.isEmpty()) {
-        const QString key = mediaKindKey(info.kind);
-        if (!key.isEmpty())
-            info.title = QCoreApplication::translate("NowPlaying", key.toUtf8().constData());
-        if (!info.title.isEmpty() && !quiet)
-            emit logMessage(QStringLiteral("没有可用标题，用类型名「%1」顶上").arg(info.title));
-    }
-
-    // ── 副标题：按内容类型分工 ──────────────────────────────────────────
-    //
-    // 音频：**歌手**（没有歌手退到专辑）。音频里没有"副标题"这个概念 ——
-    // 所有主流播放器都是这么显示的，Windows 媒体面板的音乐卡片也是独立的
-    // Artist / AlbumTitle 两个字段。
-    //
-    // 视频和图片：**副标题**（"这是什么"的那一句）。那儿不能拿"艺术家"顶 ——
-    // 视频里的艺术家是演员/导演，含义完全不同，显示出来更让人困惑。
-    //
-    // 两个都拿不到就是「未知」。**故意不退到"投送/本地播放"**：那是"打哪儿来的"，
-    // 不是"这是什么"，在主界面上写它等于废话（这儿本来就在投送）。Windows
-    // 媒体面板那边会另外拼上来源 —— 那块面板是全局的，得分得清是谁在放。
-    if (info.kind == MediaKind::Audio)
-        info.subtitle = info.artist.isEmpty() ? info.album : info.artist;
-    else
-        info.subtitle = description;
-
-    if (info.subtitle.isEmpty())
-        info.subtitle = QCoreApplication::translate("NowPlaying", "media_unknown");
 
     return info;
 }
@@ -707,6 +741,7 @@ void PlaybackController::endSession()
 
     // 文件标签跟着清掉 —— 手上都没内容了，留着上一条的标题没有任何意义。
     m_fileTags.clear();
+    m_playerKind = MediaKind::Unknown;
 
     // 队列和播放模式一并归零。会话都断了还留着"下一条"没有任何意义，
     // 更要紧的是：下次投送时它会莫名其妙地自动接上。
@@ -801,8 +836,3 @@ qint64 PlaybackController::mediaSizeBytes() const
     return m_player ? m_player->mediaSizeBytes() : 0;
 }
 
-void PlaybackController::setVideoWindow(quintptr windowId)
-{
-    if (m_player)
-        m_player->setVideoWindow(windowId);
-}

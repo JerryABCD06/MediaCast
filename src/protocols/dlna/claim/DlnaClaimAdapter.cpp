@@ -23,8 +23,6 @@ DlnaClaimOutcome DlnaClaimAdapter::beginMedia(
         return outcome;
     if (peer.displayName.empty())
         peer.displayName = peer.address;
-    if (media.title.empty())
-        media.title = media.uri;
 
     if (m_pending) {
         if (!pendingMatches(peer)) {
@@ -451,7 +449,14 @@ bool DlnaClaimAdapter::sameMedia(
     const playback::MediaRequest &right)
 {
     return left.uri == right.uri && left.metadata == right.metadata
-        && left.title == right.title;
+        && left.title == right.title
+        && left.artist == right.artist
+        && left.creator == right.creator
+        && left.album == right.album
+        && left.description == right.description
+        && left.subtitle == right.subtitle
+        && left.longDescription == right.longDescription
+        && left.artworkUri == right.artworkUri;
 }
 
 } // namespace mcast::dlna::claim

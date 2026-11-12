@@ -160,6 +160,7 @@ public:
         const std::uint64_t generation = m_snapshot.generation;
         const std::uint64_t stateVersion = m_snapshot.stateVersion + 1;
         const bool peerConnected = m_snapshot.peerConnected;
+        const auto castSession = m_snapshot.castSession;
         const int volume = m_snapshot.volumePercent;
         const bool muted = m_snapshot.muted;
         const auto pictureControls = m_snapshot.pictureControls;
@@ -168,6 +169,7 @@ public:
         m_snapshot.stateVersion = stateVersion;
         m_snapshot.playerAvailable = false;
         m_snapshot.peerConnected = peerConnected;
+        m_snapshot.castSession = castSession;
         m_snapshot.volumePercent = volume;
         m_snapshot.muted = muted;
         m_snapshot.pictureControls = pictureControls;
@@ -328,6 +330,9 @@ private:
                 m_snapshot.hasNext = false;
                 m_snapshot.hasPrevious = false;
             }
+            break;
+        case PlaybackCommandType::SetCastSession:
+            m_snapshot.castSession = command.castSession;
             break;
         }
         bumpVersion();

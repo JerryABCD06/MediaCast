@@ -27,6 +27,8 @@ struct SoapRequestContext {
 struct SoapRouterOptions {
     std::function<SessionTime()> now;
     std::function<void(const std::string &)> logger;
+    bool waitForCommandCompletion = false;
+    SessionTime commandTimeout{5000};
 };
 
 class SoapRouter
@@ -42,6 +44,7 @@ public:
     HttpResponse handleParsed(const SoapRequestContext &request);
     void notePeerActivity();
     void noteNewMediaRequest();
+    bool hasTransportMedia() const;
 
     static playback::MediaRequest mediaRequest(
         std::string uri, std::string metadata);

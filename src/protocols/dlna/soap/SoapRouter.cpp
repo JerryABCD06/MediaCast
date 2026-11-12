@@ -183,6 +183,92 @@ std::optional<playback::PlayMode> parsePlayMode(std::string_view value)
     return std::nullopt;
 }
 
+bool hasMimeType(std::string_view protocolInfo, std::string_view type)
+{
+    const std::string value = lower(protocolInfo);
+    return value.starts_with(type)
+        || value.find(":" + std::string(type)) != std::string::npos;
+}
+
+bool hasUriExtension(std::string_view uri, std::initializer_list<std::string_view> extensions)
+{
+    const std::string value = lower(uri);
+    const std::size_t query = value.find_first_of("?#");
+    const std::string_view path = std::string_view(value).substr(0, query);
+    for (const std::string_view extension : extensions) {
+        const std::string suffix = "." + std::string(extension);
+        if (path.size() >= suffix.size()
+            && path.substr(path.size() - suffix.size()) == suffix) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasResolution(std::string_view value)
+{
+    const std::string text = lower(trim(value));
+    const std::size_t separator = text.find('x');
+    if (separator == std::string::npos)
+        return false;
+    const auto width = parseInt(text.substr(0, separator));
+    const auto height = parseInt(text.substr(separator + 1));
+    return width && height && *width > 0 && *height > 0;
+}
+
+playback::MediaKind mediaKindFromDidl(
+    std::string_view uri, const DidlMetadata &didl)
+{
+    const std::string upnpClass =
+        lower(didl.upnpClass.value_or(""));
+    const DidlResource *resource = nullptr;
+    for (const DidlResource &candidate : didl.resources) {
+        if (candidate.uri == uri) {
+            resource = &candidate;
+            break;
+        }
+    }
+    if (!resource && didl.resources.size() == 1)
+        resource = &didl.resources.front();
+    const std::string protocolInfo =
+        resource
+        ? resource->protocolInfo.value_or("")
+        : "";
+
+    const bool classImage = upnpClass.find("imageitem") != std::string::npos;
+    const bool classAudio = upnpClass.find("audioitem") != std::string::npos;
+    const bool classVideo = upnpClass.find("videoitem") != std::string::npos;
+    const bool mimeImage = hasMimeType(protocolInfo, "image/");
+    const bool mimeAudio = hasMimeType(protocolInfo, "audio/");
+    const bool mimeVideo = hasMimeType(protocolInfo, "video/");
+    const bool extensionImage = hasUriExtension(
+        uri, {"jpg", "jpeg", "png", "gif", "bmp", "webp",
+              "heic", "heif", "tif", "tiff", "avif"});
+    const bool extensionAudio = hasUriExtension(
+        uri, {"mp3", "flac", "wav", "m4a", "aac", "ogg",
+              "opus", "wma", "ape"});
+    const bool extensionVideo = hasUriExtension(
+        uri, {"mp4", "mkv", "avi", "mov", "wmv", "flv",
+              "webm", "ts", "m2ts", "mpg", "mpeg", "m4v",
+              "3gp", "rmvb", "m3u8"});
+
+    if (classImage || mimeImage || extensionImage)
+        return playback::MediaKind::Image;
+
+    // Some control points label video files as audioItem while the resource
+    // MIME type, resolution and extension all prove otherwise.
+    if (mimeVideo || (extensionVideo && !mimeAudio)
+        || (resource && resource->resolution
+            && hasResolution(*resource->resolution))) {
+        return playback::MediaKind::Video;
+    }
+    if (mimeAudio || extensionAudio || classAudio)
+        return playback::MediaKind::Audio;
+    if (classVideo)
+        return playback::MediaKind::Video;
+    return playback::MediaKind::Unknown;
+}
+
 playback::MediaRequest parseMediaRequest(
     std::string uri, std::string metadata)
 {
@@ -195,28 +281,15 @@ playback::MediaRequest parseMediaRequest(
     DidlMetadata didl;
     std::string parseError;
     parseDidlMetadata(request.metadata, didl, parseError);
-    if (didl.upnpClass) {
-        if (didl.upnpClass->find("object.item.imageItem")
-            != std::string::npos) {
-            request.kind = playback::MediaKind::Image;
-        } else if (didl.upnpClass->find("object.item.audioItem")
-                   != std::string::npos) {
-            request.kind = playback::MediaKind::Audio;
-        } else if (didl.upnpClass->find("object.item.videoItem")
-                   != std::string::npos) {
-            request.kind = playback::MediaKind::Video;
-        }
-    }
+    request.kind = mediaKindFromDidl(request.uri, didl);
     request.title = didl.title.value_or("");
-    request.artist = didl.artist.value_or(
-        didl.creator.value_or(""));
+    request.artist = didl.artist.value_or("");
+    request.creator = didl.creator.value_or("");
     request.album = didl.album.value_or("");
-    if (didl.subtitle)
-        request.description = *didl.subtitle;
-    else if (didl.description)
-        request.description = *didl.description;
-    else if (didl.longDescription)
-        request.description = *didl.longDescription;
+    request.subtitle = didl.subtitle.value_or("");
+    request.description = didl.description.value_or("");
+    request.longDescription = didl.longDescription.value_or("");
+    request.artworkUri = didl.albumArtUri.value_or("");
     return request;
 }
 
@@ -320,6 +393,9 @@ SoapRouter::SoapRouter(
 
 HttpResponse SoapRouter::handle(const core::HttpRequest &request)
 {
+    m_session.observeHttpClient(
+        request.header("user-agent").value_or(""),
+        request.peerAddress);
     HttpResponse errorResponse;
     const auto parsed = parseRequest(request, errorResponse);
     if (!parsed)
@@ -407,11 +483,24 @@ std::optional<SoapRequestContext> SoapRouter::parseRequest(
 HttpResponse SoapRouter::handleParsed(
     const SoapRequestContext &request)
 {
+    const bool newMedia =
+        request.service == "AVTransport"
+        && request.action == "SetAVTransportURI";
+    const auto requestUri = newMedia
+        ? request.body.value("CurrentURI") : std::nullopt;
+    const auto requestMetadata = newMedia
+        ? request.body.value("CurrentURIMetaData") : std::nullopt;
+    const bool structurallyValidNewMedia =
+        newMedia && requestUri && requestMetadata
+        && !requestUri->empty();
+    if (structurallyValidNewMedia)
+        noteNewMediaRequest();
+
     const HttpResponse response = dispatch(
         request.service, request.action, request.body);
-    if (request.service == "AVTransport"
-        && request.action == "SetAVTransportURI") {
-        noteNewMediaRequest();
+    if (newMedia && structurallyValidNewMedia && response.status == 200) {
+        // The media boundary was opened before dispatch so an Open that
+        // legitimately waits for the player cannot invalidate its own queue.
     } else {
         notePeerActivity();
     }
@@ -426,6 +515,13 @@ void SoapRouter::notePeerActivity()
 void SoapRouter::noteNewMediaRequest()
 {
     m_session.newMediaRequested(m_options.now());
+}
+
+bool SoapRouter::hasTransportMedia() const
+{
+    return m_session.snapshot().playback.state
+            != playback::PlaybackState::NoMedia
+        || m_session.transportTransitionPending();
 }
 
 playback::MediaRequest SoapRouter::mediaRequest(
@@ -628,8 +724,7 @@ HttpResponse SoapRouter::handleAvTransport(
                   "<AbsCount>2147483647</AbsCount>");
     }
     if (action == "GetMediaInfo") {
-        const bool hasMedia =
-            snapshot.state != playback::PlaybackState::NoMedia;
+        const bool hasMedia = !snapshot.current.uri.empty();
         return soapResponse(
             "AVTransport", action,
             "<NrTracks>" + std::to_string(hasMedia ? 1 : 0)
@@ -786,8 +881,7 @@ HttpResponse SoapRouter::handleConnectionManager(
 {
     const playback::PlaybackSnapshot snapshot =
         m_session.snapshot().playback;
-    const bool hasConnection =
-        snapshot.state != playback::PlaybackState::NoMedia;
+    const bool hasConnection = !snapshot.current.uri.empty();
     if (action == "GetProtocolInfo") {
         return soapResponse(
             "ConnectionManager", action,
@@ -824,9 +918,43 @@ HttpResponse SoapRouter::submit(
     playback::PlaybackCommand command, const std::string &service,
     const std::string &action)
 {
-    const auto submission = m_session.submit(std::move(command));
-    if (submission.queued)
+    playback::PlaybackCommandSubmission submission;
+    std::optional<playback::PlaybackOutcomeStatus> outcome;
+    std::string completionError;
+    bool timedOut = false;
+    if (m_options.waitForCommandCompletion) {
+        auto result = m_session.submitAndWait(
+            std::move(command), m_options.commandTimeout);
+        submission = std::move(result.submission);
+        outcome = result.outcome;
+        completionError = std::move(result.completionError);
+        timedOut = result.timedOut;
+    } else {
+        submission = m_session.submit(std::move(command));
+        if (submission.queued)
+            outcome = playback::PlaybackOutcomeStatus::Applied;
+    }
+    if (submission.queued
+        && !timedOut
+        && (!outcome
+            || *outcome == playback::PlaybackOutcomeStatus::Applied)) {
         return soapResponse(service, action);
+    }
+    if (timedOut) {
+        log("Playback command timed out for " + service + "#" + action);
+        return soapFault(kActionFailed, "Action Failed");
+    }
+    if (outcome
+        && *outcome != playback::PlaybackOutcomeStatus::Applied) {
+        log(
+            "Playback command rejected for " + service + "#"
+            + action + ": " + completionError);
+        return soapFault(
+            service == "AVTransport"
+                ? kTransitionNotAvailable : kActionFailed,
+            service == "AVTransport"
+                ? "Transition not available" : "Action Failed");
+    }
     if (submission.status == playback::PlaybackSubmissionStatus::SessionEnding)
         return soapFault(
             kTransitionNotAvailable, "Transition not available");

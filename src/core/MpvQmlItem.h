@@ -10,12 +10,7 @@ class MpvCore;
 /**
  * MpvQmlItem —— 把 mpv 的画面渲染进 QML 的一个 item。
  *
- * ── 和 LibMpvPlayer 的关系 ────────────────────────────────────────────────
- *
- * 两个都是 MpvCore 的壳，区别只在"画面往哪出"：
- *
- *   LibMpvPlayer   走 mpv 的 wid 选项，画面画到一个原生窗口里（旧界面用）
- *   MpvQmlItem     走 mpv 的 render API，画面由 Qt 的场景图合成（主窗口用）
+ * ── 和 MpvCore 的关系 ─────────────────────────────────────────────────────
  *
  * MpvQmlItem **不继承** MpvCore，只是**持有**一个 —— 因为它得继承
  * QQuickFramebufferObject，而两个 QObject 没法多重继承。所以播放命令和状态

@@ -7,6 +7,7 @@
 #include "core/NowPlaying.h"
 #include "core/PlaybackController.h"
 #include "core/Tr.h"
+#include "platform/MediaControls.h"
 #include "platform/windows/SystemAccentColors.h"
 #include "ui/DeviceInfo.h"
 #include "ui/MainWindow.h"
@@ -35,6 +36,34 @@
 #include <memory>
 #include <thread>
 
+#ifdef _DEBUG
+#include <crtdbg.h>
+
+namespace {
+QString g_crtLogPath;
+
+int __cdecl crtReportHook(int type, wchar_t *message, int *returnValue)
+{
+    QFile file(g_crtLogPath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        const char *kind = type == _CRT_ASSERT
+            ? "ASSERT"
+            : (type == _CRT_ERROR ? "ERROR" : "WARN");
+        file.write("\n===== Debug CRT ");
+        file.write(kind);
+        file.write(" =====\n");
+        file.write(QString::fromWCharArray(
+                       message ? message : L"(no message)")
+                       .toUtf8());
+        file.write("\n");
+    }
+    if (returnValue)
+        *returnValue = 0;
+    return 0;
+}
+} // namespace
+#endif
+
 int main(int argc, char *argv[])
 {
     std::string uiSessionError;
@@ -48,6 +77,13 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("MCast"));
     QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/mcast-256.png")));
+
+#ifdef _DEBUG
+    g_crtLogPath =
+        QCoreApplication::applicationDirPath()
+        + QStringLiteral("/MCast.Ui.log");
+    _CrtSetReportHookW2(_CRT_RPTHOOK_INSTALL, crtReportHook);
+#endif
 
     QFile logFile(
         QCoreApplication::applicationDirPath() + QStringLiteral("/MCast.Ui.log"));
@@ -116,7 +152,6 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Legal", &legal);
 
     auto player = std::make_unique<MpvCore>();
-    player->setOutputMode(MpvCore::RenderApiOutput);
     qmlRegisterUncreatableType<MpvCore>(
         "MediaCast", 1, 0, "MpvCore",
         QStringLiteral("MpvCore 只能由 C++ 创建"));
@@ -127,12 +162,21 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Playback", &playback);
     qmlRegisterAnonymousType<NowPlaying>("MediaCast", 1);
 
+    std::unique_ptr<MediaControls> mediaControls;
+    if (!uiSessionOptions.confirmationOnly) {
+        mediaControls = createPlatformMediaControls(playback);
+        if (!mediaControls
+            || !mediaControls->initialize(writeLog)) {
+            writeLog(QStringLiteral("系统媒体控件接入失败"));
+        }
+    }
+
     DeviceInfo device;
     device.applyIdentity(
         settings.deviceName(), settings.deviceUdn());
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Device", &device);
 
-    MainWindow mainWindow(nullptr);
+    MainWindow mainWindow;
     QObject::connect(&mainWindow, &MainWindow::logMessage, writeLog);
     const auto applyAuthoritativeSettings = [&] {
         QString error;

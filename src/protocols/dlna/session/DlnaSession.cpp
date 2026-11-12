@@ -187,6 +187,7 @@ void DlnaSession::setSubscriptionCount(
         cancelPeerGrace();
         setPeerConnected(false, lock);
     }
+    publishCastSession(lock);
 }
 
 void DlnaSession::peerActivity(SessionTime now)
@@ -204,12 +205,93 @@ void DlnaSession::peerActivity(SessionTime now)
     (void)now;
 }
 
+void DlnaSession::observeHttpClient(
+    const std::string &name, const std::string &address)
+{
+    Lock lock(m_mutex);
+    if (m_clientName == name && m_clientAddress == address)
+        return;
+    m_clientName = name;
+    m_clientAddress = address;
+    if (m_peerConnected)
+        publishCastSession(lock);
+}
+
+void DlnaSession::publishCastSession(Lock &lock)
+{
+    playback::CastSessionInfo info;
+    info.connected = m_peerConnected;
+    info.protocol = m_peerConnected ? "DLNA" : "";
+    info.controlPointName = m_clientName;
+    info.controlPointAddress = m_clientAddress;
+    info.remoteControlRegistered =
+        m_peerConnected && m_subscriptionCount > 0;
+    if (info.connected == m_lastPublishedCastSession.connected
+        && info.protocol == m_lastPublishedCastSession.protocol
+        && info.controlPointName
+            == m_lastPublishedCastSession.controlPointName
+        && info.controlPointAddress
+            == m_lastPublishedCastSession.controlPointAddress
+        && info.remoteControlRegistered
+            == m_lastPublishedCastSession.remoteControlRegistered) {
+        return;
+    }
+
+    PlaybackCommand command;
+    command.type = PlaybackCommandType::SetCastSession;
+    command.castSession = info;
+    const auto submission =
+        submitLocked(std::move(command), lock, false);
+    if (submission.queued)
+        m_lastPublishedCastSession = std::move(info);
+}
+
 void DlnaSession::newMediaRequested(SessionTime now)
 {
     Lock lock(m_mutex);
     if (m_endOperation)
         return;
+
+    // A new control point starts a new media epoch. Anything still in flight
+    // belongs to the previous owner and must never materialize after this
+    // boundary, even if the Gateway reports success late.
+    ++m_protocolEpoch;
+    ++m_openToken;
+    m_pendingOpen.reset();
+    m_openDeadline.reset();
+    m_openInFlight = false;
+    m_openCommandId = 0;
+    if (m_openAwaitingReady)
+        m_ignoredPlaybackUris.insert(
+            m_openAwaitingReady->media.uri);
+    for (const auto &[commandId, candidate] : m_openCandidates) {
+        (void)commandId;
+        m_ignoredPlaybackUris.insert(candidate.media.uri);
+    }
+    m_openAwaitingReady.reset();
+    m_openCandidates.clear();
+    m_setNextCandidates.clear();
+    m_earlyCommandEvents.clear();
+    clearDeferredCommands();
+    for (auto it = m_pendingCommands.begin(); it != m_pendingCommands.end();) {
+        if (it->second == PlaybackCommandType::Open
+            || it->second == PlaybackCommandType::SetNext) {
+            m_ignoredCommandIds.insert(it->first);
+            it = m_pendingCommands.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    m_commandCompletions.clear();
+    m_awaitedCommands.clear();
+    m_commandReady.notify_all();
+
     m_disconnectedByUs = false;
+    m_mediaBoundaryPending = true;
+    m_ignorePlaybackQueue = true;
+    m_protocolNext.reset();
+    m_protocolPrevious.reset();
+    m_ignoredPlaybackNextUris.clear();
     cancelPeerGrace();
     setPeerConnected(true, lock);
     (void)now;
@@ -240,10 +322,28 @@ void DlnaSession::tick(SessionTime now)
         }
     }
     if (m_openDeadline && now >= *m_openDeadline) {
+        const std::uint64_t expiredCommandId = m_openCommandId;
+        if (expiredCommandId != 0) {
+            const auto candidate =
+                m_openCandidates.find(expiredCommandId);
+            if (candidate != m_openCandidates.end())
+                m_ignoredPlaybackUris.insert(
+                    candidate->second.media.uri);
+            m_ignoredCommandIds.insert(expiredCommandId);
+            m_pendingCommands.erase(expiredCommandId);
+            m_openCandidates.erase(expiredCommandId);
+        }
+        if (m_openAwaitingReady) {
+            m_ignoredPlaybackUris.insert(
+                m_openAwaitingReady->media.uri);
+            m_openAwaitingReady.reset();
+            m_mediaBoundaryPending = false;
+        }
         m_pendingOpen.reset();
         m_openDeadline.reset();
         m_openInFlight = false;
         m_openCommandId = 0;
+        m_openAwaitingReady.reset();
         clearDeferredCommands();
         if (m_callbacks.requestFailed) {
             outsideLock(lock, [&] {
@@ -260,7 +360,7 @@ void DlnaSession::tick(SessionTime now)
 }
 
 PlaybackCommandSubmission DlnaSession::openMedia(
-    const MediaRequest &request, SessionTime now)
+    const MediaRequest &request, SessionTime now, bool clearPlaylist)
 {
     Lock lock(m_mutex);
     if (m_endOperation) {
@@ -275,6 +375,7 @@ PlaybackCommandSubmission DlnaSession::openMedia(
         PlaybackCommand command;
         command.type = PlaybackCommandType::Open;
         command.media = request;
+        command.boolValue = clearPlaylist;
         return submitLocked(std::move(command), lock);
     }
 
@@ -296,6 +397,7 @@ PlaybackCommandSubmission DlnaSession::openMedia(
     PlaybackCommand command;
     command.type = PlaybackCommandType::Open;
     command.media = request;
+    command.boolValue = clearPlaylist;
     auto submission = submitLocked(
         std::move(command), lock, true, openToken);
     if (submission.queued) {
@@ -303,6 +405,8 @@ PlaybackCommandSubmission DlnaSession::openMedia(
         m_openInFlight = true;
         m_openCommandId = submission.commandId;
         m_openDeadline = now + kOpenTimeout;
+        consumeEarlyCommand(submission.commandId, lock);
+        publishCastSession(lock);
         finishIntent();
         return submission;
     }
@@ -339,11 +443,77 @@ PlaybackCommandSubmission DlnaSession::submit(PlaybackCommand command)
     return submitLocked(std::move(command), lock);
 }
 
+DlnaCommandResult DlnaSession::submitAndWait(
+    PlaybackCommand command, SessionTime timeout)
+{
+    Lock lock(m_mutex);
+    const auto baseline = outsideLock(lock, [&] {
+        return m_playback.snapshot().stateVersion;
+    });
+    m_lastObservedStateVersion = baseline;
+    std::uint64_t commandId = 0;
+    DlnaCommandResult result;
+    result.submission = submitLocked(
+        std::move(command), lock, true, std::nullopt, &commandId);
+    if (!result.submission.queued || commandId == 0) {
+        if (!result.submission.queued) {
+            result.outcome = PlaybackOutcomeStatus::Rejected;
+            result.completionError = result.submission.error;
+        }
+        return result;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto completion = m_commandCompletions.find(commandId);
+        if (completion != m_commandCompletions.end()) {
+            result.outcome = completion->second.first;
+            result.completionError = completion->second.second;
+            if (*result.outcome != PlaybackOutcomeStatus::Applied
+                || m_lastObservedStateVersion > baseline) {
+                m_commandCompletions.erase(completion);
+                return result;
+            }
+        }
+        m_commandReady.wait_until(lock, deadline);
+    }
+
+    result.timedOut = true;
+    result.completionError = "playback command timed out";
+    const auto pending = m_pendingCommands.find(commandId);
+    if (pending != m_pendingCommands.end()) {
+        const PlaybackCommandType type = pending->second;
+        m_pendingCommands.erase(pending);
+        const auto openCandidate = m_openCandidates.find(commandId);
+        if (openCandidate != m_openCandidates.end())
+            m_ignoredPlaybackUris.insert(
+                openCandidate->second.media.uri);
+        const auto nextCandidate = m_setNextCandidates.find(commandId);
+        if (nextCandidate != m_setNextCandidates.end())
+            m_ignoredPlaybackNextUris.insert(
+                nextCandidate->second.media.uri);
+        m_openCandidates.erase(commandId);
+        m_setNextCandidates.erase(commandId);
+        m_ignoredCommandIds.insert(commandId);
+        if (type == PlaybackCommandType::Open
+            && m_openCommandId == commandId) {
+            m_openInFlight = false;
+            m_openCommandId = 0;
+            m_openDeadline.reset();
+            m_openAwaitingReady.reset();
+        }
+    }
+    m_awaitedCommands.erase(commandId);
+    m_commandCompletions.erase(commandId);
+    return result;
+}
+
 PlaybackCommandSubmission DlnaSession::submitLocked(
     PlaybackCommand command,
     Lock &lock,
     bool allowDefer,
-    std::optional<std::uint64_t> requiredOpenToken)
+    std::optional<std::uint64_t> requiredOpenToken,
+    std::uint64_t *awaitedCommandId)
 {
     const bool endCommand =
         command.type == PlaybackCommandType::EndSession;
@@ -411,11 +581,99 @@ PlaybackCommandSubmission DlnaSession::submitLocked(
     if (command.expectedGeneration == 0)
         command.expectedGeneration = playback.generation;
     const auto type = command.type;
+    const MediaRequest protocolMedia = command.media;
+    PlaybackCommand presentation = command;
+    presentation.media.metadata.clear();
     // Keep the cancellation token valid through the actual Gateway write.
-    auto submission = m_playback.submit(command);
-    if (submission.queued)
+    struct SubmitStateGuard {
+        bool &value;
+        ~SubmitStateGuard() { value = false; }
+    } submitStateGuard{m_gatewaySubmitInProgress};
+    m_gatewaySubmitInProgress = true;
+    auto submission = m_playback.submit(presentation);
+    if (submission.queued) {
         m_pendingCommands.emplace(submission.commandId, type);
+        if (type == PlaybackCommandType::Open)
+            m_openCandidates[submission.commandId] =
+                MediaCandidate{protocolMedia, m_protocolEpoch};
+        else if (type == PlaybackCommandType::SetNext)
+            m_setNextCandidates[submission.commandId] =
+                MediaCandidate{protocolMedia, m_protocolEpoch};
+        if (awaitedCommandId) {
+            m_awaitedCommands.insert(submission.commandId);
+            *awaitedCommandId = submission.commandId;
+        }
+        if (type != PlaybackCommandType::Open)
+            consumeEarlyCommand(submission.commandId, lock);
+    }
     return submission;
+}
+
+void DlnaSession::consumeEarlyCommand(
+    std::uint64_t commandId, Lock &lock)
+{
+    const auto early = m_earlyCommandEvents.find(commandId);
+    if (early == m_earlyCommandEvents.end())
+        return;
+    const PlaybackEvent event = std::move(early->second);
+    m_earlyCommandEvents.erase(early);
+
+    const auto pending = m_pendingCommands.find(commandId);
+    if (pending == m_pendingCommands.end())
+        return;
+    const PlaybackCommandType type = pending->second;
+    m_pendingCommands.erase(pending);
+
+    if (m_awaitedCommands.contains(commandId)) {
+        m_awaitedCommands.erase(commandId);
+        m_commandCompletions.emplace(
+            commandId, std::make_pair(event.outcome, event.error));
+    }
+
+    if (event.outcome == PlaybackOutcomeStatus::Applied) {
+        if (type == PlaybackCommandType::Open) {
+            const auto candidate = m_openCandidates.find(commandId);
+            if (candidate != m_openCandidates.end()
+                && candidate->second.epoch == m_protocolEpoch) {
+                m_openAwaitingReady = candidate->second;
+            }
+        } else if (type == PlaybackCommandType::SetNext) {
+            const auto candidate = m_setNextCandidates.find(commandId);
+            if (candidate != m_setNextCandidates.end()
+                && candidate->second.epoch == m_protocolEpoch) {
+                m_ignoredPlaybackNextUris.clear();
+                if (candidate->second.media.uri.empty())
+                    m_protocolNext.reset();
+                else
+                    m_protocolNext = candidate->second.media;
+                m_ignorePlaybackQueue = false;
+            }
+        }
+    } else if (type == PlaybackCommandType::Open) {
+        const auto candidate = m_openCandidates.find(commandId);
+        if (candidate != m_openCandidates.end())
+            m_ignoredPlaybackUris.insert(
+                candidate->second.media.uri);
+    } else if (type == PlaybackCommandType::SetNext) {
+        const auto candidate = m_setNextCandidates.find(commandId);
+        if (candidate != m_setNextCandidates.end())
+            m_ignoredPlaybackNextUris.insert(
+                candidate->second.media.uri);
+    }
+
+    m_openCandidates.erase(commandId);
+    m_setNextCandidates.erase(commandId);
+    if (m_openCommandId == commandId) {
+        m_openCommandId = 0;
+        m_openDeadline.reset();
+        m_openInFlight =
+            event.outcome == PlaybackOutcomeStatus::Applied
+            && event.snapshot.state == PlaybackState::NoMedia;
+        if (event.outcome != PlaybackOutcomeStatus::Applied)
+            clearDeferredCommands();
+    }
+    syncProtocolPlayback(event.snapshot);
+    m_commandReady.notify_all();
 }
 
 PlaybackCommandSubmission DlnaSession::endSession(SessionTime now)
@@ -446,6 +704,9 @@ void DlnaSession::resetForRestart()
     m_accepting = false;
     m_running = false;
     m_peerConnected = false;
+    m_clientName.clear();
+    m_clientAddress.clear();
+    m_lastPublishedCastSession = {};
     m_disconnectedByUs = true;
     m_queuePeerDisconnect = false;
     m_peerSyncPending = false;
@@ -456,7 +717,24 @@ void DlnaSession::resetForRestart()
     m_openIntentInProgress = false;
     m_openDeadline.reset();
     m_pendingOpen.reset();
+    m_protocolCurrent.reset();
+    m_protocolNext.reset();
+    m_protocolPrevious.reset();
+    m_openAwaitingReady.reset();
+    m_openCandidates.clear();
+    m_setNextCandidates.clear();
+    m_earlyCommandEvents.clear();
+    m_gatewaySubmitInProgress = false;
+    m_mediaBoundaryPending = false;
+    m_ignoredPlaybackUris.clear();
+    m_ignoredPlaybackNextUris.clear();
+    m_ignorePlaybackQueue = false;
     m_pendingCommands.clear();
+    m_ignoredCommandIds.clear();
+    m_awaitedCommands.clear();
+    m_commandCompletions.clear();
+    ++m_protocolEpoch;
+    m_lastObservedStateVersion = 0;
     m_deferredAfterOpen.clear();
     cancelPeerGrace();
 }
@@ -464,23 +742,97 @@ void DlnaSession::resetForRestart()
 void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
 {
     Lock lock(m_mutex);
+    if (event.kind == PlaybackEventKind::Reconnected)
+        m_lastPublishedCastSession = {};
+    if (event.snapshot.stateVersion > m_lastObservedStateVersion)
+        m_lastObservedStateVersion = event.snapshot.stateVersion;
     std::optional<std::string> failure;
     bool notifyState = false;
+    bool ignoredCommand = false;
     if (event.kind == PlaybackEventKind::CommandCompleted) {
+        if (event.commandId != 0
+            && m_ignoredCommandIds.erase(event.commandId) != 0) {
+            m_pendingCommands.erase(event.commandId);
+            m_openCandidates.erase(event.commandId);
+            m_setNextCandidates.erase(event.commandId);
+            ignoredCommand = true;
+        }
+        if (ignoredCommand) {
+            m_commandReady.notify_all();
+            return;
+        }
+        if (m_awaitedCommands.contains(event.commandId)) {
+            m_awaitedCommands.erase(event.commandId);
+            m_commandCompletions.emplace(
+                event.commandId,
+                std::make_pair(event.outcome, event.error));
+            m_commandReady.notify_all();
+        }
         const auto pending = m_pendingCommands.find(event.commandId);
+        if (pending == m_pendingCommands.end()
+            && event.commandId != 0
+            && m_gatewaySubmitInProgress) {
+            constexpr std::size_t kMaxEarlyEvents = 64;
+            if (m_earlyCommandEvents.size() >= kMaxEarlyEvents)
+                m_earlyCommandEvents.erase(m_earlyCommandEvents.begin());
+            m_earlyCommandEvents[event.commandId] = event;
+        }
         if (pending != m_pendingCommands.end()) {
+            const PlaybackCommandType completedType = pending->second;
             m_pendingCommands.erase(pending);
+            if (event.outcome == PlaybackOutcomeStatus::Applied) {
+                if (completedType == PlaybackCommandType::Open) {
+                    const auto candidate =
+                        m_openCandidates.find(event.commandId);
+                    if (candidate != m_openCandidates.end()
+                        && candidate->second.epoch == m_protocolEpoch) {
+                        m_openAwaitingReady = candidate->second;
+                    }
+                } else if (
+                    completedType == PlaybackCommandType::SetNext) {
+                    const auto candidate =
+                        m_setNextCandidates.find(event.commandId);
+                    if (candidate != m_setNextCandidates.end()
+                        && candidate->second.epoch == m_protocolEpoch) {
+                        m_ignoredPlaybackNextUris.clear();
+                        if (candidate->second.media.uri.empty())
+                            m_protocolNext.reset();
+                        else
+                            m_protocolNext = candidate->second.media;
+                        m_ignorePlaybackQueue = false;
+                    }
+                }
+            }
             if (event.outcome != PlaybackOutcomeStatus::Applied) {
+                if (completedType == PlaybackCommandType::Open) {
+                    const auto candidate =
+                        m_openCandidates.find(event.commandId);
+                    if (candidate != m_openCandidates.end())
+                        m_ignoredPlaybackUris.insert(
+                            candidate->second.media.uri);
+                } else if (
+                    completedType == PlaybackCommandType::SetNext) {
+                    const auto candidate =
+                        m_setNextCandidates.find(event.commandId);
+                    if (candidate != m_setNextCandidates.end())
+                        m_ignoredPlaybackNextUris.insert(
+                            candidate->second.media.uri);
+                }
                 failure = event.error.empty()
                     ? "Playback command failed" : event.error;
             }
         }
+        m_openCandidates.erase(event.commandId);
+        m_setNextCandidates.erase(event.commandId);
     }
     if (event.kind == PlaybackEventKind::CommandCompleted
         && m_openCommandId != 0
         && event.commandId == m_openCommandId) {
         m_openCommandId = 0;
-        m_openDeadline.reset();
+        if (!(event.outcome == PlaybackOutcomeStatus::Applied
+              && event.snapshot.state != PlaybackState::NoMedia)) {
+            m_openDeadline.reset();
+        }
         m_openInFlight =
             event.outcome == PlaybackOutcomeStatus::Applied
             && event.snapshot.state == PlaybackState::NoMedia;
@@ -512,7 +864,9 @@ void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
     if (event.kind == PlaybackEventKind::SnapshotChanged
         || event.kind == PlaybackEventKind::Reconnected
         || event.kind == PlaybackEventKind::PlayerLost) {
-        if (event.snapshot.state != PlaybackState::NoMedia) {
+        if (event.snapshot.state == PlaybackState::Playing
+            || event.snapshot.state == PlaybackState::Paused
+            || event.snapshot.state == PlaybackState::Stopped) {
             m_openDeadline.reset();
             m_openInFlight = false;
             m_openCommandId = 0;
@@ -534,8 +888,19 @@ void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
         if (m_endOperation
             && event.snapshot.state == PlaybackState::NoMedia) {
             m_endOperation->finalSnapshotSeen = true;
+            m_openAwaitingReady.reset();
+            m_openInFlight = false;
+            m_openCommandId = 0;
+            m_openDeadline.reset();
+            m_mediaBoundaryPending = false;
+            clearDeferredCommands();
         }
     }
+
+    syncProtocolPlayback(event.snapshot);
+
+    if (event.kind == PlaybackEventKind::Reconnected)
+        publishCastSession(lock);
 
     if (failure && m_callbacks.requestFailed) {
         const std::string message = *failure;
@@ -550,12 +915,102 @@ void DlnaSession::handlePlaybackEvent(const PlaybackEvent &event)
     }
     retryPendingEnd(lock);
     maybeFinishEnd(lock);
+    m_commandReady.notify_all();
+}
+
+void DlnaSession::syncProtocolPlayback(
+    const PlaybackSnapshot &playback)
+{
+    const std::string &currentUri = playback.current.uri;
+    if (!currentUri.empty()
+        && m_ignoredPlaybackUris.contains(currentUri)
+        && (!m_openAwaitingReady
+            || m_openAwaitingReady->media.uri != currentUri)) {
+        return;
+    }
+    if (m_mediaBoundaryPending && !m_openAwaitingReady)
+        return;
+    if (m_openAwaitingReady
+        && !currentUri.empty()
+        && m_openAwaitingReady->media.uri == currentUri) {
+        if (playback.loadStatus == playback::LoadStatus::Failed
+            || playback.state == PlaybackState::Stopped) {
+            m_ignoredPlaybackUris.insert(currentUri);
+            m_mediaBoundaryPending = false;
+            m_protocolCurrent.reset();
+            m_protocolNext.reset();
+            m_protocolPrevious.reset();
+            m_openAwaitingReady.reset();
+            m_openInFlight = false;
+            m_openCommandId = 0;
+            m_openDeadline.reset();
+            return;
+        } else if (
+            playback.loadStatus == playback::LoadStatus::Ok
+            && (playback.state == PlaybackState::Playing
+                || playback.state == PlaybackState::Paused)) {
+            m_protocolCurrent = m_openAwaitingReady->media;
+            m_ignoredPlaybackUris.erase(currentUri);
+            m_mediaBoundaryPending = false;
+            m_openAwaitingReady.reset();
+            m_protocolNext.reset();
+            m_protocolPrevious.reset();
+            m_ignorePlaybackQueue = true;
+            m_openInFlight = false;
+            m_openCommandId = 0;
+            m_openDeadline.reset();
+            return;
+        }
+        if (m_openAwaitingReady)
+            return;
+    }
+
+    if (!currentUri.empty()) {
+        if (m_protocolNext
+            && m_protocolNext->uri == currentUri) {
+            m_protocolPrevious = m_protocolCurrent;
+            m_protocolCurrent = std::move(m_protocolNext);
+            m_protocolNext.reset();
+        } else if (
+            m_protocolPrevious
+            && m_protocolPrevious->uri == currentUri) {
+            m_protocolNext = m_protocolCurrent;
+            m_protocolCurrent = std::move(m_protocolPrevious);
+            m_protocolPrevious.reset();
+        } else if (
+            !m_protocolCurrent
+            || m_protocolCurrent->uri != currentUri) {
+            // Ui-originated playback (SMTC, QML, automatic queue advance).
+            // It is not a DLNA playlist entry, so no protocol queue may leak
+            // across that boundary.
+            m_protocolCurrent = playback.current;
+            m_protocolNext.reset();
+            m_protocolPrevious.reset();
+            m_ignorePlaybackQueue = true;
+        }
+    }
+
+    if (m_ignorePlaybackQueue)
+        return;
+    if (playback.next.uri.empty()) {
+        if (m_ignoredPlaybackNextUris.empty())
+            m_protocolNext.reset();
+    } else if (
+        m_ignoredPlaybackNextUris.contains(playback.next.uri)) {
+        // Keep the previous valid next record when a timed-out/rejected
+        // replacement has nevertheless reached the Ui queue.
+    } else if (
+        !m_protocolNext
+        || m_protocolNext->uri != playback.next.uri) {
+        m_protocolNext = playback.next;
+    }
 }
 
 bool DlnaSession::transportTransitionPending() const
 {
     const std::scoped_lock lock(m_mutex);
-    return m_openInFlight || m_pendingOpen.has_value();
+    return m_openInFlight || m_pendingOpen.has_value()
+        || m_openAwaitingReady.has_value();
 }
 
 DlnaSessionSnapshot DlnaSession::snapshot() const
@@ -571,9 +1026,32 @@ DlnaSessionSnapshot DlnaSession::snapshot() const
     if (m_peerGraceDeadline)
         result.peerGraceDeadline = *m_peerGraceDeadline;
     result.ending = m_endOperation.has_value();
+    result.castSession.connected = m_peerConnected;
+    result.castSession.protocol =
+        m_peerConnected ? "DLNA" : "";
+    result.castSession.controlPointName = m_clientName;
+    result.castSession.controlPointAddress = m_clientAddress;
+    result.castSession.remoteControlRegistered =
+        m_peerConnected && m_subscriptionCount > 0;
     result.playback = outsideLock(lock, [&] {
         return m_playback.snapshot();
     });
+    result.playback.castSession = result.castSession;
+    if (m_protocolCurrent)
+        result.playback.current = *m_protocolCurrent;
+    else if (m_mediaBoundaryPending
+             || m_openAwaitingReady
+             || m_ignoredPlaybackUris.contains(
+                 result.playback.current.uri))
+        result.playback.current = {};
+    if (m_protocolNext) {
+        result.playback.next = *m_protocolNext;
+        result.playback.hasNext = true;
+    } else {
+        result.playback.next = {};
+        result.playback.hasNext = false;
+    }
+    result.playback.hasPrevious = m_protocolPrevious.has_value();
     return result;
 }
 
@@ -583,6 +1061,11 @@ void DlnaSession::setPeerConnected(
     if (m_peerConnected == connected)
         return;
     m_peerConnected = connected;
+    if (!connected) {
+        m_protocolNext.reset();
+        m_protocolPrevious.reset();
+        m_ignorePlaybackQueue = true;
+    }
     if (m_callbacks.log) {
         outsideLock(lock, [&] {
             m_callbacks.log(
@@ -597,6 +1080,10 @@ void DlnaSession::setPeerConnected(
             m_callbacks.peerConnectedChanged(connected);
         });
     }
+    // Publish only after observers have seen the connection transition. An
+    // in-flight Open may still hold the Gateway submission lock while awaiting
+    // its snapshot; delaying this event must not make Pause wait behind it.
+    publishCastSession(lock);
 }
 
 void DlnaSession::queuePeerConnected(bool connected, Lock &lock)
@@ -680,6 +1167,23 @@ void DlnaSession::finishDisconnect(Lock &lock)
     } transition{m_transitionInProgress};
     m_transitionInProgress = true;
     m_endOperation.reset();
+    m_clientName.clear();
+    m_clientAddress.clear();
+    publishCastSession(lock);
+    m_protocolCurrent.reset();
+    m_protocolNext.reset();
+    m_protocolPrevious.reset();
+    m_openAwaitingReady.reset();
+    m_openCandidates.clear();
+    m_setNextCandidates.clear();
+    m_earlyCommandEvents.clear();
+    m_ignoredPlaybackUris.clear();
+    m_ignoredPlaybackNextUris.clear();
+    m_mediaBoundaryPending = false;
+    m_openInFlight = false;
+    m_openCommandId = 0;
+    m_openDeadline.reset();
+    m_ignorePlaybackQueue = false;
     if (m_queuePeerDisconnect) {
         m_queuePeerDisconnect = false;
         queuePeerConnected(false, lock);
@@ -786,6 +1290,18 @@ void DlnaSession::cancelPendingOpen(
         m_openCommandId = 0;
     ++m_openToken;
     m_openDeadline.reset();
+    m_openAwaitingReady.reset();
+    if (!submittedOpen && m_openCommandId != 0) {
+        const auto candidate = m_openCandidates.find(m_openCommandId);
+        if (candidate != m_openCandidates.end())
+            m_ignoredPlaybackUris.insert(
+                candidate->second.media.uri);
+        m_openCandidates.erase(m_openCommandId);
+        m_pendingCommands.erase(m_openCommandId);
+        m_ignoredCommandIds.insert(m_openCommandId);
+    }
+    if (!submittedOpen)
+        m_mediaBoundaryPending = false;
     clearDeferredCommands();
     if (!m_pendingOpen)
         return;
@@ -822,6 +1338,7 @@ void DlnaSession::tryPendingOpen(Lock &lock)
         m_openDeadline = clockNow() + kOpenTimeout;
         m_openInFlight = true;
         m_openCommandId = submission.commandId;
+        consumeEarlyCommand(submission.commandId, lock);
         if (m_callbacks.log) {
             outsideLock(lock, [&] {
                 m_callbacks.log(

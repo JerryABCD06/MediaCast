@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace mcast::dlna;
@@ -125,11 +126,214 @@ void testWaitingForPlayerPlay()
               + " uri=" + playback.snapshot().current.uri);
 }
 
+void testRawMetadataPassesThrough()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    SoapRouter router(session, {
+        [] { return SessionTime{1000}; },
+        {},
+    });
+    const std::string uri =
+        "http://example.test/Screenshot_20260905_232916.jpg";
+    const std::string didl =
+        "<DIDL-Lite><item>"
+        "<dc:title xmlns:dc=\"urn:test\">"
+        "Screenshot_20260905_232916.jpg</dc:title>"
+        "<upnp:artist xmlns:upnp=\"urn:test\">&lt;unknown&gt;</upnp:artist>"
+        "<dc:creator xmlns:dc=\"urn:test\">Creator</dc:creator>"
+        "<upnp:album xmlns:upnp=\"urn:test\">N/A</upnp:album>"
+        "<upnp:subtitle xmlns:upnp=\"urn:test\">"
+        "  A   useful\tline  </upnp:subtitle>"
+        "<dc:description xmlns:dc=\"urn:test\">Description</dc:description>"
+        "<upnp:albumArtURI xmlns:upnp=\"urn:test\">"
+        "https://example.test/cover.jpg</upnp:albumArtURI>"
+        "</item></DIDL-Lite>";
+    const auto response = router.handle(request(
+        "AVTransport", "SetAVTransportURI",
+        body(
+            "SetAVTransportURI",
+            "<InstanceID>0</InstanceID><CurrentURI>"
+                + UpnpXml::escapeText(uri)
+                + "</CurrentURI><CurrentURIMetaData>"
+                + UpnpXml::escapeText(didl)
+                + "</CurrentURIMetaData>")));
+    check(ok(response), "raw metadata SetURI succeeds");
+    playback.processAll();
+    playback.markReady();
+    const auto snapshot = session.snapshot().playback;
+    check(snapshot.current.title
+              == "Screenshot_20260905_232916.jpg"
+              && snapshot.current.artist == "<unknown>"
+              && snapshot.current.creator == "Creator"
+              && snapshot.current.album == "N/A",
+          "protocol leaves presentation fields unfiltered");
+    check(snapshot.current.subtitle.find("useful")
+              != std::string::npos
+              && snapshot.current.description == "Description",
+          "protocol keeps subtitle candidates separate");
+    check(snapshot.current.artworkUri
+              == "https://example.test/cover.jpg",
+          "protocol artwork URI reaches neutral media request");
+    check(snapshot.current.metadata == didl,
+          "network metadata keeps the original DIDL document; actual="
+              + snapshot.current.metadata);
+}
+
+void testDependentCommandsWaitForAppliedState()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    SoapRouter router(session, {
+        [] { return SessionTime{1000}; },
+        {},
+        true,
+        SessionTime{2000},
+    });
+
+    MediaRequest current;
+    current.uri = "http://example.test/current.mp4";
+    check(session.openMedia(current, SessionTime{0}).queued,
+          "dependent-command test opens current media");
+    playback.processAll();
+    session.peerActivity(SessionTime{1});
+    playback.processAll();
+
+    std::jthread setNextProcessor([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        playback.processAll();
+    });
+    auto response = router.handle(request(
+        "AVTransport", "SetNextAVTransportURI",
+        body(
+            "SetNextAVTransportURI",
+            "<InstanceID>0</InstanceID><NextURI>"
+                "http://example.test/next.mp4</NextURI>"
+                "<NextURIMetaData></NextURIMetaData>")));
+    setNextProcessor.join();
+    check(ok(response) && playback.snapshot().hasNext,
+          "SetNext SOAP success is returned only after state is visible");
+
+    std::jthread nextProcessor([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        playback.processAll();
+    });
+    response = router.handle(request(
+        "AVTransport", "Next",
+        body("Next", "<InstanceID>0</InstanceID>")));
+    nextProcessor.join();
+    check(ok(response)
+              && playback.snapshot().current.uri
+                  == "http://example.test/next.mp4",
+          "an immediate Next sees the preceding SetNext: status="
+              + std::to_string(response.status) + " current="
+              + playback.snapshot().current.uri + " state="
+              + std::to_string(static_cast<int>(
+                  playback.snapshot().state))
+              + " hasNext="
+              + (playback.snapshot().hasNext ? "true" : "false")
+              + " body="
+              + response.body);
+}
+
+void testProtocolRetainsRawMediaWhenPlayerIsGone()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    SoapRouter router(session, {
+        [] { return SessionTime{1000}; },
+        {},
+    });
+
+    MediaRequest media;
+    media.uri = "http://example.test/raw.mp4";
+    media.metadata =
+        "<DIDL-Lite><item><dc:title>Raw</dc:title></item></DIDL-Lite>";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "raw-record test opens media");
+    playback.processAll();
+    playback.markReady();
+    playback.simulatePlayerLost();
+    playback.processAll();
+
+    const auto response = router.handle(request(
+        "AVTransport", "GetMediaInfo",
+        body("GetMediaInfo", "<InstanceID>0</InstanceID>")));
+    check(ok(response)
+              && response.body.find(UpnpXml::escapeText(media.uri))
+                  != std::string::npos
+              && response.body.find(UpnpXml::escapeText(media.metadata))
+                  != std::string::npos
+              && response.body.find("<NrTracks>1</NrTracks>")
+                  != std::string::npos,
+          "protocol answers media info from its own raw record");
+}
+
+void testDidlClassificationUsesResourceEvidence()
+{
+    const std::string bubbleVideo =
+        "<DIDL-Lite><item>"
+        "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+        "<dc:title>studio_video</dc:title>"
+        "<res protocolInfo=\"http-get:*:video/mp4:"
+        "DLNA.ORG_PN=AVC_MP4\" resolution=\"2160x1080\">"
+        "http://192.168.10.3/video/1000114054.mp4</res>"
+        "</item></DIDL-Lite>";
+    const auto video = SoapRouter::mediaRequest(
+        "http://192.168.10.3/video/1000114054.mp4",
+        bubbleVideo);
+    check(video.kind == MediaKind::Video,
+          "resource MIME and resolution override a false audioItem class");
+
+    const std::string bubbleAudio =
+        "<DIDL-Lite><item>"
+        "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+        "<res protocolInfo=\"http-get:*:audio/flac:"
+        "DLNA.ORG_OP=01\">"
+        "http://192.168.10.3/audio/1000139952.flac</res>"
+        "</item></DIDL-Lite>";
+    const auto audio = SoapRouter::mediaRequest(
+        "http://192.168.10.3/audio/1000139952.flac",
+        bubbleAudio);
+    check(audio.kind == MediaKind::Audio,
+          "audio MIME remains authoritative for an audio resource");
+
+    const std::string mixedResources =
+        "<DIDL-Lite><item>"
+        "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+        "<res protocolInfo=\"http-get:*:audio/mpeg:*\">"
+        "http://192.168.10.3/audio/preview.mp3</res>"
+        "<res protocolInfo=\"http-get:*:video/mp4:*\" "
+        "resolution=\"3840x2160\">"
+        "http://192.168.10.3/video/full.mp4</res>"
+        "</item></DIDL-Lite>";
+    const auto selected = SoapRouter::mediaRequest(
+        "http://192.168.10.3/video/full.mp4", mixedResources);
+    check(
+        selected.kind == MediaKind::Video,
+        "classification uses the resource matching CurrentURI");
+
+    const std::string lanercVideo =
+        "<DIDL-Lite><item>"
+        "<upnp:class>object.item.videoItem</upnp:class>"
+        "<res resolution=\"4\"></res>"
+        "</item></DIDL-Lite>";
+    const auto hls = SoapRouter::mediaRequest(
+        "http://filev2.example/playlist.m3u8?auth_key=x",
+        lanercVideo);
+    check(hls.kind == MediaKind::Video,
+          "videoItem remains a usable fallback for HLS media");
+}
+
 } // namespace
 
 int main()
 {
     testWaitingForPlayerPlay();
+    testRawMetadataPassesThrough();
+    testDependentCommandsWaitForAppliedState();
+    testProtocolRetainsRawMediaWhenPlayerIsGone();
+    testDidlClassificationUsesResourceEvidence();
     FakePlaybackGateway playback;
     playback.setPictureControls({
         {"brightness", -100, 100, 0, 0},
@@ -279,8 +483,10 @@ int main()
               && snapshot.current.uri == uri
               && snapshot.current.title == "My & Movie"
               && snapshot.current.kind == MediaKind::Video
-              && snapshot.current.metadata == didl,
+              && snapshot.current.metadata.empty(),
           "SetAVTransportURI maps to neutral Open command");
+    check(session.snapshot().playback.current.metadata == didl,
+          "Protocol retains the raw DIDL outside the Ui command");
 
     playback.markReady();
     response = router.handle(request(

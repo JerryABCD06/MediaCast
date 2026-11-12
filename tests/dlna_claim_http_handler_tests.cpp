@@ -106,6 +106,7 @@ struct Harness {
     int playCalls = 0;
     int stopCalls = 0;
     bool throwExecute = false;
+    bool openMediaOnExecute = true;
     DlnaClaimHttpHandler handler;
 
     Harness()
@@ -125,6 +126,11 @@ struct Harness {
                       if (throwExecute)
                           throw std::runtime_error("execute failed");
                       executions.push_back(execution);
+                      if (openMediaOnExecute) {
+                          session.openMedia(
+                              execution.media, SessionTime{100}, false);
+                          playback.processAll();
+                      }
                   },
                   [this] { ++playCalls; },
                   [this] { ++stopCalls; },
@@ -298,6 +304,57 @@ void testInvalidAndSynchronousRequests()
           "query actions keep synchronous router behavior");
 }
 
+void testOversizedMetadataIsRejectedBeforeClaim()
+{
+    Harness harness;
+    const std::string metadata(256 * 1024, 'm');
+    auto oversized = request(
+        431, "192.0.2.10", "SetAVTransportURI",
+        "<InstanceID>0</InstanceID><CurrentURI>"
+            + UpnpXml::escapeText(
+                "http://example.test/large.mp4")
+            + "</CurrentURI><CurrentURIMetaData>"
+            + UpnpXml::escapeText(metadata)
+            + "</CurrentURIMetaData>");
+    const auto result = harness.handler.handle(oversized);
+    check(result.status == mcast::dlna::net::HttpDispatchStatus::Completed
+              && result.response.status == 500
+              && result.response.body.find("<errorCode>402</errorCode>")
+                  != std::string::npos
+              && harness.executions.empty()
+              && harness.confirmations.empty(),
+          "oversized media metadata is rejected before claim");
+}
+
+void testOwnerTransportWithoutMediaReturns701()
+{
+    Harness harness;
+    harness.openMediaOnExecute = false;
+    auto initial = harness.handler.handle(setUriRequest(
+        451, "192.0.2.10", "http://example.test/none.mp4"));
+    check(initial.status == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.executions.size() == 1,
+          "no-media owner test starts a claim");
+    harness.handler.mediaReady(
+        harness.executions[0].operationId, true, CastTime{101});
+
+    const auto play = harness.handler.handle(
+        playRequest(452, "192.0.2.10"));
+    check(play.status == mcast::dlna::net::HttpDispatchStatus::Completed
+              && play.response.status == 500
+              && play.response.body.find("<errorCode>701</errorCode>")
+                  != std::string::npos,
+          "owner Play without transport media returns 701");
+
+    const auto stop = harness.handler.handle(
+        stopRequest(453, "192.0.2.10"));
+    check(stop.status == mcast::dlna::net::HttpDispatchStatus::Completed
+              && stop.response.status == 500
+              && stop.response.body.find("<errorCode>701</errorCode>")
+                  != std::string::npos,
+          "owner Stop without transport media returns 701");
+}
+
 void testDifferentUserAgentIsNotOwner()
 {
     Harness harness;
@@ -361,6 +418,8 @@ int main()
     testFirstMediaWaitsForReadyAndOwnerControls();
     testCandidateConfirmationHoldsSetAndPlay();
     testInvalidAndSynchronousRequests();
+    testOversizedMetadataIsRejectedBeforeClaim();
+    testOwnerTransportWithoutMediaReturns701();
     testDifferentUserAgentIsNotOwner();
     testExecuteCallbackFailureFailsClosed();
     std::cout << "DLNA claim HTTP handler tests passed\n";

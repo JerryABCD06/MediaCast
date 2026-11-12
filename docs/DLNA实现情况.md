@@ -7,19 +7,19 @@
 
 ---
 
-## 〇、目录结构（2026-09-12 重排）
+## 〇、当前目录边界
 
 ```
 src/
-├── main.cpp                  组装：造零件、接日志、开窗口、挂托盘
 ├── core/                     播放核心（协议无关）
 │   ├── MediaPlayer.h         播放器接口
-│   ├── LibMpvPlayer.*        内嵌 libmpv（当前用的）
-│   ├── MpvMediaPlayer.*      外部 mpv.exe（排查问题时备用）
-│   └── NowPlaying.*          "现在在播什么"这份数据
-├── protocols/dlna/           DLNA 这一套
-├── platform/windows/         跟 Windows 打交道的地方
-└── ui/                       界面
+│   ├── MpvCore.*             libmpv 播放核心
+│   └── PlaybackController.*  播放状态和队列
+├── protocols/dlna/           无 Qt DLNA 协议栈
+├── shell/                    原生 Shell、配置和进程监督
+├── ui_process/               UI 进程和 IPC
+├── platform/                 平台抽象与 Windows 实现
+└── ui/                       QML MainWindow
 ```
 
 规矩：**跨目录的 include 写从 src 起算的全路径**（`"core/MediaPlayer.h"`），
@@ -27,9 +27,8 @@ src/
 
 以后加 AirPlay 之类，就是在 `protocols/` 下加一个平级目录。
 
-**第二阶段要做的**（还没做）：把 `SoapHandler` / `DlnaRenderer` 里那些**与协议无关**
-的播放状态（当前媒体、传输状态、队列、音量）抽到 `core/PlaybackController`，
-让协议层只剩"翻译"和"用本协议的话报状态"。
+协议无关的播放状态集中在 `core/PlaybackController`；旧 Qt DLNA 门面和旧单体
+入口已经删除。
 
 ---
 
@@ -53,6 +52,10 @@ src/
 
 几个值得一提的点：
 - 队列只有**三个位置**：上一条 / 当前 / 下一条。不做播放列表管理器。
+- 协议记录按事务更新：新 current 必须等播放器加载成功后才提交；加载失败、
+  Open 超时和迟到命令不会覆盖旧记录。新 owner 边界会让上一连接的延迟命令失效。
+- `hasNext` / `hasPrevious` 以 Protocol 自己保存的记录为准，不导入 Ui 自行
+  产生的历史或队列。
 - `Seek` 支持 `REL_TIME`、`TRACK_NR`（只有一条，跳 1 = 回到开头）、
   `X_DLNA_REL_BYTE`（按"总字节数 ÷ 总时长"按比例换算；拿不到大小就回 711）
 - `SetPlayMode` 收 `NORMAL` / `REPEAT_ONE` / `REPEAT_ALL` / `DIRECT_1`，
@@ -67,10 +70,15 @@ src/
 `SetSharpness`、`GetSharpness`、`ListPresets`、`SelectPreset`
 
 **约定要小心**：DLNA 这几项是 0~100，而且 **50 才是"没调过"**；播放器内部是
--100~100、0 是中性。换算写在 `SoapHandler::dlnaPictureValue` 和 `Set` 那个分支里，
+-100~100、0 是中性。换算写在 `SoapRouter` 的画面控制分支里，
 只此一处。
 
 `SelectPreset` 只认 `FactoryDefaults`（复位画面调节），别的名字回 701。
+
+DIDL 里用于界面展示的标题、作者、专辑、副标题在 Protocol 进程按
+Protocol 只解析成中立、未过滤字段；原始 DIDL 保存在 Protocol 自己的媒体记录里
+供 SOAP 查询返回。Ui 再按 `config/metadata-pipeline.json` 统一过滤并展示。
+完整规则与链路见 `元数据过滤与展示链路.md`。
 
 ### SOAP — ConnectionManager（3 个动作）
 `GetProtocolInfo`、`GetCurrentConnectionIDs`、`GetCurrentConnectionInfo`

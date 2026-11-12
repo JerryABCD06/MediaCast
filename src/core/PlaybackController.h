@@ -4,6 +4,7 @@
 #pragma once
 
 #include "MediaPlayer.h"
+#include "MetadataPipeline.h"
 #include "NowPlaying.h"
 
 #include <QObject>
@@ -20,7 +21,7 @@ class QTimer;
  * ── 它解决什么问题 ────────────────────────────────────────────────────────
  *
  * 在这之前，"当前在放什么、处于什么状态、队列里有什么"这三本账是记在
- * `SoapHandler` 里的 —— 也就是记在 DLNA 协议层里。将来加 AirPlay 之类的协议时，
+ * DLNA 协议层里的。将来加 AirPlay 之类的协议时，
  * 那一层也得再记一遍同样三本账，两份账迟早对不上。
  *
  * 所以把这三本账抽出来放这儿，协议层只做"翻译"：
@@ -133,6 +134,8 @@ class PlaybackController : public QObject
      * 会被算成"没连着"。真遇到再补一条"最近说过话也算"的判据。
      */
     Q_PROPERTY(bool peerConnected READ peerConnected NOTIFY peerConnectedChanged)
+    Q_PROPERTY(
+        QVariantMap castSession READ castSession NOTIFY castSessionChanged)
 
     /**
      * 界面要的"现在是什么局面" —— 由上面两个轴（谁连着 × 在放什么）算出来。
@@ -192,7 +195,7 @@ class PlaybackController : public QObject
 public:
     // ── 两个中性枚举 ─────────────────────────────────────────────────────
 
-    /** 播放状态。DLNA 那边各有各的字符串对应，见 SoapHandler 的映射。 */
+    /** 播放状态。各协议层自己负责把它翻译成协议规定的字符串。 */
     enum class State {
         /** 手上什么都没有。刚启动、或者投送已经结束。 */
         NoMedia,
@@ -252,10 +255,14 @@ public:
         QString metadata;      // 原样存着 —— 协议层要拿它回给控制点
         QString title;         // 协议层能拿到就填
         QString artist;
+        QString creator;
         QString album;
         // 视频/图片的"这是什么"那一句（DIDL 里的 dc:description 之类）。
         // 音频不用它 —— 那儿的第二行是歌手。
         QString description;
+        QString subtitle;
+        QString longDescription;
+        QString artworkUri;
         MediaKind kind = MediaKind::Unknown;
 
         /**
@@ -367,6 +374,8 @@ public:
 
     QString nextUri() const { return m_next.uri; }
     QString nextMetadata() const { return m_next.metadata; }
+    MediaRequest currentRequest() const { return m_current; }
+    MediaRequest nextRequest() const { return m_next; }
 
     void setPlayMode(PlayMode mode);
     PlayMode playMode() const { return m_playMode; }
@@ -397,6 +406,12 @@ public:
     bool peerConnected() const { return m_peerConnected; }
     /** 协议层调它：有投送方连着 / 全都走了。 */
     void setPeerConnected(bool connected);
+    void setCastSession(
+        bool connected, const QString &protocol,
+        const QString &controlPointName,
+        const QString &controlPointAddress,
+        bool remoteControlRegistered);
+    QVariantMap castSession() const;
 
     /**
      * 现在的局面。由"谁连着"和"在放什么"两轴算出来 —— 具体规则就在
@@ -438,14 +453,6 @@ public:
     /** 当前媒体的总字节数。拿不到返回 0 —— 按字节跳转靠它换算成时间。 */
     qint64 mediaSizeBytes() const;
 
-    /**
-     * 把画面画到某个窗口里。
-     *
-     * 严格说这是"画面输出"而不是"播放控制"，放在这个类里只是因为界面手上
-     * 只有这一个门面。将来多协议的时候要是觉得别扭，可以往上挪一层。
-     */
-    void setVideoWindow(quintptr windowId);
-
 signals:
     void logMessage(const QString &text);
 
@@ -460,6 +467,7 @@ signals:
 
     /** 有没有投送方连着变了。 */
     void peerConnectedChanged();
+    void castSessionChanged();
 
     /** 上面那个 castState 变了 —— 界面照它切换显示什么。 */
     void castStateChanged();
@@ -554,8 +562,13 @@ private:
 
     /** 有没有投送方连着。协议层喂的，见 setPeerConnected()。 */
     bool m_peerConnected = false;
+    QString m_castProtocol;
+    QString m_controlPointName;
+    QString m_controlPointAddress;
+    bool m_remoteControlRegistered = false;
 
     LoadStatus m_loadStatus = LoadStatus::Ok;
+    MediaKind m_playerKind = MediaKind::Unknown;
 
     /// 当前这条。三格队列都存完整请求，理由见 setNextUri 上面那段。
     MediaRequest m_current;
@@ -574,4 +587,6 @@ private:
      * 见 buildNowPlaying。
      */
     QVariantMap m_fileTags;
+    QString m_fileArtworkSource;
+    MetadataPipeline m_metadataPipeline;
 };

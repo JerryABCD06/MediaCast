@@ -120,6 +120,7 @@ void LateBindingPlaybackGateway::detach(std::string reason)
         m_lastSnapshot.stateVersion = previous.stateVersion + 1;
         m_lastSnapshot.playerAvailable = false;
         m_lastSnapshot.peerConnected = previous.peerConnected;
+        m_lastSnapshot.castSession = previous.castSession;
         m_lastSnapshot.volumePercent = previous.volumePercent;
         m_lastSnapshot.muted = previous.muted;
         m_lastSnapshot.pictureControls = previous.pictureControls;

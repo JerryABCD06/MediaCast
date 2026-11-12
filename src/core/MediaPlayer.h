@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "NowPlaying.h"
+
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
@@ -31,9 +33,8 @@ struct PictureControlInfo
 /**
  * MediaPlayer —— 播放器的抽象接口。
  *
- * 这一层存在的理由只有一个：让 DLNA 那一层**不知道**底下是什么。今天是
- * "mpv.exe 独立进程 + JSON IPC"；将来换成 libmpv 嵌入时，只需要再写一个实现类，
- * DLNA 那边一行都不用动。
+ * 这一层存在的理由只有一个：让协议层**不知道**底下是什么。当前实现是
+ * 进程内 libmpv；将来换播放后端时，协议层和 Ui 状态机都不用动。
  *
  * 两条约定，两条都是踩过坑才定下来的：
  *
@@ -43,7 +44,7 @@ struct PictureControlInfo
  *
  * 2. **状态读取必须是取缓存，不能现问底下。** 位置、时长、音量这些值由实现自己
  *    缓存好（mpv 会把变化主动推过来）。上层随时读都是立刻返回 —— 绝不能在读一个
- *    状态值时去等一次跨进程往返，那会把 SOAP 请求卡住。
+ *    状态值时去做一次阻塞查询，那会把协议请求或界面卡住。
  */
 class MediaPlayer : public QObject
 {
@@ -104,17 +105,6 @@ public:
 
     virtual int    volumePercent() const = 0;
     virtual bool   isMuted() const = 0;
-
-    /**
-     * 让播放器把画面画到指定的窗口里。
-     *
-     * 现在底下是独立进程的 mpv，它有自己的窗口，所以实现是空的。
-     * 将来换成 libmpv 嵌入时，UI 会把自己某个控件的窗口句柄传进来。
-     *
-     * 现在就把这个入口留好，是为了避免将来为了加它而回头改接口 —— 改接口会波及
-     * 每一个实现，那正是拆解耦最痛的时刻。
-     */
-    virtual void setVideoWindow(quintptr windowId) = 0;
 
     // ── 画面调节 ──────────────────────────────────────────────────────────
     //
@@ -200,5 +190,22 @@ signals:
      *
      * 不做这一步的后端不实现也不会怎样 —— 什么都不发就是了。
      */
-    void metadataChanged(const QVariantMap &tags);
+    void metadataChanged(
+        const QVariantMap &tags, const QString &mediaUri);
+
+    /**
+     * 当前媒体解析出的封面来源。空串表示播放器没有提供封面。
+     * 本地内嵌封面应写成本地文件 URL；外部封面可直接写文件或网络 URL。
+     */
+    void artworkChanged(
+        const QString &source, const QString &mediaUri);
+
+    /**
+     * Mpv实际识别出的媒体类型。
+     *
+     * 协议层给的只是提示；文件真正打开后，以播放器实际轨道为准。
+     * `mediaUri` 用来拒绝上一条媒体迟到的通知。
+     */
+    void mediaKindChanged(
+        MediaKind kind, const QString &mediaUri);
 };

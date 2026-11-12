@@ -1,0 +1,47 @@
+{
+  "strings": {
+    "protocol_dlna": "数字生活网络联盟（DLNA）",
+    "protocol_airplay": "AirPlay",
+    "protocol_googlecast": "Google Cast",
+
+    "codec_h264": "H.264 / AVC",
+    "codec_hevc": "HEVC / H.265",
+    "codec_av1": "AV1",
+    "codec_vp9": "VP9",
+    "codec_vp8": "VP8",
+    "codec_mpeg4": "MPEG-4",
+    "codec_mpeg2video": "MPEG-2",
+    "codec_mjpeg": "Motion JPEG",
+    "codec_png": "PNG",
+    "codec_aac": "AAC",
+    "codec_mp3": "MP3",
+    "codec_mp3float": "MP3",
+    "codec_opus": "Opus",
+    "codec_vorbis": "Vorbis",
+    "codec_flac": "FLAC",
+    "codec_alac": "ALAC",
+    "codec_ac3": "Dolby AC-3",
+    "codec_eac3": "Dolby E-AC-3",
+    "codec_dts": "DTS",
+    "codec_truehd": "Dolby TrueHD",
+    "codec_pcm_s16le": "PCM 16-bit",
+    "codec_pcm_s24le": "PCM 24-bit",
+    "codec_pcm_s32le": "PCM 32-bit",
+
+    "container_mp4": "MP4",
+    "container_mov": "QuickTime / MOV",
+    "container_matroska": "Matroska",
+    "container_webm": "WebM",
+    "container_mpegts": "MPEG-TS",
+    "container_flac": "FLAC",
+    "container_mp3": "MP3",
+    "container_ogg": "Ogg",
+    "container_wav": "WAV",
+    "container_hls": "HLS",
+
+    "channel_mono": "单声道",
+    "channel_stereo": "立体声",
+    "channel_5_1": "5.1 声道",
+    "channel_7_1": "7.1 声道"
+  }
+}

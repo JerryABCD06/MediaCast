@@ -3,34 +3,27 @@
 
 #pragma once
 
+#include "ImageSequencePlaylist.h"
 #include "MediaPlayer.h"
 
 #include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
 #include <thread>
 
 struct mpv_handle;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QTimer;
+class WrappedTsProxy;
 
 /**
  * MpvCore —— libmpv 播放核心。
  *
  * 一个 mpv 实例，加上围着它转的一切：事件线程、状态缓存、命令、画面调节。
- * **它不认识"画面往哪出"这件事** —— 那是外壳的事，见下。
- *
- * 它有三种用法，对应三种外壳：
- *
- *   LibMpvPlayer    继承它，补上 setVideoWindow —— 走 mpv 的 wid 选项，
- *                   画面画进一个原生窗口。旧的 Widgets 界面用这条。
- *   QML 那套        不继承它，而是持有一个它，再走 mpv 的 render API
- *                   自己渲染。QML 那边要继承 QQuickFramebufferObject，
- *                   两个 QObject 没法多重继承，所以只能"持有"。
- *   MpvMediaPlayer  另外那个后端（起 mpv.exe + 命名管道），跟它没关系。
- *
- * ── 为什么要拆出这一层 ────────────────────────────────────────────────────
- *
- * 原来 LibMpvPlayer 是一个整体：既管 mpv 实例和事件线程，又管画面往哪个窗口出。
- * 加 QML 界面时发现，这两件事里**只有一处**（mpv 的 wid 选项）是跟"原生窗口"
- * 绑死的，其余四百多行（事件线程、状态机、按键换算、滤镜链）两个外壳完全一样。
- * 不拆的话就得把四百行抄一遍，抄出来的第二份迟早跟第一份不一样。
+ * 画面统一走 mpv 的 render API，由 QML 场景图合成。MpvCore 管播放状态和
+ * 事件线程，MpvQmlItem 只负责把画面画出来。
  *
  * ── 线程 ─────────────────────────────────────────────────────────────────
  *
@@ -50,35 +43,15 @@ class MpvCore : public MediaPlayer
     /// 引擎起来了没有。QML 那边靠它决定要不要显示"未就绪"的占位文字 ——
     /// 写成属性而不是只留个 isRunning() 方法，是因为 QML 读不了 C++ 的方法。
     Q_PROPERTY(bool running READ isRunning NOTIFY runningChanged)
+    Q_PROPERTY(
+        QVariantMap mediaInfo READ mediaInfo NOTIFY mediaInfoChanged)
 
 public:
-    /**
-     * 画面往哪出。
-     *
-     * **一个 mpv 实例只能走一条路** —— wid 和 render API 是互斥的，因为
-     * mpv 的 `vo` 决定了它怎么开视频输出，而这个选项只能在初始化前设一次。
-     * 想在两个界面上同时看到画面是做不到的，只能二选一。
-     *
-     * 必须在 start() 之前设好，之后再改没有意义（改了也只在下次 start() 生效）。
-     */
-    enum OutputMode {
-        /** 画进一个原生窗口。LibMpvPlayer 那条路（mpv 的 wid 选项）。 */
-        WindowOutput,
-
-        /** 由调用方自己用 mpv 的 render API 渲染。QML 那条路。 */
-        RenderApiOutput,
-    };
-    Q_ENUM(OutputMode)
-
     explicit MpvCore(QObject *parent = nullptr);
     ~MpvCore() override;
 
-    /** 定下画面往哪出。只在 start() 之前调有意义。 */
-    void setOutputMode(OutputMode mode) { m_outputMode = mode; }
-    OutputMode outputMode() const { return m_outputMode; }
-
     /**
-     * 渲染面挂上来了没有（只有 RenderApiOutput 模式在意这件事）。
+     * 渲染面挂上来了没有。
      *
      * **为什么需要它**：render API 模式下，mpv 的视频输出要等到有人给它一个
      * 渲染上下文才能开，而那个上下文要等画面 item 真的开始渲染才建得起来。
@@ -128,9 +101,15 @@ public:
 
     bool isRunning() const { return m_mpv != nullptr; }
 
+    /** MPV 当前媒体的轨道、容器和编码摘要，供信息面板只读显示。 */
+    QVariantMap mediaInfo() const;
+
 signals:
     /** isRunning() 的取值变了。 */
     void runningChanged();
+
+    /** `mediaInfo` 更新。 */
+    void mediaInfoChanged();
 
     /**
      * 画面有新帧，该重画了。
@@ -162,18 +141,6 @@ public:
     void setVolumePercent(int percent) override;
     void setMuted(bool muted) override;
 
-    /**
-     * 把画面画到某个窗口里。**核心这一层做不了这件事** —— 它手里只有 mpv
-     * 实例，不知道画面该往哪去。所以这里是个空实现，等子类去覆盖：
-     *
-     *   LibMpvPlayer 覆盖它，设 mpv 的 wid 选项
-     *   QML 那套      压根不调它，走 render API
-     *
-     * 基类留一个能用的默认实现（而不是做成纯虚的），是为了让它**可以被实例化** ——
-     * QML 那边要直接拿一个 MpvCore 用，它不继承这个类，只是持有。
-     */
-    void setVideoWindow(quintptr windowId) override;
-
     // 画面调节。这张表是照 mpv 自己的选项表抄的（`mpv --list-options` 的实测结果），
     // 不是凭印象写的：色温、颜色增益、梯形校正这几项 mpv 根本没有对应属性，
     // 所以这里也没有 —— 硬凑出来只会让界面上多几个按了没反应的滑块。
@@ -191,21 +158,44 @@ public:
     int    volumePercent()   const override { return m_volumePercent.load(); }
     bool   isMuted()         const override { return m_muted.load(); }
 
-protected:
-    /**
-     * 在 mpv_initialize() 之前调一次，让子类设"只能初始化前设"的选项。
-     *
-     * 为什么需要这个口子：mpv 的某些选项必须在初始化之前设好（wid 就是），
-     * 而初始化在基类的 start() 里，子类插不进去。所以留这么一个钩子。
-     *
-     * 参数直接把 mpv 实例递出去，子类就不用去摸基类的成员。
-     * 基类什么都不做。
-     */
-    virtual void applyStartupOptions(mpv_handle *mpv);
-
 private:
+    /**
+     * 在 mpv_initialize() 之前设置只能初始化前生效的 render API 选项。
+     */
+    void applyStartupOptions(mpv_handle *mpv);
+
     /** 后台线程：一直等 mpv 的事件，翻成 Qt 信号。 */
     void eventLoop();
+
+    /** 普通媒体直接加载；HLS 先探测它是不是图片序列。 */
+    void beginLoad(const QString &uri);
+    void requestPlaylistProbe(const QString &uri);
+    bool loadImageSequence(
+        const QByteArray &playlist, const QUrl &playlistUrl,
+        const QString &logicalUri);
+    void startImagePayloadProbe();
+    void probeNextImagePayload();
+    void finishImagePayloadProbe();
+    void cancelImagePayloadProbe();
+    void loadMfImageSequence(
+        const QVector<mcast::core::ImageSequenceSegment> &segments,
+        const QString &logicalUri);
+    void loadWrappedTransportStream(
+        const QVector<mcast::core::ImageSequenceSegment> &segments,
+        const QString &logicalUri);
+    void loadMpvFile(
+        const QString &mpvUri, const QString &logicalUri,
+        const QString &temporaryImageListPath = {},
+        bool emitStarted = true);
+    void cancelPlaylistProbe();
+    void clearTemporaryImageSequence();
+    QString logicalMediaUri(const QString &mpvUri) const;
+    void resetImageTimeline();
+    void startImageTimeline();
+    void tickImageTimeline();
+    void seekImageTimeline(double seconds);
+    void reloadImageTimeline(double seconds);
+    void refreshMediaInfoSnapshot();
 
     /**
      * 锐度走视频滤镜链，不走属性 —— 为什么，见 .cpp 里那段。
@@ -216,10 +206,8 @@ private:
     mpv_handle *m_mpv = nullptr;
     std::thread m_thread;
     std::atomic<bool> m_stopRequested{false};
-    OutputMode m_outputMode = WindowOutput;
-
     /**
-     * render API 模式下，渲染面挂上来了没有。
+     * 渲染面挂上来了没有。
      *
      * 界面线程和渲染线程都会碰它：渲染线程建好上下文之后回调过来置 true，
      * 界面线程在 load() 里读。用原子变量省得加锁。
@@ -251,8 +239,34 @@ private:
      * 只由界面线程读写（load() 和 setRendererAttached() 都在界面线程）。
      */
     QString m_pendingUri;
+    mutable std::mutex m_uriMutex;
+    mutable std::mutex m_mediaInfoMutex;
+    QVariantMap m_mediaInfo;
     QString m_lastRequestedUri;
+    QString m_activeMpvUri;
+    QString m_activeImageListPath;
+    QString m_eventMediaUri;
+    QString m_pendingArtworkUri;
+    bool m_artworkPending = false;
+    int m_artworkRetryCount = 0;
     std::atomic<bool> m_loadFailed{false};
+
+    QNetworkAccessManager *m_network = nullptr;
+    QNetworkReply *m_playlistReply = nullptr;
+    quint64 m_playlistRequest = 0;
+    quint64 m_imageProbeGeneration = 0;
+    QNetworkReply *m_imageProbeReply = nullptr;
+    QVector<mcast::core::ImageSequenceSegment> m_imageProbeSegments;
+    QString m_imageProbeLogicalUri;
+    bool m_imageProbeWrapped = true;
+    std::unique_ptr<WrappedTsProxy> m_wrappedTsProxy;
+    QTimer *m_imageTimer = nullptr;
+    std::chrono::steady_clock::time_point m_imageClockStart;
+    QVector<mcast::core::ImageSequenceSegment> m_imageSegments;
+    qint64 m_imageBaseMs = 0;
+    double m_imageFps = 1.0;
+    std::atomic<bool> m_imageSequenceActive{false};
+    std::atomic<bool> m_imageSequencePaused{false};
 
     std::atomic<double> m_positionSec{0.0};
     std::atomic<double> m_durationSec{0.0};

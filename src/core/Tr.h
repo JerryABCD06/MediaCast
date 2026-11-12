@@ -34,10 +34,7 @@
  *                     （也就是键名）。看到界面上一串 `ui_xxx` 就说明这个键
  *                     漏了 —— 不过缺键在装载语言表的时候已经报过日志了。
  *
- * ── 生产 Ui 和旧单体 Ui 的区别 ───────────────────────────────────────────
- *
- * 生产 Ui 由 Shell 调用 applyCatalog()，语言列表和实际语言都由 Shell 决定。
- * scan() 和 setLanguage() 只保留给旧单体 MCast.exe 兼容，不进入新三进程链路。
+ * Ui 由 Shell 调用 applyCatalog()，语言列表和实际语言都由 Shell 决定。
  */
 class Tr : public QTranslator
 {
@@ -50,18 +47,12 @@ public:
     /** 基准语言的代码。它的表跟着 exe 一起编进去，**永远可用**。 */
     static QString baseCode();
 
-    /** 旧单体兼容：扫 lang/<code>/ 目录。 */
-    void scan();
-
     /** 生产 Ui：应用 Shell 下发的语言目录。 */
     bool applyCatalog(
         const QByteArray &json, QString *error = nullptr);
 
-    /** 扫到的语言：`[{ code: "zh_CN", name: "简体中文" }, ...]`，按代码排序。 */
+    /** Shell 下发的语言：`[{ code: "zh_CN", name: "简体中文" }, ...]`，按代码排序。 */
     Q_INVOKABLE QVariantList languages() const;
-
-    /** 旧单体兼容：请求语言，空串表示跟随系统。 */
-    void setLanguage(const QString &requested);
 
     /** 生产 Ui：只记录用户请求，不自行解析 System。 */
     void setRequestedLanguage(const QString &requested);
@@ -84,20 +75,16 @@ signals:
     void logMessage(const QString &text);
 
 private:
-    /** 扫目录时留下的那点信息 —— 只有这些，字符串表不留。 */
+    /** Shell 语言目录里的条目 —— 只有这些，字符串表另存。 */
     struct LanguageInfo {
-        QString code;              // 文件名去掉 .json，比如 "zh_CN"
+        QString code;              // 语言代码，比如 "zh_CN"
         QString name;              // meta.name，比如 "简体中文"
-        QStringList systemNames;   // meta.system，比如 ["zh_CN", "zh_Hans_CN"]
         QString uiFile;            // 由 Shell 指定的 ui.json（或 :/lang/...）
     };
 
     QString langDir() const;
     bool find(const QString &code, LanguageInfo *out) const;
     bool loadBaseTable();
-
-    /** 系统的语言清单里，有没有对得上的。对不上返回空串。 */
-    QString matchSystemLanguage() const;
 
     /** 把某个语言的完整表读进来，放进 m_active。 */
     void loadActiveTable(const QString &code);

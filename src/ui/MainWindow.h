@@ -12,8 +12,6 @@
 class QQmlApplicationEngine;
 class QQmlComponent;
 class QQuickWindow;
-class QTimer;
-class SplashWindow;
 
 // MainWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
 // （旧的 Widgets 界面 2026-09-14 退场了）。
@@ -39,7 +37,7 @@ class MainWindow : public QObject
     Q_OBJECT
 
 public:
-    explicit MainWindow(SplashWindow *splash = nullptr, QObject *parent = nullptr);
+    explicit MainWindow(QObject *parent = nullptr);
     ~MainWindow() override;
 
     /** 第一次调用时建引擎、加载 QML；之后再调用就是把窗口叫到前面。 */
@@ -142,12 +140,6 @@ private:
     QQmlComponent *m_castComponent = nullptr;
     QPointer<QObject> m_castWindow;
     qulonglong m_castRequestId = 0;
-    SplashWindow *m_splash = nullptr;
-    QTimer *m_splashTimeout = nullptr;
-
-    /** 本次唤起主窗口是否正在等待启动屏幕退场。 */
-    bool m_splashRequested = false;
-
     /**
      * 正在加载 QML 的那一小会儿。
      *

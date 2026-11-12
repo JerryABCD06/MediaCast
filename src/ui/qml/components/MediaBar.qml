@@ -534,8 +534,36 @@ Item {
             //
             // 标题和副标题都读 Playback.nowPlaying —— **回退链在 C++ 那边**
             // （文件名推标题、占位符跳过、类型名顶上），这里不做第二套判断。
-            Column {
+            Rectangle {
+                id: artworkFrame
+                visible: Playback.nowPlaying.artworkSource !== ""
+                         && artworkImage.status !== Image.Error
                 anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: 34
+                height: 34
+                radius: 4
+                color: "transparent"
+                clip: true
+
+                Image {
+                    id: artworkImage
+                    anchors.fill: parent
+                    source: Playback.nowPlaying.artworkSource
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    cache: false
+                    sourceSize.width: 68
+                    sourceSize.height: 68
+                    visible: status === Image.Ready
+                }
+            }
+
+            Column {
+                anchors.left: artworkFrame.visible
+                              ? artworkFrame.right
+                              : parent.left
+                anchors.leftMargin: artworkFrame.visible ? 10 : 0
                 anchors.right: centerGroup.left
                 anchors.rightMargin: 16
                 anchors.verticalCenter: parent.verticalCenter

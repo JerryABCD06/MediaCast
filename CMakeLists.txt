@@ -3,12 +3,15 @@
 
 cmake_minimum_required(VERSION 3.21)
 
-# RC 是资源编译器。res/MCast.rc 里放的是程序图标和版本信息 ——
-# 系统就是靠那份版本信息里的 FileDescription 认出这个程序叫 "Media Cast" 的，
-# 缺了它，媒体面板只能显示可执行文件的路径。
+# RC 是资源编译器。三个进程各自的 .rc 文件里放程序图标和版本信息；Qt 窗口图标
+# 另由 MCast.qrc 提供。
 project(MediaCastReceiver LANGUAGES CXX RC)
 
 include(CTest)
+
+# The runtime dependency is shared by the application and the headless MPV
+# integration test. Keep its location defined before the test targets.
+set(MPV_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/mpv-dev")
 
 # 用 C++20 而不是 C++17，是被 C++/WinRT 逼的：它的 base.h 在 C++17 模式下会去
 # 包含 <experimental/coroutine>，而 MSVC 14.51 已经把那个实验性的头文件判成编译
@@ -121,7 +124,7 @@ target_include_directories(
     mcast_dlna_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(
     mcast_dlna_protocol
-    PUBLIC mcast_dlna_net mcast_cast
+    PUBLIC mcast_dlna_net mcast_cast mcast_ipc
     PRIVATE xmllite.lib shlwapi.lib ole32.lib)
 
 execute_process(
@@ -136,9 +139,8 @@ if(NOT MCAST_BUILD_ID)
 endif()
 target_compile_definitions(mcast_ipc PUBLIC MCAST_BUILD_ID="${MCAST_BUILD_ID}")
 
-# 三个进程骨架。现在只验证身份、握手、Shell 拉起 UI 和控制管道；
-# 当前骨架已经覆盖 ControlPipe、PlaybackPipe、身份授权和 SessionSnapshot；
-# 真正的协议与 QML 会在后续阶段替换这些 skeleton 入口；原生托盘已进入 Shell。
+# 三个生产进程。这里先定义轻量 UiSkeleton，供进程监督和入口保护测试使用；
+# 真实 Qt/QML Ui 在文件后半部分定义。
 add_executable(
     MCast.Shell
     src/shell/ShellLanguage.h
@@ -190,6 +192,31 @@ if(BUILD_TESTING)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_metadata_pipeline_tests
+        tests/metadata_pipeline_tests.cpp
+        src/core/MetadataPipeline.cpp
+        src/core/MetadataPipeline.h
+        src/core/NowPlaying.cpp
+        src/core/NowPlaying.h)
+    target_include_directories(
+        mcast_metadata_pipeline_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(
+        mcast_metadata_pipeline_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_metadata_pipeline_tests PRIVATE Qt6::Core)
+    set_target_properties(
+        mcast_metadata_pipeline_tests PROPERTIES AUTOMOC TRUE)
+    add_test(
+        NAME mcast_metadata_pipeline_tests
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
+            -Executable "$<TARGET_FILE:mcast_metadata_pipeline_tests>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(
+        mcast_metadata_pipeline_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_protocol_control_dispatcher_tests
@@ -277,6 +304,8 @@ if(BUILD_TESTING)
         tests/playback_bridge_tests.cpp
         src/ui_process/PlaybackBridge.cpp
         src/ui_process/PlaybackBridge.h
+        src/core/MetadataPipeline.cpp
+        src/core/MetadataPipeline.h
         src/core/PlaybackController.cpp
         src/core/PlaybackController.h
         src/core/MediaPlayer.h
@@ -505,23 +534,53 @@ if(BUILD_TESTING)
         mcast_dlna_claim_confirmation_worker_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
-        mcast_app_settings_tests
-        tests/app_settings_tests.cpp
-        src/core/AppSettings.cpp
-        src/core/AppSettings.h)
+        mcast_image_sequence_playlist_tests
+        tests/image_sequence_playlist_tests.cpp
+        src/core/ImageSequencePlaylist.cpp
+        src/core/ImageSequencePlaylist.h)
     target_include_directories(
-        mcast_app_settings_tests PRIVATE
+        mcast_image_sequence_playlist_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_options(mcast_app_settings_tests PRIVATE /utf-8)
-    target_link_libraries(mcast_app_settings_tests PRIVATE Qt6::Core)
-    set_target_properties(
-        mcast_app_settings_tests PROPERTIES AUTOMOC TRUE)
+    target_compile_options(
+        mcast_image_sequence_playlist_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_image_sequence_playlist_tests PRIVATE Qt6::Core)
     add_test(
-        NAME mcast_app_settings_tests
+        NAME mcast_image_sequence_playlist_tests
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
-            -Executable "$<TARGET_FILE:mcast_app_settings_tests>"
+            -Executable "$<TARGET_FILE:mcast_image_sequence_playlist_tests>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(
+        mcast_mpv_image_sequence_tests
+        tests/mpv_image_sequence_tests.cpp
+        src/core/MediaPlayer.h
+        src/core/MpvCore.cpp
+        src/core/MpvCore.h
+        src/core/ImageSequencePlaylist.cpp
+        src/core/ImageSequencePlaylist.h
+        src/core/WrappedTsProxy.cpp
+        src/core/WrappedTsProxy.h)
+    target_include_directories(
+        mcast_mpv_image_sequence_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${MPV_DEV_DIR}/include")
+    target_compile_options(
+        mcast_mpv_image_sequence_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_mpv_image_sequence_tests PRIVATE
+        Qt6::Widgets Qt6::Network "${MPV_DEV_DIR}/libmpv.lib")
+    set_target_properties(
+        mcast_mpv_image_sequence_tests PROPERTIES AUTOMOC TRUE)
+    add_test(
+        NAME mcast_mpv_image_sequence_tests
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
+            -Executable "$<TARGET_FILE:mcast_mpv_image_sequence_tests>"
+            -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(
+        mcast_mpv_image_sequence_tests PROPERTIES TIMEOUT 15)
 
     add_test(
         NAME mcast_process_skeleton_smoke
@@ -585,16 +644,15 @@ if(BUILD_TESTING)
         mcast_direct_internal_entry_guards PROPERTIES TIMEOUT 20)
 endif()
 
-# Widgets 是界面，Network 提供 QLocalSocket（命名管道通信要靠它）。
-# Quick + QuickControls2 是给主窗口（QML）用的，和旧的 Widgets 界面并存。
-# LinguistTools 提供 qt_add_translations（lupdate / lrelease 那一套）。
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Quick QuickControls2 LinguistTools)
+# Qt Widgets 只用于极小的宿主窗口，Network 提供 QLocalSocket；
+# Quick + QuickControls2 是主窗口。
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Quick QuickControls2)
 
 qt_standard_project_setup()
 
 # 让 CMake 自动把 .qrc 编成 Qt 的资源。
 # res/MCast.qrc 里装的是**窗口图标**（QApplication::setWindowIcon 用的那份），
-# 和 res/MCast.rc 里那份各管一边 —— 为什么需要两份，写在 MCast.qrc 的注释里。
+# 和各进程 .rc 里的可执行文件图标各管一边。
 #
 # 注意：这个开关必须在建 target 之前设好。target 一旦建出来，它的 AUTORCC 属性就
 # 定下来了，后面再改这个变量对它没用。
@@ -620,89 +678,12 @@ add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/FluentUI"
     "${CMAKE_BINARY_DIR}/fluentui-tree")
 
-qt_add_executable(MCast
-    src/main.cpp
-
-    # 播放核心：协议无关的那一层
-    src/core/MediaPlayer.h
-    src/core/NowPlaying.h
-    src/core/NowPlaying.cpp
-    src/core/MpvCore.h
-    src/core/MpvCore.cpp
-    src/core/MpvQmlItem.h
-    src/core/MpvQmlItem.cpp
-    src/core/PlaybackController.h
-    src/core/PlaybackController.cpp
-    src/core/AppSettings.h
-    src/core/AppSettings.cpp
-    # 语言：有哪些、现在用哪个、哪个键对应哪句话。界面和托盘都走它。
-    src/core/Tr.h
-    src/core/Tr.cpp
-    # 法律文本的入口：界面要什么它给什么，不碰界面（见文件头注释）
-    src/core/LegalDocs.h
-    src/core/LegalDocs.cpp
-    src/core/LibMpvPlayer.h
-    src/core/LibMpvPlayer.cpp
-    src/core/MpvMediaPlayer.h
-    src/core/MpvMediaPlayer.cpp
-
-    # 协议：以后加 AirPlay 之类，就是再加一个同级的子目录
-    src/protocols/dlna/DlnaRenderer.h
-    src/protocols/dlna/DlnaRenderer.cpp
-    src/protocols/dlna/SsdpService.h
-    src/protocols/dlna/SsdpService.cpp
-    src/protocols/dlna/HttpServer.h
-    src/protocols/dlna/HttpServer.cpp
-    src/protocols/dlna/SoapHandler.h
-    src/protocols/dlna/SoapHandler.cpp
-    src/protocols/dlna/GenaManager.h
-    src/protocols/dlna/GenaManager.cpp
-
-    # 跟操作系统打交道的地方，按平台分
-    src/platform/windows/WindowsMediaControls.h
-    src/platform/windows/WindowsMediaControls.cpp
-    src/platform/windows/WindowFrame.h
-    src/platform/windows/WindowFrame.cpp
-    src/platform/windows/SplashWindow.h
-    src/platform/windows/SplashWindow.cpp
-    src/platform/windows/SystemAccentColors.h
-    src/platform/windows/SystemAccentColors.cpp
-
-    # 界面
-    src/ui/TrayIcon.h
-    src/ui/TrayIcon.cpp
-
-    # 界面（QML）。旧的那套 Widgets 界面（MainWindow）2026-09-14 退场了。
-    src/ui/MainWindow.h
-    src/ui/MainWindow.cpp
-
-    # 界面状态：语言 + 深浅的唯一源头，界面和原生控件都向它看齐。
-    src/ui/UiState.h
-    src/ui/UiState.cpp
-
-    res/MCast.rc
-    res/MCast.qrc
-    res/QmlUi.qrc
-    res/Lang.qrc
-)
-
-# 跨目录的 include 写成 "core/LibMpvPlayer.h" 这样从 src 起算的路径 ——
-# 一眼看得出文件在哪儿。同目录的还是短名字（"MediaPlayer.h"）。
-target_include_directories(MCast PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-
-target_link_libraries(MCast PRIVATE Qt6::Widgets Qt6::Network)
-
-# QML 界面要用 Quick。FluentUI 那个插件是运行时由 QML 引擎加载的，
-# 不需要链接，但必须先编出来 —— 下面拷模块目录时要用到它的产物。
-target_link_libraries(MCast PRIVATE Qt6::Quick Qt6::QuickControls2)
-add_dependencies(MCast fluentuiplugin)
-
 # QML 引擎按 <导入路径>/FluentUI/qmldir 找模块，所以把整个模块目录
-# 放到 exe 旁边的 qml/ 下。main() 里会把那个目录加进导入路径。
+# 放到 Ui 可执行文件旁边的 qml/ 下。
 #
-# 这一步**踩过坑，别改回 POST_BUILD(MCast)**：挂在 MCast 上的话，只有"我们自己的
-# QML（走 qrc）改了、MCast 重新链接"时才会拷一次；而**只改库里的 QML**（比如
-# FluAppBar.qml）时 MCast 没有理由重链，拷贝就不跑 —— 表现是"改了库、重编了、
+# 这一步**踩过坑，别改回 Ui 的 POST_BUILD**：挂到 Ui 上的话，只有自己的 QML
+# （走 qrc）改了、Ui 重新链接时才会拷一次；而**只改库里的 QML**（比如
+# FluAppBar.qml）时 Ui 没有理由重链，拷贝就不跑 —— 表现是"改了库、重编了、
 # 跑起来还是老样子"（亲眼见了一次：按下态的字形怎么改都不变）。
 #
 # 所以给它一个自己的目标：每次构建都跟着源目录抄一遍（几 MB，代价可以忽略），
@@ -711,30 +692,9 @@ add_dependencies(MCast fluentuiplugin)
 add_custom_target(mcast_copy_fluentui_qml ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${FLUENTUI_QML_PLUGIN_DIRECTORY}"
-            "$<TARGET_FILE_DIR:MCast>/qml/FluentUI"
+            "$<TARGET_FILE_DIR:MCast.Ui>/qml/FluentUI"
     COMMENT "复制 FluentUI QML 模块到构建目录")
 add_dependencies(mcast_copy_fluentui_qml fluentuiplugin)
-
-# ── Windows 媒体面板（SMTC）───────────────────────────────────────────────
-#
-# 就是按音量键弹出来的那个面板。WindowsMediaControls.cpp 用了 C++/WinRT，
-# 而 cppwinrt 的头文件在 Windows SDK 的 cppwinrt 子目录里 —— 那个目录本来就在
-# MSVC 的默认包含路径上，不用额外加 -I。
-#
-# 需要显式链接的只有 windowsapp.lib：RoGetActivationFactory、HSTRING 那一套
-# 都从它转发过去，标准库里没有。
-target_link_libraries(MCast PRIVATE windowsapp.lib)
-
-# ── dwmapi ────────────────────────────────────────────────────────────────
-#
-# WindowFrame 里那句 DwmSetWindowAttribute（全屏时关掉 Win11 窗口圆角）要它。
-# 老系统的 SDK 里也有这个库，只是那个属性设不上 —— 运行时失败、编译期无害。
-target_link_libraries(MCast PRIVATE dwmapi.lib)
-# SplashWindow 的原生图形栈：D3D11 + Direct2D + DirectComposition + WIC；
-# advapi32 只用来读系统深浅色和主题强调色。
-target_link_libraries(MCast PRIVATE
-    mcast_dlna_core
-    d2d1.lib d3d11.lib dxgi.lib dcomp.lib windowscodecs.lib advapi32.lib)
 
 # ── libmpv（内嵌播放后端）──────────────────────────────────────────────────
 #
@@ -746,32 +706,12 @@ target_link_libraries(MCast PRIVATE
 #   1. dumpbin /exports libmpv-2.dll      （只留 mpv_ 开头的那些名字）
 #   2. 用它们写一个 libmpv.def，头两行是 LIBRARY libmpv-2.dll 和 EXPORTS
 #   3. lib /def:libmpv.def /machine:x64 /out:libmpv.lib
-set(MPV_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/mpv-dev")
-
 if(NOT (EXISTS "${MPV_DEV_DIR}/include/mpv/client.h"))
     message(FATAL_ERROR
         "找不到 libmpv 开发包：${MPV_DEV_DIR}\n"
         "需要 include/mpv/client.h 和 libmpv.lib。\n"
         "如果只是换了 mpv 版本，按上面注释里的三条命令重新生成导入库即可。")
 endif()
-
-target_include_directories(MCast PRIVATE "${MPV_DEV_DIR}/include")
-target_link_libraries(MCast PRIVATE "${MPV_DEV_DIR}/libmpv.lib")
-
-# 运行时也要能找到那个 DLL，直接复制到 exe 旁边。
-add_custom_command(TARGET MCast POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MPV_DEV_DIR}/libmpv-2.dll"
-            "$<TARGET_FILE_DIR:MCast>"
-    COMMENT "复制 libmpv-2.dll 到构建目录")
-
-# 源码里有中文字符串。MSVC 默认按系统代码页(中文 Windows 上是 GBK)读取源文件，
-# 会把 UTF-8 的中文读成乱码，所以显式要求它按 UTF-8 解释源码。
-target_compile_options(MCast PRIVATE /utf-8)
-
-set_target_properties(MCast PROPERTIES
-    WIN32_EXECUTABLE TRUE
-)
 
 # ── 真实 Qt/QML Ui 进程 ─────────────────────────────────────────────────
 #
@@ -789,6 +729,10 @@ qt_add_executable(MCast.Ui
     src/core/LegalDocs.h
     src/core/LegalDocs.cpp
     src/core/MediaPlayer.h
+    src/core/ImageSequencePlaylist.h
+    src/core/ImageSequencePlaylist.cpp
+    src/core/WrappedTsProxy.h
+    src/core/WrappedTsProxy.cpp
     src/core/NowPlaying.h
     src/core/NowPlaying.cpp
     src/core/MpvCore.h
@@ -797,6 +741,8 @@ qt_add_executable(MCast.Ui
     src/core/MpvQmlItem.cpp
     src/core/PlaybackController.h
     src/core/PlaybackController.cpp
+    src/core/MetadataPipeline.h
+    src/core/MetadataPipeline.cpp
     src/core/Tr.h
     src/core/Tr.cpp
     src/ui/MainWindow.h
@@ -809,8 +755,10 @@ qt_add_executable(MCast.Ui
     src/platform/windows/WindowFrame.cpp
     src/platform/windows/SystemAccentColors.h
     src/platform/windows/SystemAccentColors.cpp
-    src/platform/windows/SplashWindow.h
-    src/platform/windows/SplashWindow.cpp
+    src/platform/MediaControls.h
+    src/platform/windows/WindowsMediaControls.h
+    src/platform/windows/WindowsMediaControls.cpp
+    src/platform/windows/WindowsMediaControlsService.cpp
     res/MCast.Ui.rc
     res/MCast.qrc
     res/QmlUi.qrc
@@ -822,19 +770,20 @@ target_include_directories(
     MCast.Ui PRIVATE "${MPV_DEV_DIR}/include")
 target_link_libraries(
     MCast.Ui PRIVATE
-    Qt6::Widgets Qt6::Quick Qt6::QuickControls2
-    mcast_ipc windowsapp.lib dwmapi.lib
+    Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network
+    mcast_ipc windowsapp.lib dwmapi.lib shcore.lib shlwapi.lib
     d2d1.lib d3d11.lib dxgi.lib dcomp.lib windowscodecs.lib advapi32.lib
     "${MPV_DEV_DIR}/libmpv.lib")
 target_compile_options(MCast.Ui PRIVATE /utf-8)
 set_target_properties(MCast.Ui PROPERTIES WIN32_EXECUTABLE TRUE)
 add_dependencies(MCast.Ui fluentuiplugin)
 add_dependencies(MCast.Shell MCast.Ui)
-add_custom_command(TARGET MCast.Ui POST_BUILD
+add_custom_target(mcast_copy_libmpv ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MPV_DEV_DIR}/libmpv-2.dll"
             "$<TARGET_FILE_DIR:MCast.Ui>"
     COMMENT "复制 libmpv-2.dll 到 Ui 进程目录")
+add_dependencies(MCast.Ui mcast_copy_libmpv)
 
 # ── 语言 ─────────────────────────────────────────────────────────────────
 #
@@ -848,14 +797,26 @@ add_custom_command(TARGET MCast.Ui POST_BUILD
 #
 # 唯一编进 exe 的是基准界面表 en_US/ui.json（见 res/Lang.qrc）：lang 目录被删了、
 # 或者发布时漏拷的时候靠它兜底 —— 界面最坏是英文，不会是满屏键名。
-# 和上面的 FluentUI QML 一样，不能挂成 MCast 的 POST_BUILD：只改语言 JSON
-# 时 MCast 没有理由重新链接，POST_BUILD 不跑，程序就会继续读上一次的文案。
+# 和上面的 FluentUI QML 一样，不能挂成 Ui 的 POST_BUILD：只改语言 JSON
+# 时 Ui 没有理由重新链接，POST_BUILD 不跑，程序就会继续读上一次的文案。
 add_custom_target(mcast_copy_lang ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/lang"
             "$<TARGET_FILE_DIR:MCast.Shell>/lang"
     COMMENT "复制语言文件到构建目录")
 add_dependencies(MCast.Shell mcast_copy_lang)
+
+# Metadata presentation policy is data, not compiled UI text. Protocol forwards
+# raw metadata; Ui applies the same filter to protocol and local-file data
+# before showing it locally and publishing it to Windows media controls.
+add_custom_target(mcast_copy_metadata_pipeline ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:MCast.Ui>/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/config/metadata-pipeline.json"
+            "$<TARGET_FILE_DIR:MCast.Ui>/config/metadata-pipeline.json"
+    COMMENT "复制 Ui 元数据管线规则到构建目录")
+add_dependencies(MCast.Ui mcast_copy_metadata_pipeline)
 
 # ── 法律文本与第三方许可 ────────────────────────────────────────────────
 #
@@ -866,16 +827,18 @@ add_dependencies(MCast.Shell mcast_copy_lang)
 #
 # legal/ 只放**面向用户**的那几份；内部维护用的（CHECKLIST、RELEASE-NOTICES、
 # SUPPORT、CODE_OF_CONDUCT）留在 docs/legal/ 不下发。
-add_custom_command(TARGET MCast POST_BUILD
+add_custom_target(mcast_copy_legal ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:MCast>/legal"
+            "$<TARGET_FILE_DIR:MCast.Ui>/legal"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/PRIVACY.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/LEGAL-NOTICES.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/TRADEMARKS.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/CODECS.md"
-            "$<TARGET_FILE_DIR:MCast>/legal"
+            "$<TARGET_FILE_DIR:MCast.Ui>/legal"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
-            "$<TARGET_FILE_DIR:MCast>/licenses"
+            "$<TARGET_FILE_DIR:MCast.Ui>/licenses"
     COMMENT "复制法律声明与第三方许可到构建目录")
+add_dependencies(MCast.Ui mcast_copy_legal)
+

@@ -48,8 +48,12 @@ struct MediaRequest {
     std::string metadata;
     std::string title;
     std::string artist;
+    std::string creator;
     std::string album;
     std::string description;
+    std::string subtitle;
+    std::string longDescription;
+    std::string artworkUri;
     std::string protocol;
     MediaKind kind = MediaKind::Unknown;
     MediaSource source = MediaSource::Cast;
@@ -62,6 +66,14 @@ struct PictureControl {
     int maximum = 0;
     int neutral = 0;
     int value = 0;
+};
+
+struct CastSessionInfo {
+    bool connected = false;
+    std::string protocol;
+    std::string controlPointName;
+    std::string controlPointAddress;
+    bool remoteControlRegistered = false;
 };
 
 struct PlaybackSnapshot {
@@ -79,6 +91,7 @@ struct PlaybackSnapshot {
     int volumePercent = 100;
     bool muted = false;
     std::vector<PictureControl> pictureControls;
+    CastSessionInfo castSession;
     std::uint64_t generation = 1;
     std::uint64_t stateVersion = 1;
 };
@@ -99,6 +112,7 @@ enum class PlaybackCommandType {
     SetPictureControl,
     ResetPictureControls,
     SetPeerConnected,
+    SetCastSession,
 };
 
 struct PlaybackCommand {
@@ -110,6 +124,7 @@ struct PlaybackCommand {
     int intValue = 0;
     double doubleValue = 0.0;
     bool boolValue = false;
+    CastSessionInfo castSession;
 };
 
 enum class PlaybackSubmissionStatus {

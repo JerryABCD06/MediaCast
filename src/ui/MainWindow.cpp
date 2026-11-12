@@ -3,7 +3,6 @@
 
 #include "MainWindow.h"
 
-#include "platform/windows/SplashWindow.h"
 #include "platform/windows/WindowFrame.h"
 
 #include <QCoreApplication>
@@ -12,23 +11,11 @@
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QScopeGuard>
-#include <QTimer>
 #include <QUrl>
 
-MainWindow::MainWindow(SplashWindow *splash, QObject *parent)
+MainWindow::MainWindow(QObject *parent)
     : QObject(parent)
-    , m_splash(splash)
 {
-    m_splashTimeout = new QTimer(this);
-    m_splashTimeout->setSingleShot(true);
-    m_splashTimeout->setInterval(5000);
-    connect(m_splashTimeout, &QTimer::timeout, this, [this] {
-        if (!m_splashRequested)
-            return;
-        m_splash->dismiss();
-        m_splashRequested = false;
-        emit logMessage(QStringLiteral("启动屏幕：等待首帧超时，按兜底路径退场"));
-    });
 }
 
 MainWindow::~MainWindow() = default;
@@ -141,10 +128,8 @@ bool MainWindow::load()
 
 void MainWindow::show()
 {
-    // 已经有一趟加载在跑：把启动屏幕继续压在最上面，等那一趟完成。
+    // 已经有一趟加载在跑：把这次请求并进去，等那一趟完成。
     if (m_loading) {
-        if (m_splashRequested && m_splash)
-            m_splash->bringToFront();
         emit logMessage(QStringLiteral("主窗口正在打开，这次的请求并进去（不重复建窗）"));
         return;
     }
@@ -157,27 +142,13 @@ void MainWindow::show()
         return;
     }
 
-    // 首次加载和从后台重新唤起都显示启动屏幕。
-    if (m_splash) {
-        m_splashRequested = true;
-        m_splash->show();
-    }
-
     if (!load()) {
-        if (m_splashRequested && m_splash)
-            m_splash->hideImmediately();
-        m_splashRequested = false;
-        m_splashTimeout->stop();
         return;
     }
 
     // load() 里窗口没建出来的话已经 return 了，这里只是把话说死：
     // 宁愿什么都不做，也不要再去碰一个可能已经没了的窗口。
     if (!m_window) {
-        if (m_splashRequested && m_splash)
-            m_splash->hideImmediately();
-        m_splashRequested = false;
-        m_splashTimeout->stop();
         return;
     }
 
@@ -208,30 +179,6 @@ void MainWindow::show()
 
     emit logMessage(QStringLiteral("主窗口已打开"));
 
-    if (m_splashRequested && m_splash) {
-        // 启动屏幕是 topmost，主窗口 raise/activate 也不能把它压下去。
-        m_splash->bringToFront();
-        emit logMessage(QStringLiteral("启动屏幕：等待主界面首帧"));
-
-        connect(m_window, &QQuickWindow::frameSwapped, this,
-                [this] {
-            if (m_splashRequested)
-                m_splash->dismiss();
-            m_splashRequested = false;
-            m_splashTimeout->stop();
-            emit logMessage(QStringLiteral("启动屏幕：主界面首帧已到，开始退场"));
-            QTimer::singleShot(500, this, [this] {
-                if (!m_window)
-                    return;
-                m_window->raise();
-                m_window->requestActivate();
-            });
-        }, Qt::SingleShotConnection);
-
-        // 首帧信号偶发丢失时不能永远留着加载条。使用成员定时器，重新打开时
-        // 先停掉上一轮，避免旧计时器把新一轮启动屏幕提前收起。
-        m_splashTimeout->start();
-    }
 }
 
 void MainWindow::showCastConfirmation(

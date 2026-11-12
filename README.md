@@ -9,8 +9,8 @@
 Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 
 生产入口是 `MCast.Shell.exe / MCast.Protocol.exe / MCast.Ui.exe` 三进程架构，
-已覆盖原生托盘、启动屏幕、DLNA Protocol、按需 MainWindow 和语言包。旧的
-单进程 `MCast.exe` 只保留作开发回退，不进入发布包。
+已覆盖原生托盘、启动屏幕、DLNA Protocol、按需 MainWindow、系统媒体控件和
+语言包。仓库不再构建旧单进程入口。
 
 - 接收 **DLNA / UPnP AV** 投送（用 vivo 相册、BubbleUPnP 实测过）
 - 播放后端是 **libmpv**，画面用 render API 合进 QML 界面
@@ -20,9 +20,12 @@ Windows 上的媒体投送接收器：手机投过来，电脑这边播放。
 ## 目录
 
 ```
-src/core/        播放器抽象接口、mpv 那一层、状态机、设置、语言
-src/protocols/   协议层（现在只有 dlna/；加别的协议就再加一个同级目录）
-src/ui/          QML + FluentUI 界面（唯一那套；旧 Widgets 界面已退场）
+src/core/        播放器抽象接口、mpv、状态机和语言
+src/protocols/   无 Qt 的协议层（现在只有 dlna/）
+src/platform/    Qt/系统集成端口（媒体控件、托盘、窗口和网络基础设施）
+src/shell/       原生 Shell、配置权威和进程监督
+src/ui_process/  Ui 进程、IPC、播放桥和设置快照
+src/ui/          QML + FluentUI MainWindow
 docs/            设计文档、待办、协议实现情况、法律声明
 licenses/        随包分发的第三方许可全文 + 组件清单
 ```
@@ -64,6 +67,6 @@ Qt 6（LGPLv3，动态链接、未修改）、FluentUI（MIT）。
 | `docs/控制点行为.md` | 真实控制点（vivo 相册、BubbleUPnP）**实际**怎么行为 |
 | `docs/DLNA实现情况.md` | 协议实现到什么程度 |
 | `docs/多进程重构交接.md` | 当前三进程边界、启动/重连时序、验证入口和下一步顺序 |
-| `docs/DLNA迁移分阶段.md` | DLNA 从旧单体迁入无 Qt Protocol 的阶段和验收 |
+| `docs/DLNA迁移分阶段.md` | DLNA 迁入无 Qt Protocol 的历史阶段记录 |
 | `docs/配置权威与设置同步.md` | Shell 配置权威、JSON 结构和 UI 设置快照/IPC |
 | `docs/legal/` | 隐私、法律、商标、编解码器声明 |

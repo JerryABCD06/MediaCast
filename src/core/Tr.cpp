@@ -4,26 +4,16 @@
 #include "Tr.h"
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
-#include <QLocale>
-#include <QRegularExpression>
 
 #include <algorithm>
 
 namespace {
-
-QString normalizeLocaleName(const QString &name)
-{
-    QString out = name;
-    out.replace(QLatin1Char('-'), QLatin1Char('_'));
-    return out;
-}
 
 bool readJson(const QString &path, QJsonObject *out, QString *error)
 {
@@ -62,18 +52,16 @@ QHash<QString, QString> stringsFrom(const QJsonObject &root)
     return out;
 }
 
-QString readLocaleAliases(const QString &path, QStringList *aliases)
+void mergeStringTable(
+    const QString &path, QHash<QString, QString> &table)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-        return file.errorString();
-    while (!file.atEnd()) {
-        QString line = QString::fromUtf8(file.readLine()).trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
-            continue;
-        aliases->append(normalizeLocaleName(line));
-    }
-    return {};
+    QJsonObject root;
+    QString error;
+    if (!readJson(path, &root, &error))
+        return;
+    const QHash<QString, QString> extra = stringsFrom(root);
+    for (auto it = extra.constBegin(); it != extra.constEnd(); ++it)
+        table.insert(it.key(), it.value());
 }
 
 } // namespace
@@ -109,10 +97,14 @@ bool Tr::loadBaseTable()
     QString error;
     if (readJson(onDisk, &root, &error)) {
         m_base = stringsFrom(root);
+        mergeStringTable(
+            langDir() + QStringLiteral("/en_US/media.json"), m_base);
         return true;
     }
     if (readJson(embedded, &root, &error)) {
         m_base = stringsFrom(root);
+        mergeStringTable(
+            QStringLiteral(":/lang/en_US/media.json"), m_base);
         return true;
     }
     log(QStringLiteral("基准语言读不出来（%1）").arg(error));
@@ -190,102 +182,6 @@ bool Tr::applyCatalog(const QByteArray &json, QString *error)
     return true;
 }
 
-void Tr::scan()
-{
-    m_languages.clear();
-
-    const QDir dir(langDir());
-    if (!dir.exists()) {
-        log(QStringLiteral("语言目录不存在（%1）—— 只有基准语言 %2 可用")
-                .arg(dir.absolutePath(), baseCode()));
-    } else {
-        static const QRegularExpression validCode(
-            QStringLiteral("^[A-Za-z][A-Za-z0-9_]*$"));
-        const QStringList directories = dir.entryList(
-            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const QString &code : directories) {
-            if (!validCode.match(code).hasMatch()) {
-                log(QStringLiteral("跳过语言目录 %1：名称不合法").arg(code));
-                continue;
-            }
-            const QDir packDir(dir.filePath(code));
-            const QString manifestPath =
-                packDir.filePath(QStringLiteral("manifest.json"));
-            const QString uiPath =
-                packDir.filePath(QStringLiteral("ui.json"));
-            const QString shellPath =
-                packDir.filePath(QStringLiteral("shell.json"));
-            const QString aliasesPath =
-                packDir.filePath(QStringLiteral("locale-aliases.txt"));
-            if (!QFileInfo::exists(manifestPath)
-                || !QFileInfo::exists(uiPath)
-                || !QFileInfo::exists(shellPath)
-                || !QFileInfo::exists(aliasesPath)) {
-                log(QStringLiteral("跳过 %1：语言包文件不完整").arg(code));
-                continue;
-            }
-
-            QJsonObject manifest;
-            QString error;
-            if (!readJson(manifestPath, &manifest, &error)) {
-                log(QStringLiteral("跳过 %1：manifest.json：%2")
-                        .arg(code, error));
-                continue;
-            }
-            if (manifest.value(QStringLiteral("type")).toString()
-                    != QStringLiteral("MediaCast.LanguagePack")
-                || manifest.value(QStringLiteral("schemaVersion")).toInt()
-                    != 1
-                || manifest.value(QStringLiteral("language")).toString()
-                    != code) {
-                log(QStringLiteral("跳过 %1：manifest 标识不匹配").arg(code));
-                continue;
-            }
-            const QString name =
-                manifest.value(QStringLiteral("name")).toString().trimmed();
-            QJsonObject unused;
-            if (name.isEmpty() || !readJson(uiPath, &unused, &error)
-                || !readJson(shellPath, &unused, &error)) {
-                log(QStringLiteral("跳过 %1：语言包 JSON 无效").arg(code));
-                continue;
-            }
-
-            LanguageInfo info;
-            info.code = code;
-            info.name = name;
-            info.uiFile = uiPath;
-            const QString aliasError =
-                readLocaleAliases(aliasesPath, &info.systemNames);
-            if (!aliasError.isEmpty()) {
-                log(QStringLiteral("跳过 %1：locale-aliases.txt：%2")
-                        .arg(code, aliasError));
-                continue;
-            }
-            m_languages.append(info);
-        }
-    }
-
-    std::sort(
-        m_languages.begin(), m_languages.end(),
-        [](const LanguageInfo &left, const LanguageInfo &right) {
-            return left.code < right.code;
-        });
-    if (!find(baseCode(), nullptr)) {
-        LanguageInfo base;
-        base.code = baseCode();
-        base.name = QStringLiteral("English");
-        base.uiFile = QStringLiteral(":/lang/en_US/ui.json");
-        m_languages.prepend(base);
-    }
-
-    QStringList names;
-    for (const LanguageInfo &info : m_languages)
-        names.append(info.code);
-    log(QStringLiteral("语言目录：找到 %1 个语言（%2）")
-            .arg(m_languages.size())
-            .arg(names.join(QStringLiteral("、"))));
-}
-
 bool Tr::find(const QString &code, LanguageInfo *out) const
 {
     for (const LanguageInfo &info : m_languages) {
@@ -309,44 +205,6 @@ QVariantList Tr::languages() const
         out.append(item);
     }
     return out;
-}
-
-QString Tr::matchSystemLanguage() const
-{
-    const QStringList candidates = QLocale::system().uiLanguages();
-    for (const QString &candidate : candidates) {
-        const QString normalized = normalizeLocaleName(candidate);
-        for (const LanguageInfo &info : m_languages) {
-            for (const QString &systemName : info.systemNames) {
-                if (systemName.compare(
-                        normalized, Qt::CaseInsensitive) == 0)
-                    return info.code;
-            }
-        }
-    }
-    return {};
-}
-
-void Tr::setLanguage(const QString &requested)
-{
-    m_requested = requested;
-    QString code = requested;
-    if (code.isEmpty()) {
-        code = matchSystemLanguage();
-        if (code.isEmpty()) {
-            log(QStringLiteral("系统语言（%1）没有匹配语言包，改用 %2")
-                    .arg(QLocale::system().uiLanguages().join(
-                        QStringLiteral("、")), baseCode()));
-        }
-    } else if (!find(code, nullptr)) {
-        log(QStringLiteral("设置里的语言「%1」不存在，改用 %2")
-                .arg(code, baseCode()));
-    }
-    if (code.isEmpty() || !find(code, nullptr))
-        code = baseCode();
-    QString error;
-    if (!setResolvedLanguage(code, &error) && !error.isEmpty())
-        log(error);
 }
 
 void Tr::setRequestedLanguage(const QString &requested)
@@ -393,6 +251,8 @@ void Tr::loadActiveTable(const QString &code)
                 QStringLiteral(":/lang/en_US/ui.json"),
                 &root, &error)) {
             m_active = stringsFrom(root);
+            mergeStringTable(
+                QStringLiteral(":/lang/en_US/media.json"), m_active);
             m_effective = baseCode();
             return;
         }
@@ -404,6 +264,10 @@ void Tr::loadActiveTable(const QString &code)
     }
 
     m_active = stringsFrom(root);
+    const QFileInfo activeInfo(info.uiFile);
+    mergeStringTable(
+        activeInfo.absolutePath() + QStringLiteral("/media.json"),
+        m_active);
     m_effective = code;
     reportTableDifferences();
     log(QStringLiteral("语言 -> %1（%2 条）")

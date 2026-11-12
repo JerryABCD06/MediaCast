@@ -516,6 +516,119 @@ void testMediaLoadFailureFailsHttp()
     runtime.stop();
 }
 
+void testNewOwnerCancelsPendingOpen()
+{
+    WinsockRuntime winsock;
+    std::string error;
+    check(winsock.initialize(error), "new-owner test Winsock initializes");
+
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "New Owner Test",
+            "uuid:new-owner-test",
+            0,
+            1900,
+            true,
+            true,
+            true,
+            true,
+            10s,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    check(runtime.start(error),
+          "new-owner runtime starts: " + error);
+
+    std::string initialResponse;
+    std::atomic_bool initialDone{false};
+    std::jthread initialClient([&] {
+        initialResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.90",
+                setUriBody(
+                    "http://example.test/old-owner-current.mp4",
+                    "192.0.2.90")));
+        initialDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return initialDone.load(); });
+    initialClient.join();
+    check(initialResponse.starts_with("HTTP/1.1 200 OK"),
+          "old owner establishes the active session");
+
+    std::string pendingResponse;
+    std::atomic_bool pendingDone{false};
+    std::jthread pendingClient([&] {
+        pendingResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.90",
+                setUriBody(
+                    "http://example.test/old-owner-pending.mp4",
+                    "192.0.2.90")));
+        pendingDone = true;
+    });
+    const auto pendingDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!pendingDone.load()
+           && playback.snapshot().state == PlaybackState::NoMedia
+           && std::chrono::steady_clock::now() < pendingDeadline) {
+        static_cast<void>(playback.processNext());
+        std::this_thread::sleep_for(2ms);
+    }
+    while (!pendingDone.load()
+           && playback.snapshot().current.uri
+               != "http://example.test/old-owner-pending.mp4"
+           && std::chrono::steady_clock::now() < pendingDeadline) {
+        static_cast<void>(playback.processNext());
+        std::this_thread::sleep_for(2ms);
+    }
+    check(!pendingDone.load()
+              && playback.snapshot().state
+                  == PlaybackState::Preparing,
+          "old owner Open remains awaiting readiness");
+
+    std::string secondResponse;
+    std::atomic_bool secondDone{false};
+    std::jthread secondClient([&] {
+        secondResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.91",
+                setUriBody(
+                    "http://example.test/new-owner.mp4",
+                    "192.0.2.91")));
+        secondDone = true;
+    });
+    check(port.waitForPrompt().has_value(),
+          "new owner reaches confirmation");
+    port.decide(true);
+
+    const auto secondDeadline =
+        std::chrono::steady_clock::now() + 3s;
+    while (!secondDone.load()
+           && std::chrono::steady_clock::now() < secondDeadline) {
+        static_cast<void>(playback.processNext());
+        if (playback.snapshot().state == PlaybackState::Preparing)
+            playback.markReady();
+        std::this_thread::sleep_for(2ms);
+    }
+    pendingClient.join();
+    secondClient.join();
+
+    check(!pendingResponse.starts_with("HTTP/1.1 200 OK"),
+          "old owner's pending Open receives a definite failure");
+    check(secondResponse.starts_with("HTTP/1.1 200 OK")
+              && playback.snapshot().current.uri
+                  == "http://example.test/new-owner.mp4",
+          "new owner replaces the stale pending Open");
+    runtime.stop();
+}
+
 void testEarlyCommandCompletionDoesNotLoseWakeup()
 {
     EarlyCompletionGateway playback;
@@ -1025,6 +1138,8 @@ int main()
     testEndToEndInitialMediaAndConfirmation();
     std::cerr << "[ RUN ] media load failure\n";
     testMediaLoadFailureFailsHttp();
+    std::cerr << "[ RUN ] new owner cancels pending open\n";
+    testNewOwnerCancelsPendingOpen();
     std::cerr << "[ RUN ] early command completion\n";
     testEarlyCommandCompletionDoesNotLoseWakeup();
     std::cerr << "[ RUN ] receiving surface toggle\n";

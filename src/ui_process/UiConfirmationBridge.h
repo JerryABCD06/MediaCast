@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/MetadataPipeline.h"
 #include "ipc/Messages.h"
 
 #include <QByteArray>
@@ -64,6 +65,7 @@ private:
     std::unordered_map<std::uint64_t, ipc::CastConfirmationRequestInfo>
         m_pending;
     std::atomic_uint64_t m_nextMessageId{100};
+    MetadataPipeline m_metadataPipeline;
 };
 
 } // namespace mcast::ui_process

@@ -219,6 +219,21 @@ int main()
     check(next->body.find("PLAYING") != std::string::npos,
           "recovered event contains the latest complete state");
 
+    mcast::playback::PlaybackSnapshot paused = playing;
+    paused.state = mcast::playback::PlaybackState::Paused;
+    manager.updateState(paused);
+    const auto pausedEvent = sink.waitForNotify(2, 4s);
+    check(pausedEvent.has_value(),
+          "pause state produces a GENA event");
+    check(pausedEvent->header("seq").value_or("") == "2",
+          "pause event advances GENA sequence");
+    check(pausedEvent->body.find("PAUSED_PLAYBACK")
+              != std::string::npos
+              && pausedEvent->body.find(
+                  "TransportState val=\"PAUSED\"")
+                  == std::string::npos,
+          "pause event uses the SCPD transport-state token");
+
     const auto unsubscribed = manager.handleUnsubscribe(
         unsubscribeRequest(2, *sid));
     check(unsubscribed.status == 200,

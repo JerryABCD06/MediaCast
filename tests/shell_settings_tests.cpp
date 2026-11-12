@@ -40,6 +40,18 @@ std::string readAll(const std::filesystem::path &path)
 
 int main()
 {
+    if (const char *probePath =
+            std::getenv("MCAST_SETTINGS_TEST_PATH")) {
+        std::string probeError;
+        mcast::shell::ShellSettings probe(probePath);
+        const bool loaded = probe.load(probeError);
+        std::cout << "probe load=" << loaded
+                  << " error=" << probeError << '\n';
+        probeError.clear();
+        std::cout << "probe save=" << probe.save(probeError)
+                  << " error=" << probeError << '\n';
+        return loaded ? 0 : 1;
+    }
     const auto path = std::filesystem::temp_directory_path()
         / ("mcast-settings-" + std::to_string(GetCurrentProcessId())
            + ".json");
@@ -92,6 +104,25 @@ int main()
     check(!reloaded.acceptNewCast(), "main receiving state survives reload");
     check(reloaded.language() == "zh_CN",
           "main language still loads");
+
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file << R"({"ui":{"language":"zh_CN"},"cast":{"newcast":false},"picture":{"brightness":25,"contrast":-10,"bad":"value"}})";
+    }
+    mcast::shell::ShellSettings pictureSettings(path);
+    error.clear();
+    check(
+        pictureSettings.load(error),
+        "non-empty picture settings are repaired without iterator mutation");
+    check(
+        pictureSettings.pictureValues().at("brightness") == 25
+            && pictureSettings.pictureValues().at("contrast") == -10
+            && !pictureSettings.pictureValues().contains("bad"),
+        "picture value repair preserves valid entries and drops invalid ones");
+    error.clear();
+    check(
+        pictureSettings.save(error),
+        "repaired picture settings remain writable");
 
     {
         std::ofstream file(statePath, std::ios::binary | std::ios::trunc);

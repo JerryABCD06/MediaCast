@@ -14,8 +14,7 @@ import "../components"
 // `visible: page.category === 2`（现在由标签页决定谁显示），内容一个字没改。
 // 所以卡片的外观、间距、滚动条都还和以前一致。
 //
-// 数据来自 Device（就是 DlnaRenderer 那个门面，只暴露了这几项只读属性）。
-// 界面拿不到 DlnaRenderer 的任何操作能力。
+// 数据来自只读 Device 快照，界面不持有任何协议或播放操作能力。
 Item {
     id: root
 

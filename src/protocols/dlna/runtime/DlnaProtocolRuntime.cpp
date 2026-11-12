@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 namespace mcast::dlna::runtime {
@@ -17,7 +18,39 @@ bool sameMedia(
     const playback::MediaRequest &left,
     const playback::MediaRequest &right)
 {
-    return left.uri == right.uri && left.metadata == right.metadata;
+    // Raw DIDL intentionally stays in Protocol and is never sent through the
+    // Ui playback projection. Readiness is about one concrete network item;
+    // presentation fields may legitimately gain MPV/URI fallbacks after that.
+    return left.uri == right.uri;
+}
+
+std::string controlPointName(std::string_view userAgent)
+{
+    const std::string value(userAgent);
+    if (value.empty())
+        return {};
+
+    const auto productVersion = [&](std::string_view product) {
+        const std::size_t start = value.find(product);
+        if (start == std::string::npos)
+            return std::string{};
+        const std::size_t versionStart = start + product.size();
+        const std::size_t versionEnd =
+            value.find_first_of(" ;)(", versionStart);
+        const std::string version = value.substr(
+            versionStart, versionEnd == std::string::npos
+                ? std::string::npos : versionEnd - versionStart);
+        return std::string(product) + " "
+            + (version.empty() ? std::string{} : version);
+    };
+
+    if (!productVersion("BubbleUPnP/").empty())
+        return productVersion("BubbleUPnP/");
+    if (!productVersion("Cling/").empty())
+        return productVersion("Cling/");
+    if (!productVersion("Dart/").empty())
+        return productVersion("Dart/");
+    return value.size() > 120 ? value.substr(0, 120) : value;
 }
 
 } // namespace
@@ -52,7 +85,8 @@ DlnaProtocolRuntime::DlnaProtocolRuntime(
           },
           GenaManagerOptions{})
     , m_router(m_session, soap::SoapRouterOptions{
-          [] { return sessionNow(); }, m_options.log})
+          [] { return sessionNow(); }, m_options.log, true,
+          SessionTime{5000}})
     , m_handler(
           m_router, m_claimRuntime, [] { return castNow(); },
           httpCallbacks())
@@ -126,6 +160,7 @@ void DlnaProtocolRuntime::stop() noexcept
         m_mediaTasks.clear();
         m_pendingMedia.reset();
         m_earlyCommandCompletions.clear();
+        ++m_mediaGeneration;
     }
     m_mediaReady.notify_all();
     if (m_mediaThread.joinable())
@@ -320,21 +355,36 @@ claim::DlnaClaimHttpCallbacks DlnaProtocolRuntime::httpCallbacks()
     };
     callbacks.executeMedia =
         [this](const claim::DlnaMediaExecution &execution) {
-            m_session.newMediaRequested(sessionNow());
-            MediaTask task;
-            task.kind = MediaTask::Kind::ExecuteMedia;
-            task.media = execution;
-            enqueue(std::move(task));
+            if (!enqueueNewMedia(execution)) {
+                m_handler.mediaReady(
+                    execution.operationId, false, castNow());
+            }
         };
     callbacks.playNow = [this] {
-        MediaTask task;
-        task.kind = MediaTask::Kind::PlayNow;
-        enqueue(std::move(task));
+        PlaybackCommand command;
+        command.type = PlaybackCommandType::Play;
+        const auto result = m_session.submitAndWait(
+            std::move(command), SessionTime{5000});
+        if (result.timedOut || !result.outcome
+            || *result.outcome != PlaybackOutcomeStatus::Applied) {
+            throw std::runtime_error(
+                result.completionError.empty()
+                    ? "DLNA Play was not applied"
+                    : result.completionError);
+        }
     };
     callbacks.stopNow = [this] {
-        MediaTask task;
-        task.kind = MediaTask::Kind::StopNow;
-        enqueue(std::move(task));
+        PlaybackCommand command;
+        command.type = PlaybackCommandType::Stop;
+        const auto result = m_session.submitAndWait(
+            std::move(command), SessionTime{5000});
+        if (result.timedOut || !result.outcome
+            || *result.outcome != PlaybackOutcomeStatus::Applied) {
+            throw std::runtime_error(
+                result.completionError.empty()
+                    ? "DLNA Stop was not applied"
+                    : result.completionError);
+        }
     };
     callbacks.log = [this](const std::string &message) {
         log(message);
@@ -354,6 +404,56 @@ void DlnaProtocolRuntime::enqueue(MediaTask task)
         m_mediaTasks.push_back(std::move(task));
     }
     m_mediaReady.notify_one();
+}
+
+bool DlnaProtocolRuntime::enqueueNewMedia(
+    claim::DlnaMediaExecution execution)
+{
+    std::scoped_lock startLock(m_mediaStartMutex);
+    std::vector<std::uint64_t> cancelledOperations;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard lock(m_mediaMutex);
+        if (m_mediaStopping || !m_running
+            || (!m_receivingEnabled
+                && !m_surfaceKeptForActiveSession)) {
+            return false;
+        }
+        if (m_pendingMedia)
+            cancelledOperations.push_back(
+                m_pendingMedia->execution.operationId);
+        for (const MediaTask &task : m_mediaTasks) {
+            if (task.kind == MediaTask::Kind::ExecuteMedia)
+                cancelledOperations.push_back(task.media.operationId);
+        }
+        m_mediaTasks.clear();
+        m_pendingMedia.reset();
+        m_earlyCommandCompletions.clear();
+        generation = ++m_mediaGeneration;
+    }
+
+    // Old owner requests must receive a definite failure before the new owner
+    // starts. Their late playback completions are ignored by the Session epoch.
+    for (const std::uint64_t operationId : cancelledOperations)
+        m_handler.mediaReady(operationId, false, castNow());
+
+    m_session.newMediaRequested(sessionNow());
+
+    {
+        std::lock_guard lock(m_mediaMutex);
+        if (m_mediaStopping || !m_running
+            || (!m_receivingEnabled
+                && !m_surfaceKeptForActiveSession)) {
+            return false;
+        }
+        MediaTask task;
+        task.kind = MediaTask::Kind::ExecuteMedia;
+        task.media = std::move(execution);
+        task.generation = generation;
+        m_mediaTasks.push_back(std::move(task));
+    }
+    m_mediaReady.notify_one();
+    return true;
 }
 
 void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
@@ -377,33 +477,27 @@ void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
             continue;
         }
 
-        if (task.kind == MediaTask::Kind::PlayNow
-            || task.kind == MediaTask::Kind::StopNow) {
-            PlaybackCommand command;
-            command.type = task.kind == MediaTask::Kind::PlayNow
-                ? PlaybackCommandType::Play
-                : PlaybackCommandType::Stop;
-            const auto submission = m_session.submit(std::move(command));
-            if (!submission.queued) {
-                log(
-                    "DLNA playback command was not queued: "
-                    + submission.error);
-            }
-            continue;
-        }
-
+        std::unique_lock startLock(m_mediaStartMutex);
         {
             std::lock_guard lock(m_mediaMutex);
             if (!m_receivingEnabled)
                 continue;
+            if (task.generation != m_mediaGeneration) {
+                startLock.unlock();
+                m_handler.mediaReady(
+                    task.media.operationId, false, castNow());
+                continue;
+            }
             PendingMedia pending;
             pending.execution = task.media;
             pending.baselineStateVersion =
                 m_playback.snapshot().stateVersion;
+            pending.generation = task.generation;
             m_pendingMedia = std::move(pending);
         }
         const auto submission = m_session.openMedia(
-            task.media.media, sessionNow());
+            task.media.media, sessionNow(), task.media.newSession);
+        startLock.unlock();
         std::optional<std::uint64_t> failedOperation;
         bool readyFromSnapshot = false;
         {
@@ -573,11 +667,13 @@ void DlnaProtocolRuntime::stopConfirmationWorker() noexcept
 
 void DlnaProtocolRuntime::discardPendingMedia() noexcept
 {
+    std::scoped_lock startLock(m_mediaStartMutex);
     {
         std::lock_guard lock(m_mediaMutex);
         m_mediaTasks.clear();
         m_pendingMedia.reset();
         m_earlyCommandCompletions.clear();
+        ++m_mediaGeneration;
     }
     m_mediaReady.notify_all();
 }
@@ -630,6 +726,10 @@ bool DlnaProtocolRuntime::startHttpLocked(std::string &error)
         ? m_http.listenLoopback(
               m_options.httpPort,
               [this](const core::HttpRequest &request) {
+                  m_session.observeHttpClient(
+                      controlPointName(
+                          request.header("user-agent").value_or("")),
+                      request.peerAddress);
                   std::lock_guard requestLock(m_requestGateMutex);
                   if (!m_receivingEnabled
                       && !m_surfaceKeptForActiveSession) {
@@ -647,6 +747,10 @@ bool DlnaProtocolRuntime::startHttpLocked(std::string &error)
         : m_http.listenAny(
               m_options.httpPort,
               [this](const core::HttpRequest &request) {
+                  m_session.observeHttpClient(
+                      controlPointName(
+                          request.header("user-agent").value_or("")),
+                      request.peerAddress);
                   std::lock_guard requestLock(m_requestGateMutex);
                   if (!m_receivingEnabled
                       && !m_surfaceKeptForActiveSession) {
@@ -735,7 +839,7 @@ void DlnaProtocolRuntime::sessionLoop(std::stop_token stop)
 void DlnaProtocolRuntime::handlePlaybackEvent(
     const PlaybackEvent &event)
 {
-    m_gena.updateState(event.snapshot);
+    m_gena.updateState(m_session.snapshot().playback);
     if (!m_receivingEnabled
         && !m_surfaceKeptForActiveSession) {
         std::lock_guard lock(m_mediaMutex);

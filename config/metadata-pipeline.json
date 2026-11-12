@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "placeholders": [
+    "unkown",
+    "unknown",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "-",
+    "--",
+    "not available",
+    "not applicable",
+    "未知",
+    "未知艺术家",
+    "未知歌手",
+    "未知专辑",
+    "无"
+  ],
+  "text": {
+    "title": {
+      "sources": [
+        "protocol.title",
+        "file.title",
+        "uri.title",
+        "media_kind",
+        "unknown"
+      ],
+      "minimum_length": 2,
+      "minimum_letters": 1,
+      "maximum_digit_run": 4,
+      "maximum_digit_ratio_percent": 40,
+      "reject_patterns": [
+        "^\\d{5,}$"
+      ],
+      "media_extensions": [
+        "jpg", "jpeg", "png", "gif", "bmp", "webp",
+        "heic", "heif", "tif", "tiff", "avif",
+        "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus",
+        "wma", "ape", "mp4", "mkv", "avi", "mov", "wmv",
+        "flv", "webm", "ts", "m2ts", "mpg", "mpeg", "m4v",
+        "3gp", "rmvb"
+      ]
+    },
+    "artist": {
+      "sources": ["protocol.artist", "protocol.creator", "file.artist"],
+      "reject_patterns": []
+    },
+    "album": {
+      "sources": ["protocol.album", "file.album"],
+      "reject_patterns": []
+    },
+    "subtitle": {
+      "audio": {
+        "sources": [
+          "protocol.artist",
+          "protocol.creator",
+          "file.artist",
+          "protocol.album",
+          "file.album",
+          "unknown"
+        ],
+        "reject_patterns": []
+      },
+      "visual": {
+        "sources": [
+          "protocol.subtitle",
+          "protocol.description",
+          "protocol.long_description",
+          "file.subtitle",
+          "unknown"
+        ],
+        "reject_patterns": []
+      }
+    }
+  },
+  "artwork": {
+    "sources": ["protocol.artwork_uri", "file.artwork"]
+  }
+}

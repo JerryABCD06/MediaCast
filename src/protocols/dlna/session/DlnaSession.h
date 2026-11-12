@@ -6,11 +6,15 @@
 #include "playback/PlaybackGateway.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace mcast::dlna {
@@ -38,7 +42,15 @@ struct DlnaSessionSnapshot {
     bool peerGraceActive = false;
     SessionTime peerGraceDeadline{0};
     bool ending = false;
+    playback::CastSessionInfo castSession;
     PlaybackSnapshot playback;
+};
+
+struct DlnaCommandResult {
+    PlaybackCommandSubmission submission;
+    std::optional<PlaybackOutcomeStatus> outcome;
+    std::string completionError;
+    bool timedOut = false;
 };
 
 enum class SubscriptionChangeReason {
@@ -81,12 +93,18 @@ public:
     void setSubscriptionCount(
         std::size_t count, SubscriptionChangeReason reason, SessionTime now);
     void peerActivity(SessionTime now);
+    void observeHttpClient(
+        const std::string &name, const std::string &address);
     void newMediaRequested(SessionTime now);
     void tick(SessionTime now);
 
     PlaybackCommandSubmission openMedia(
-        const MediaRequest &request, SessionTime now);
+        const MediaRequest &request, SessionTime now,
+        bool clearPlaylist = false);
     PlaybackCommandSubmission submit(PlaybackCommand command);
+    DlnaCommandResult submitAndWait(
+        PlaybackCommand command,
+        SessionTime timeout = SessionTime{5000});
     PlaybackCommandSubmission endSession(SessionTime now);
     void resetForRestart();
 
@@ -111,6 +129,11 @@ private:
         bool finalSnapshotSeen = false;
     };
 
+    struct MediaCandidate {
+        MediaRequest media;
+        std::uint64_t epoch = 0;
+    };
+
     void setPeerConnected(
         bool connected, Lock &lock, bool queuePlayback = true);
     void queuePeerConnected(bool connected, Lock &lock);
@@ -120,7 +143,8 @@ private:
         PlaybackCommand command,
         Lock &lock,
         bool allowDefer = true,
-        std::optional<std::uint64_t> requiredOpenToken = std::nullopt);
+        std::optional<std::uint64_t> requiredOpenToken = std::nullopt,
+        std::uint64_t *awaitedCommandId = nullptr);
     void flushDeferredCommands(Lock &lock);
     void clearDeferredCommands();
     PlaybackCommandSubmission requestEnd(
@@ -131,6 +155,9 @@ private:
     void finishDisconnect(Lock &lock);
     void cancelPendingOpen(const std::string &reason, Lock &lock);
     void tryPendingOpen(Lock &lock);
+    void syncProtocolPlayback(const PlaybackSnapshot &playback);
+    void consumeEarlyCommand(std::uint64_t commandId, Lock &lock);
+    void publishCastSession(Lock &lock);
 
     PlaybackGateway &m_playback;
     mutable std::recursive_mutex m_mutex;
@@ -141,6 +168,9 @@ private:
     bool m_peerConnected = false;
     bool m_queuePeerDisconnect = false;
     bool m_disconnectedByUs = false;
+    std::string m_clientName;
+    std::string m_clientAddress;
+    playback::CastSessionInfo m_lastPublishedCastSession;
     std::size_t m_subscriptionCount = 0;
     std::optional<SessionTime> m_peerGraceDeadline;
     std::uint64_t m_playbackListener = 0;
@@ -148,7 +178,26 @@ private:
     std::uint64_t m_endToken = 0;
     std::optional<MediaRequest> m_pendingOpen;
     std::optional<SessionTime> m_openDeadline;
+    std::optional<MediaRequest> m_protocolCurrent;
+    std::optional<MediaRequest> m_protocolNext;
+    std::optional<MediaRequest> m_protocolPrevious;
+    std::optional<MediaCandidate> m_openAwaitingReady;
+    std::map<std::uint64_t, MediaCandidate> m_openCandidates;
+    std::map<std::uint64_t, MediaCandidate> m_setNextCandidates;
+    std::map<std::uint64_t, PlaybackEvent> m_earlyCommandEvents;
+    std::unordered_set<std::uint64_t> m_ignoredCommandIds;
+    std::unordered_set<std::string> m_ignoredPlaybackUris;
+    std::unordered_set<std::string> m_ignoredPlaybackNextUris;
+    std::uint64_t m_protocolEpoch = 0;
+    bool m_gatewaySubmitInProgress = false;
+    bool m_mediaBoundaryPending = false;
+    bool m_ignorePlaybackQueue = false;
     std::map<std::uint64_t, PlaybackCommandType> m_pendingCommands;
+    std::unordered_set<std::uint64_t> m_awaitedCommands;
+    std::map<std::uint64_t, std::pair<PlaybackOutcomeStatus, std::string>>
+        m_commandCompletions;
+    std::condition_variable_any m_commandReady;
+    std::uint64_t m_lastObservedStateVersion = 0;
     std::vector<PlaybackCommand> m_deferredAfterOpen;
     std::uint64_t m_openToken = 0;
     std::uint64_t m_openCommandId = 0;

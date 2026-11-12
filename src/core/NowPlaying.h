@@ -51,6 +51,7 @@ struct NowPlaying
     Q_PROPERTY(QString artist MEMBER artist)
     Q_PROPERTY(QString album MEMBER album)
     Q_PROPERTY(QString lyrics MEMBER lyrics)
+    Q_PROPERTY(QString artworkSource MEMBER artworkSource)
 
 public:
     /**
@@ -86,6 +87,12 @@ public:
      * 歌词只可能在文件里（DLNA 协议没有这一项），而文件里也只有音频可能有。
      */
     QString lyrics;
+
+    /**
+     * 已解析的封面 URI。可能是本地临时文件，也可能是 http/https 网络地址。
+     * QML 和 WindowsMediaControls 必须消费这同一个值。
+     */
+    QString artworkSource;
 
     /**
      * 有没有拿到至少一个标题。

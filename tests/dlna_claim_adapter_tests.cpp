@@ -88,6 +88,20 @@ void testOwnerMediaChangeDoesNotPrompt()
           "same owner identical SetURI does not advance media generation");
 }
 
+void testEmptyTitleDoesNotBecomeUri()
+{
+    CastClaimCoordinator coordinator(confirmationPolicy());
+    DlnaClaimAdapter adapter(coordinator);
+    MediaRequest request = media("http://a/no-title.mp4");
+    request.title.clear();
+    const auto outcome = adapter.beginMedia(
+        peer("192.0.2.10"), std::move(request), CastTime{0});
+    check(outcome.disposition == DlnaClaimDisposition::Execute
+              && outcome.media
+              && outcome.media->title.empty(),
+          "empty DLNA title stays empty for playback fallback");
+}
+
 void testDifferentPeerConfirmationLifecycle()
 {
     CastClaimCoordinator coordinator(confirmationPolicy());
@@ -460,6 +474,7 @@ void testCancelPending()
 
 int main()
 {
+    testEmptyTitleDoesNotBecomeUri();
     testOwnerMediaChangeDoesNotPrompt();
     testDifferentPeerConfirmationLifecycle();
     testRejectionKeepsOwner();

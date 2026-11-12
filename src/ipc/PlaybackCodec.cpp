@@ -26,7 +26,9 @@ using mcast::ipc::ProcessRole;
 
 constexpr std::uint16_t kBlobVersion = 1;
 constexpr std::uint32_t kMaxTextSize = 256 * 1024;
-constexpr std::uint32_t kMaxMediaBlobSize = 512 * 1024;
+// A MediaRequest is itself encoded into one IPC field. Its blob limit must
+// match the outer field limit, not the larger HTTP request-body allowance.
+constexpr std::uint32_t kMaxMediaBlobSize = mcast::ipc::kMaxFieldSize;
 constexpr std::uint32_t kMaxPictureControls = 64;
 constexpr std::uint32_t kSnapshotWireOverhead = 64 * 1024;
 constexpr std::uint32_t kMaxSnapshotBlobSize =
@@ -57,7 +59,7 @@ bool validatePlaybackCommand(
 {
     if (command.expectedGeneration == 0
         || !enumAtMost(
-            command.type, PlaybackCommandType::SetPeerConnected)
+            command.type, PlaybackCommandType::SetCastSession)
         || !enumAtMost(command.playMode, PlayMode::Direct)
         || !std::isfinite(command.doubleValue)) {
         error = "invalid playback command value";
@@ -254,6 +256,40 @@ private:
     std::size_t m_offset = 0;
 };
 
+bool encodeCastSession(
+    const CastSessionInfo &session, Writer &writer, std::string &error)
+{
+    writer.u8(session.connected ? 1 : 0);
+    writer.u8(session.remoteControlRegistered ? 1 : 0);
+    return writer.string(session.protocol, error)
+        && writer.string(session.controlPointName, error)
+        && writer.string(session.controlPointAddress, error);
+}
+
+bool decodeCastSession(
+    Reader &reader, CastSessionInfo &session, std::string &error)
+{
+    std::uint8_t connected = 0;
+    std::uint8_t remoteControlRegistered = 0;
+    if (!reader.u8(connected)
+        || !reader.u8(remoteControlRegistered)
+        || !reader.string(session.protocol, error)
+        || !reader.string(session.controlPointName, error)
+        || !reader.string(session.controlPointAddress, error)) {
+        if (error.empty())
+            error = "invalid cast session";
+        return false;
+    }
+    if (connected > 1 || remoteControlRegistered > 1) {
+        error = "invalid cast session flags";
+        return false;
+    }
+    session.connected = connected != 0;
+    session.remoteControlRegistered =
+        remoteControlRegistered != 0;
+    return true;
+}
+
 bool encodeMediaRequestBlob(
     const MediaRequest &request, Writer &writer, std::string &error)
 {
@@ -264,8 +300,12 @@ bool encodeMediaRequestBlob(
         || !writer.string(request.metadata, error)
         || !writer.string(request.title, error)
         || !writer.string(request.artist, error)
+        || !writer.string(request.creator, error)
         || !writer.string(request.album, error)
         || !writer.string(request.description, error)
+        || !writer.string(request.subtitle, error)
+        || !writer.string(request.longDescription, error)
+        || !writer.string(request.artworkUri, error)
         || !writer.string(request.protocol, error))
         return false;
     writer.u8(static_cast<std::uint8_t>(request.kind));
@@ -290,8 +330,12 @@ bool decodeMediaRequestBlob(
         || !reader.string(request.metadata, error)
         || !reader.string(request.title, error)
         || !reader.string(request.artist, error)
+        || !reader.string(request.creator, error)
         || !reader.string(request.album, error)
         || !reader.string(request.description, error)
+        || !reader.string(request.subtitle, error)
+        || !reader.string(request.longDescription, error)
+        || !reader.string(request.artworkUri, error)
         || !reader.string(request.protocol, error)
         || !reader.u8(kind)
         || !reader.u8(source)
@@ -354,7 +398,12 @@ encodeMediaRequest(const MediaRequest &request, std::string &error)
     Writer writer;
     if (!encodeMediaRequestBlob(request, writer, error))
         return std::nullopt;
-    return writer.finish();
+    auto bytes = writer.finish();
+    if (bytes.size() > kMaxMediaBlobSize) {
+        error = "media request exceeds IPC field limit";
+        return std::nullopt;
+    }
+    return bytes;
 }
 
 bool decodeMediaRequest(
@@ -389,6 +438,8 @@ encodePlaybackCommand(const PlaybackCommand &command, std::string &error)
     }
     if (!writer.bytes(media, error))
         return std::nullopt;
+    if (!encodeCastSession(command.castSession, writer, error))
+        return std::nullopt;
     return writer.finish();
 }
 
@@ -411,6 +462,8 @@ bool decodePlaybackCommand(
         || !reader.doubleValue(command.doubleValue)
         || !reader.u8(boolValue)
         || !reader.bytes(mediaBytes, error)
+        || !decodeCastSession(
+            reader, command.castSession, error)
         || !reader.done()) {
         if (error.empty())
             error = "invalid playback command blob";
@@ -419,7 +472,7 @@ bool decodePlaybackCommand(
     if (command.expectedGeneration == 0
         || !enumAtMost(
             static_cast<PlaybackCommandType>(type),
-            PlaybackCommandType::SetPeerConnected)
+            PlaybackCommandType::SetCastSession)
         || !enumAtMost(
             static_cast<PlayMode>(playMode), PlayMode::Direct)
         || boolValue > 1
@@ -478,7 +531,8 @@ encodePlaybackSnapshot(const PlaybackSnapshot &snapshot, std::string &error)
     writer.i32(snapshot.volumePercent);
     if (!writer.bytes(*current, error)
         || !writer.bytes(*next, error)
-        || !writer.bytes(controls.finish(), error))
+        || !writer.bytes(controls.finish(), error)
+        || !encodeCastSession(snapshot.castSession, writer, error))
         return std::nullopt;
     auto result = writer.finish();
     if (result.size() > kMaxSnapshotBlobSize) {
@@ -520,6 +574,7 @@ bool decodePlaybackSnapshot(
         || !reader.bytes(currentBytes, error)
         || !reader.bytes(nextBytes, error)
         || !reader.bytes(controlsBytes, error)
+        || !decodeCastSession(reader, snapshot.castSession, error)
         || !reader.done()) {
         if (error.empty())
             error = "invalid playback snapshot blob";

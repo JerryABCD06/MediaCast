@@ -139,6 +139,228 @@ void testRejectedQueuedCommand()
           "queued command rejection is reported after acceptance");
 }
 
+void testSubmitAndWaitObservesAppliedState()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    PlaybackCommand command;
+    command.type = PlaybackCommandType::SetNext;
+    command.media.uri = "http://example.test/next.mp4";
+    std::jthread processor([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        playback.processAll();
+    });
+    const auto result = session.submitAndWait(
+        std::move(command), SessionTime{2000});
+    processor.join();
+    check(result.outcome
+              && *result.outcome == PlaybackOutcomeStatus::Applied
+              && !result.timedOut,
+          "synchronous command wait completes with an applied result");
+    check(playback.snapshot().next.uri
+              == "http://example.test/next.mp4"
+              && playback.snapshot().hasNext,
+          "synchronous wait returns only after playback state is visible");
+}
+
+void testUiOriginatedNextAdvancesProtocolRecord()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest current;
+    current.uri = "http://example.test/current.mp4";
+    current.metadata = "<DIDL-Lite><current/></DIDL-Lite>";
+    check(session.openMedia(current, SessionTime{0}).queued,
+          "protocol-next test opens current media");
+    playback.processAll();
+    playback.markReady();
+
+    MediaRequest next;
+    next.uri = "http://example.test/next.mp4";
+    next.metadata = "<DIDL-Lite><next/></DIDL-Lite>";
+    PlaybackCommand setNext;
+    setNext.type = PlaybackCommandType::SetNext;
+    setNext.media = next;
+    check(session.submit(setNext).queued,
+          "protocol-next test queues next media");
+    playback.processAll();
+
+    // This bypasses DlnaSession::submit, modelling QML, SMTC or automatic
+    // queue advance calling PlaybackController directly.
+    PlaybackCommand uiNext;
+    uiNext.type = PlaybackCommandType::Next;
+    check(playback.submit(uiNext).queued,
+          "UI-originated next is submitted directly to playback");
+    playback.processAll();
+
+    const auto snapshot = session.snapshot().playback;
+    check(snapshot.current.uri == next.uri
+              && snapshot.current.metadata == next.metadata
+              && !snapshot.hasNext,
+          "UI-originated next advances the Protocol raw media record");
+}
+
+void testOpenCommitsOnlyAfterReady()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+
+    MediaRequest current;
+    current.uri = "http://example.test/ready-current.mp4";
+    current.metadata = "<DIDL-Lite><current/></DIDL-Lite>";
+    check(session.openMedia(current, SessionTime{0}).queued,
+          "ready commit test opens current media");
+    playback.processAll();
+    check(session.snapshot().playback.current.uri.empty(),
+          "Open is not committed while playback is still preparing");
+    playback.markReady();
+    check(session.snapshot().playback.current.uri == current.uri
+              && session.snapshot().playback.current.metadata
+                  == current.metadata,
+          "Open commits its raw Protocol record after playback is ready");
+
+    MediaRequest next;
+    next.uri = "http://example.test/ready-next.mp4";
+    PlaybackCommand setNext;
+    setNext.type = PlaybackCommandType::SetNext;
+    setNext.media = next;
+    check(session.submit(setNext).queued,
+          "ready commit test queues next media");
+    playback.processAll();
+
+    session.newMediaRequested(SessionTime{1});
+    MediaRequest failing;
+    failing.uri = "http://example.test/ready-failure.mp4";
+    check(session.openMedia(failing, SessionTime{1}).queued,
+          "ready commit test queues failing replacement");
+    playback.processAll();
+    playback.markReady(false);
+
+    const auto snapshot = session.snapshot().playback;
+    check(snapshot.current.uri.empty()
+              && snapshot.next.uri.empty(),
+          "failed replacement clears media instead of exposing a mismatched current");
+}
+
+void testOpenDeadlineDropsLateCompletion()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest media;
+    media.uri = "http://example.test/late-open.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "late open test queues media");
+    session.tick(SessionTime{20000});
+    playback.processAll();
+    const auto snapshot = session.snapshot();
+    check(snapshot.playback.current.uri.empty()
+              && !session.transportTransitionPending(),
+          "timed-out Open cannot commit a late playback completion");
+}
+
+void testNewMediaBoundaryDropsLateQueueAndShowsProtocolPrevious()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+
+    MediaRequest current;
+    current.uri = "http://example.test/boundary-current.mp4";
+    current.metadata = "<DIDL-Lite><boundary-current/></DIDL-Lite>";
+    check(session.openMedia(current, SessionTime{0}).queued,
+          "boundary test opens current media");
+    playback.processAll();
+    playback.markReady();
+
+    MediaRequest next;
+    next.uri = "http://example.test/boundary-next.mp4";
+    next.metadata = "<DIDL-Lite><boundary-next/></DIDL-Lite>";
+    PlaybackCommand setNext;
+    setNext.type = PlaybackCommandType::SetNext;
+    setNext.media = next;
+    check(session.submit(setNext).queued,
+          "boundary test queues next media");
+    playback.processAll();
+    check(session.snapshot().playback.hasNext
+              && !session.snapshot().playback.hasPrevious,
+          "Protocol exposes only the queue it received");
+
+    PlaybackCommand uiNext;
+    uiNext.type = PlaybackCommandType::Next;
+    check(playback.submit(uiNext).queued,
+          "boundary test advances through the Protocol queue");
+    playback.processAll();
+    check(session.snapshot().playback.current.uri == next.uri
+              && session.snapshot().playback.hasPrevious
+              && !session.snapshot().playback.hasNext,
+          "Protocol previous becomes available only after a known advance");
+
+    PlaybackCommand lateNext;
+    lateNext.type = PlaybackCommandType::SetNext;
+    lateNext.media.uri = "http://example.test/boundary-stale.mp4";
+    check(session.submit(lateNext).queued,
+          "boundary test queues a command before owner change");
+    session.newMediaRequested(SessionTime{2});
+    playback.processAll();
+    check(!session.snapshot().playback.hasNext,
+          "new media boundary discards a late SetNext completion");
+}
+
+void testTimedOutSetNextCannotAppearLater()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest current;
+    current.uri = "http://example.test/timeout-current.mp4";
+    check(session.openMedia(current, SessionTime{0}).queued,
+          "SetNext timeout test opens current media");
+    playback.processAll();
+    playback.markReady();
+
+    PlaybackCommand initialNext;
+    initialNext.type = PlaybackCommandType::SetNext;
+    initialNext.media.uri = "http://example.test/timeout-initial-next.mp4";
+    check(session.submit(initialNext).queued,
+          "SetNext timeout test establishes an existing next");
+    playback.processAll();
+
+    PlaybackCommand setNext;
+    setNext.type = PlaybackCommandType::SetNext;
+    setNext.media.uri = "http://example.test/timeout-next.mp4";
+    const auto result = session.submitAndWait(
+        std::move(setNext), SessionTime{1});
+    check(result.timedOut,
+          "SetNext wait reports timeout");
+    playback.processAll();
+    check(session.snapshot().playback.next.uri
+              == "http://example.test/timeout-initial-next.mp4",
+          "timed-out SetNext cannot replace the last valid next record");
+}
+
+void testCastSessionInfoTracksRegistration()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    session.observeHttpClient(
+        "BubbleUPnP 4.6.7.1", "192.168.10.3");
+    session.setSubscriptionCount(
+        1, SubscriptionChangeReason::Added, SessionTime{0});
+    auto info = session.snapshot().castSession;
+    check(info.connected && info.remoteControlRegistered
+              && info.protocol == "DLNA"
+              && info.controlPointName == "BubbleUPnP 4.6.7.1"
+              && info.controlPointAddress == "192.168.10.3",
+          "DLNA session reports a registered control point");
+    check(session.snapshot().playback.castSession.protocol == "DLNA",
+          "cast session is included in the authoritative snapshot");
+
+    session.setSubscriptionCount(
+        0, SubscriptionChangeReason::ExplicitRemoval,
+        SessionTime{1});
+    info = session.snapshot().castSession;
+    check(!info.connected && !info.remoteControlRegistered,
+          "control point removal clears the session");
+}
+
 void testQueuedOpenPause()
 {
     FakePlaybackGateway playback;
@@ -235,7 +457,7 @@ void testOpenDeadlineClearsAfterSuccess()
           "successful open clears its deadline");
 }
 
-void testOpenDeadlineClearsOnProgressSnapshot()
+void testPreparingSnapshotDoesNotClearOpenDeadline()
 {
     FakePlaybackGateway playback;
     int failures = 0;
@@ -254,16 +476,59 @@ void testOpenDeadlineClearsOnProgressSnapshot()
     media.uri = "http://example.test/snapshot-first.mp4";
     check(session.openMedia(media, SessionTime{0}).queued,
           "snapshot deadline test open queued");
+    playback.processAll();
     PlaybackEvent event;
     event.kind = PlaybackEventKind::SnapshotChanged;
     event.snapshot = playback.snapshot();
     event.snapshot.state = PlaybackState::Preparing;
-    event.snapshot.playerAvailable = true;
     ++event.snapshot.stateVersion;
     session.handlePlaybackEvent(event);
     session.tick(SessionTime{20000});
-    check(failures == 0,
-          "a progress snapshot clears the open deadline before command ack");
+    check(failures == 1
+              && session.snapshot().playback.current.uri.empty()
+              && !session.transportTransitionPending(),
+          "Preparing alone does not clear or commit the Open transaction");
+}
+
+void testStoppedBeforeReadyCancelsOpen()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    MediaRequest media;
+    media.uri = "http://example.test/stopped-before-ready.mp4";
+    check(session.openMedia(media, SessionTime{0}).queued,
+          "stopped-before-ready test queues Open");
+    playback.processAll();
+
+    PlaybackEvent event;
+    event.kind = PlaybackEventKind::SnapshotChanged;
+    event.snapshot = playback.snapshot();
+    event.snapshot.state = PlaybackState::Stopped;
+    event.snapshot.loadStatus = LoadStatus::Ok;
+    ++event.snapshot.stateVersion;
+    session.handlePlaybackEvent(event);
+
+    check(session.snapshot().playback.current.uri.empty()
+              && !session.transportTransitionPending(),
+          "Stopped before readiness revokes the Open transaction");
+}
+
+void testMediaBoundaryIgnoresOldUiSnapshot()
+{
+    FakePlaybackGateway playback;
+    DlnaSession session(playback, {});
+    session.newMediaRequested(SessionTime{0});
+
+    PlaybackEvent stale;
+    stale.kind = PlaybackEventKind::SnapshotChanged;
+    stale.snapshot.current.uri =
+        "http://example.test/previous-owner.mp4";
+    stale.snapshot.state = PlaybackState::Playing;
+    stale.snapshot.stateVersion = 1;
+    session.handlePlaybackEvent(stale);
+
+    check(session.snapshot().playback.current.uri.empty(),
+          "old Ui snapshot cannot cross a new media boundary");
 }
 
 void testPauseCancelsOpenBeforeSubmission()
@@ -398,10 +663,19 @@ int main()
 {
     testConcurrentSessionAccess();
     testRejectedQueuedCommand();
+    testSubmitAndWaitObservesAppliedState();
+    testUiOriginatedNextAdvancesProtocolRecord();
+    testOpenCommitsOnlyAfterReady();
+    testOpenDeadlineDropsLateCompletion();
+    testNewMediaBoundaryDropsLateQueueAndShowsProtocolPrevious();
+    testTimedOutSetNextCannotAppearLater();
+    testCastSessionInfoTracksRegistration();
     testQueuedOpenPause();
     testCallbacksRunOutsideLock();
     testOpenDeadlineClearsAfterSuccess();
-    testOpenDeadlineClearsOnProgressSnapshot();
+    testPreparingSnapshotDoesNotClearOpenDeadline();
+    testStoppedBeforeReadyCancelsOpen();
+    testMediaBoundaryIgnoresOldUiSnapshot();
     testPauseCancelsOpenBeforeSubmission();
     testPauseCancelsOpenDuringGatewaySnapshot();
     testPauseRetriesRejectedEndAfterQueuedOpen();

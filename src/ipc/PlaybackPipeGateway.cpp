@@ -345,6 +345,7 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
         const auto generation = m_snapshot.generation;
         const auto stateVersion = m_snapshot.stateVersion + 1;
         const bool peerConnected = m_snapshot.peerConnected;
+        const auto castSession = m_snapshot.castSession;
         const int volume = m_snapshot.volumePercent;
         const bool muted = m_snapshot.muted;
         const auto controls = m_snapshot.pictureControls;
@@ -353,6 +354,7 @@ void PlaybackPipeGateway::markDisconnected(const std::string &reason)
         m_snapshot.stateVersion = stateVersion;
         m_snapshot.playerAvailable = false;
         m_snapshot.peerConnected = peerConnected;
+        m_snapshot.castSession = castSession;
         m_snapshot.volumePercent = volume;
         m_snapshot.muted = muted;
         m_snapshot.pictureControls = controls;

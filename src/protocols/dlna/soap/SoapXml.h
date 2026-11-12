@@ -18,6 +18,12 @@ struct SoapRequestXml {
     std::optional<std::string> value(std::string_view name) const;
 };
 
+struct DidlResource {
+    std::string uri;
+    std::optional<std::string> protocolInfo;
+    std::optional<std::string> resolution;
+};
+
 struct DidlMetadata {
     std::optional<std::string> title;
     std::optional<std::string> upnpClass;
@@ -27,6 +33,8 @@ struct DidlMetadata {
     std::optional<std::string> subtitle;
     std::optional<std::string> description;
     std::optional<std::string> longDescription;
+    std::optional<std::string> albumArtUri;
+    std::vector<DidlResource> resources;
 };
 
 bool parseSoapRequest(

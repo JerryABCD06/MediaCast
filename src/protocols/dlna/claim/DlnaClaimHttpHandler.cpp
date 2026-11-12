@@ -3,6 +3,8 @@
 
 #include "protocols/dlna/claim/DlnaClaimHttpHandler.h"
 
+#include "ipc/PlaybackCodec.h"
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -111,12 +113,22 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             };
         }
         const cast::PeerIdentity peer = peerIdentity(request);
+        auto media = soap::SoapRouter::mediaRequest(*uri, *metadata);
+        std::string mediaError;
+        if (!mcast::playback::wire::encodeMediaRequest(
+                media, mediaError)) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                soap::SoapRouter::faultResponse(
+                    402, "Invalid Args"),
+            };
+        }
         {
             std::lock_guard lock(m_mutex);
             m_requests[request.requestId] = ResponseKind::SetUri;
             actions = m_runtime.beginSetUri(
                 request.requestId, peer,
-                soap::SoapRouter::mediaRequest(*uri, *metadata),
+                std::move(media),
                 m_now());
         }
     } else if (parsed->action == "Play") {
@@ -129,6 +141,15 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
         }
         m_router.notePeerActivity();
         const cast::PeerIdentity peer = peerIdentity(request);
+        if (m_runtime.ownsPeer(peer)
+            && !m_runtime.mediaOpening()
+            && !m_router.hasTransportMedia()) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                soap::SoapRouter::faultResponse(
+                    701, "Transition not available"),
+            };
+        }
         {
             std::lock_guard lock(m_mutex);
             m_requests[request.requestId] = ResponseKind::Play;
@@ -138,6 +159,15 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
     } else if (parsed->action == "Stop") {
         m_router.notePeerActivity();
         const cast::PeerIdentity peer = peerIdentity(request);
+        if (m_runtime.ownsPeer(peer)
+            && !m_runtime.mediaOpening()
+            && !m_router.hasTransportMedia()) {
+            return {
+                net::HttpDispatchStatus::Completed,
+                soap::SoapRouter::faultResponse(
+                    701, "Transition not available"),
+            };
+        }
         {
             std::lock_guard lock(m_mutex);
             m_requests[request.requestId] = ResponseKind::Stop;

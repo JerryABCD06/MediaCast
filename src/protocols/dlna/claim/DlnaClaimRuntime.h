@@ -67,6 +67,7 @@ public:
     DlnaClaimRuntimeActions controlLost(cast::CastTime now);
 
     bool mediaOpening() const noexcept { return m_operation.has_value(); }
+    bool ownsPeer(const cast::PeerIdentity &peer) const;
     std::optional<std::uint64_t> operationId() const noexcept;
     std::optional<cast::ClaimKey> pendingKey() const noexcept;
 

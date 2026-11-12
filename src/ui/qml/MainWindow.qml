@@ -364,6 +364,7 @@ FluWindow {
     // 为什么不做成平级页签（原来的 FluPivot）：平级页签和二级页是两种导航模型，
     // 混在一起用户会分不清自己在哪一层 —— 尤其"设置"里以后会长出子页面。
     property int page: 0        // 0 = 投屏，1 = 设置
+    property bool infoOpen: false
 
     // ── 「显示效果」那个独立窗口 ─────────────────────────────────────────
     //
@@ -437,16 +438,21 @@ FluWindow {
         mode: window.page === 0 ? 0 : 1
         pageTitle: qsTr("ui_nav_settings")
 
-        onBackClicked: window.page = 0
-        onSettingsClicked: window.page = 1
+        onBackClicked: {
+            window.infoOpen = false
+            window.page = 0
+        }
+        onSettingsClicked: {
+            window.infoOpen = false
+            window.page = 1
+        }
         onDisconnectClicked: {
-            // 和"关窗口时确认断开"走的是同一条路：Shell 把意思发出去，main() 把它
-            // 接在 DlnaRenderer::endSession 上（结束会话、推事件、让设备在网络里
-            // 消失一下再回来）。界面不认识 DLNA，也不该认识。
+            // 和"关窗口时确认断开"走同一条路：Shell 把意思交给 UiMain，
+            // 再经 PlaybackBridge 通知 Protocol 结束会话。界面不认识 DLNA。
             Shell.endCasting()
         }
         onInfoClicked: {
-            // TODO：「关于」那一类信息。先留空壳。
+            window.infoOpen = !window.infoOpen
         }
 
         // 顶栏上**我们自己的**按钮要登记成"不算标题栏"，否则按下去是拖窗口。
@@ -460,6 +466,13 @@ FluWindow {
             window.setHitTestVisible(topBar.infoButton)
             window.setHitTestVisible(topBar.settingsButton)
         }
+    }
+
+    InfoFlyout {
+        anchors.fill: parent
+        hostWindow: window
+        visible: window.infoOpen
+        onCloseRequested: window.infoOpen = false
     }
 
     // ── 页面 ─────────────────────────────────────────────────────────────

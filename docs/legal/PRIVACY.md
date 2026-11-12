@@ -1,6 +1,7 @@
 # Media Cast — Privacy Notice
 
-**Applies to:** the Media Cast Receiver application itself (`MCast.exe`). It does not
+**Applies to:** the Media Cast Receiver processes (`MCast.Shell.exe`,
+`MCast.Protocol.exe`, and `MCast.Ui.exe`). It does not
 describe what sender applications, the operating system, or third-party services do.
 
 ## In one sentence

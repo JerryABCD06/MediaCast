@@ -8,6 +8,9 @@
 #include "ui_process/PlaybackBridge.h"
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QUrl>
 
 #include <algorithm>
 #include <chrono>
@@ -66,7 +69,6 @@ public:
     qint64 mediaSizeBytes() const override { return 4096; }
     int volumePercent() const override { return m_volume; }
     bool isMuted() const override { return m_muted; }
-    void setVideoWindow(quintptr) override {}
     QVector<PictureControlInfo> pictureControls() const override
     {
         return {{QStringLiteral("brightness"), 0, 100, 50}};
@@ -84,6 +86,21 @@ public:
         return name == QStringLiteral("brightness") ? m_brightness : 0;
     }
     void simulateLost() { emit lost(); }
+    void simulateMetadata(
+        const QVariantMap &tags, const QString &mediaUri)
+    {
+        emit metadataChanged(tags, mediaUri);
+    }
+    void simulateArtwork(
+        const QString &artwork, const QString &mediaUri)
+    {
+        emit artworkChanged(artwork, mediaUri);
+    }
+    void simulateMediaKind(
+        ::MediaKind kind, const QString &mediaUri)
+    {
+        emit mediaKindChanged(kind, mediaUri);
+    }
 
 private:
     QString m_uri;
@@ -126,11 +143,69 @@ bool pumpUntil(
     return condition();
 }
 
+void testStalePlayerSignalsAreIgnored()
+{
+    FakeMediaPlayer player;
+    PlaybackController controller(&player);
+    PlaybackController::MediaRequest first;
+    first.uri = QStringLiteral("http://example.test/first.mp4");
+    first.title = QStringLiteral("First");
+    controller.openUri(first, ::MediaSource::Cast);
+
+    player.simulateMetadata(
+        {{QStringLiteral("title"), QStringLiteral("Old title")}},
+        QStringLiteral("http://example.test/old.mp4"));
+    check(controller.nowPlaying().title == QStringLiteral("First"),
+          "stale metadata from another media URI is ignored");
+    QTemporaryDir temporary;
+    check(temporary.isValid(), "stale artwork temporary directory");
+    const QString artworkPath =
+        temporary.filePath(QStringLiteral("cover.png"));
+    QFile artworkFile(artworkPath);
+    check(artworkFile.open(QIODevice::WriteOnly),
+          "create stale artwork test file");
+    artworkFile.write("image");
+    artworkFile.close();
+    const QString artworkUri = QUrl::fromLocalFile(artworkPath).toString();
+    player.simulateArtwork(
+        artworkUri, QStringLiteral("http://example.test/old.mp4"));
+    check(controller.nowPlaying().artworkSource.isEmpty(),
+          "stale artwork from another media URI is ignored");
+    player.simulateArtwork(artworkUri, first.uri);
+    check(controller.nowPlaying().artworkSource == artworkUri,
+          "artwork for the active media URI still applies");
+
+    PlaybackController::MediaRequest second;
+    second.uri = QStringLiteral("http://example.test/second.mp4");
+    second.kind = ::MediaKind::Audio;
+    controller.openUri(second, ::MediaSource::Cast);
+    player.simulateMetadata(
+        {{QStringLiteral("title"), QStringLiteral("First stale")}},
+        first.uri);
+    check(controller.nowPlaying().title != QStringLiteral("First stale"),
+          "metadata arriving after a media switch cannot contaminate it");
+    player.simulateArtwork(artworkUri, first.uri);
+    check(controller.nowPlaying().artworkSource.isEmpty(),
+          "artwork arriving after a media switch cannot contaminate it");
+    player.simulateMediaKind(
+        ::MediaKind::Video, second.uri);
+    check(controller.nowPlaying().kind == ::MediaKind::Video,
+          "MPV actual track kind overrides a false protocol kind");
+    player.simulateMetadata(
+        {{QStringLiteral("title"), QStringLiteral("Second")}},
+        second.uri);
+    check(controller.nowPlaying().title == QStringLiteral("Second"),
+          "metadata for the active media URI still applies");
+    check(controller.nowPlaying().artworkSource.isEmpty(),
+          "previous artwork is cleared when switching media");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
+    testStalePlayerSignalsAreIgnored();
     const std::wstring pipeName =
         mcast::ipc::makePlaybackPipeName(L"ui-bridge-test");
     mcast::ipc::PipeListener listener(pipeName, 2);
@@ -174,8 +249,12 @@ int main(int argc, char **argv)
     open.media.metadata = "<DIDL-Lite/>";
     open.media.title = "Movie";
     open.media.artist = "Artist";
+    open.media.creator = "Creator";
     open.media.album = "Album";
     open.media.description = "Description";
+    open.media.subtitle = "Subtitle";
+    open.media.longDescription = "Long Description";
+    open.media.artworkUri = "https://example.test/cover.jpg";
     open.media.protocol = "DLNA";
     open.media.kind = types::MediaKind::Video;
     const auto beforeUiReady = gateway.submit(open);
@@ -231,8 +310,14 @@ int main(int argc, char **argv)
     check(openDelta, "state delta reports open");
     check(gateway.snapshot().current.title == "Movie"
               && gateway.snapshot().current.artist == "Artist"
+              && gateway.snapshot().current.creator == "Creator"
               && gateway.snapshot().current.album == "Album"
-              && gateway.snapshot().current.description == "Description",
+              && gateway.snapshot().current.description == "Description"
+              && gateway.snapshot().current.subtitle == "Subtitle"
+              && gateway.snapshot().current.longDescription
+                  == "Long Description"
+              && gateway.snapshot().current.artworkUri
+                  == "https://example.test/cover.jpg",
           "full media request survives snapshot");
     check(gateway.snapshot().current.metadata == "<DIDL-Lite/>",
           "metadata survives snapshot");
@@ -240,6 +325,31 @@ int main(int argc, char **argv)
           "protocol survives snapshot");
     check(gateway.snapshot().current.kind == types::MediaKind::Video,
           "kind survives snapshot");
+
+    PlaybackCommand castSession;
+    castSession.type = PlaybackCommandType::SetCastSession;
+    castSession.expectedGeneration = 42;
+    castSession.castSession.connected = true;
+    castSession.castSession.protocol = "DLNA";
+    castSession.castSession.controlPointName = "BubbleUPnP 4.6.7.1";
+    castSession.castSession.controlPointAddress = "192.168.10.3";
+    castSession.castSession.remoteControlRegistered = true;
+    check(gateway.submit(castSession).queued,
+          "cast session info queues");
+    check(pumpUntil(application, [&] {
+        const QVariantMap info = controller.castSession();
+        return info.value(QStringLiteral("connected")).toBool()
+            && info.value(QStringLiteral("protocol")).toString()
+                == QStringLiteral("DLNA")
+            && info.value(QStringLiteral("remoteControlRegistered")).toBool();
+    }), "cast session info applies");
+    check(pumpUntil(application, [&] {
+        const auto snapshot = gateway.snapshot();
+        return snapshot.castSession.connected
+            && snapshot.castSession.protocol == "DLNA"
+            && snapshot.castSession.controlPointName
+                == "BubbleUPnP 4.6.7.1";
+    }), "cast session survives the UI playback snapshot");
 
     PlaybackCommand volume;
     volume.type = PlaybackCommandType::SetVolume;

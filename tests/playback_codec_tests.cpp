@@ -32,8 +32,12 @@ types::MediaRequest media()
         "<DIDL-Lite><item><dc:title>Movie &amp; Test</dc:title></item></DIDL-Lite>";
     value.title = "Movie & Test";
     value.artist = "Artist";
+    value.creator = "Creator";
     value.album = "Album";
     value.description = "Description";
+    value.subtitle = "Subtitle";
+    value.longDescription = "Long Description";
+    value.artworkUri = "https://example.test/cover.jpg";
     value.protocol = "DLNA";
     value.kind = types::MediaKind::Video;
     value.source = types::MediaSource::Cast;
@@ -54,6 +58,10 @@ int main()
           "media request decodes");
     check(decodedMedia.uri == source.uri
               && decodedMedia.metadata == source.metadata
+              && decodedMedia.creator == source.creator
+              && decodedMedia.subtitle == source.subtitle
+              && decodedMedia.longDescription == source.longDescription
+              && decodedMedia.artworkUri == source.artworkUri
               && decodedMedia.mediaSizeBytes == source.mediaSizeBytes,
           "media request round trip");
     auto trailing = *mediaBlob;
@@ -69,6 +77,11 @@ int main()
     command.intValue = -12;
     command.doubleValue = 34.5;
     command.boolValue = true;
+    command.castSession.connected = true;
+    command.castSession.protocol = "DLNA";
+    command.castSession.controlPointName = "BubbleUPnP 4.6.7.1";
+    command.castSession.controlPointAddress = "192.168.10.3";
+    command.castSession.remoteControlRegistered = true;
     const auto commandBlob = encodePlaybackCommand(command, error);
     check(commandBlob.has_value(), "command encodes");
     types::PlaybackCommand decodedCommand;
@@ -79,7 +92,14 @@ int main()
               && decodedCommand.media.metadata == source.metadata
               && decodedCommand.intValue == -12
               && decodedCommand.doubleValue == 34.5
-              && decodedCommand.boolValue,
+              && decodedCommand.boolValue
+              && decodedCommand.castSession.connected
+              && decodedCommand.castSession.protocol == "DLNA"
+              && decodedCommand.castSession.controlPointName
+                  == "BubbleUPnP 4.6.7.1"
+              && decodedCommand.castSession.controlPointAddress
+                  == "192.168.10.3"
+              && decodedCommand.castSession.remoteControlRegistered,
           "command round trip");
     auto invalidCommand = *commandBlob;
     invalidCommand[2] = 255;
@@ -106,6 +126,11 @@ int main()
         {"brightness", 0, 100, 50, 65},
         {"contrast", 0, 100, 50, 40},
     };
+    snapshot.castSession.connected = true;
+    snapshot.castSession.protocol = "DLNA";
+    snapshot.castSession.controlPointName = "BubbleUPnP 4.6.7.1";
+    snapshot.castSession.controlPointAddress = "192.168.10.3";
+    snapshot.castSession.remoteControlRegistered = true;
     snapshot.generation = 9;
     snapshot.stateVersion = 42;
     const auto snapshotBlob = encodePlaybackSnapshot(snapshot, error);
@@ -120,6 +145,11 @@ int main()
               && decodedSnapshot.generation == 9
               && decodedSnapshot.stateVersion == 42
               && decodedSnapshot.peerConnected
+              && decodedSnapshot.castSession.connected
+              && decodedSnapshot.castSession.protocol == "DLNA"
+              && decodedSnapshot.castSession.controlPointName
+                  == "BubbleUPnP 4.6.7.1"
+              && decodedSnapshot.castSession.remoteControlRegistered
               && decodedSnapshot.muted,
           "snapshot round trip");
     auto zeroGenerationSnapshot = snapshot;
@@ -287,6 +317,16 @@ int main()
     oversizedSnapshot.next = largePart;
     check(!encodePlaybackSnapshot(oversizedSnapshot, error).has_value(),
           "snapshot exceeding sendable payload is rejected");
+
+    types::MediaRequest fieldOverflow = source;
+    fieldOverflow.metadata.assign(250 * 1024, 'm');
+    fieldOverflow.title.assign(16 * 1024, 't');
+    types::PlaybackCommand overflowCommand;
+    overflowCommand.type = types::PlaybackCommandType::Open;
+    overflowCommand.expectedGeneration = 7;
+    overflowCommand.media = std::move(fieldOverflow);
+    check(!encodePlaybackCommand(overflowCommand, error).has_value(),
+          "media request exceeding one IPC field is rejected");
 
     std::cout << "Playback codec tests passed\n";
     return 0;

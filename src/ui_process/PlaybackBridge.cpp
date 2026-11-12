@@ -83,8 +83,13 @@ PlaybackController::MediaRequest controllerRequest(
     result.metadata = QString::fromStdString(request.metadata);
     result.title = QString::fromStdString(request.title);
     result.artist = QString::fromStdString(request.artist);
+    result.creator = QString::fromStdString(request.creator);
     result.album = QString::fromStdString(request.album);
     result.description = QString::fromStdString(request.description);
+    result.subtitle = QString::fromStdString(request.subtitle);
+    result.longDescription =
+        QString::fromStdString(request.longDescription);
+    result.artworkUri = QString::fromStdString(request.artworkUri);
     result.protocol = QString::fromStdString(request.protocol);
     switch (request.kind) {
     case MediaKind::Unknown:
@@ -477,8 +482,31 @@ PlaybackSnapshot PlaybackBridge::snapshot() const
     if (!m_controller.currentMetadata().isEmpty())
         result.current.metadata =
             m_controller.currentMetadata().toStdString();
+    const auto controllerCurrent = m_controller.currentRequest();
+    if (result.current.uri.empty())
+        result.current.uri = controllerCurrent.uri.toStdString();
+    if (result.current.metadata.empty())
+        result.current.metadata = controllerCurrent.metadata.toStdString();
+    if (result.current.description.empty())
+        result.current.description =
+            controllerCurrent.description.toStdString();
+    if (result.current.creator.empty())
+        result.current.creator =
+            controllerCurrent.creator.toStdString();
+    if (result.current.subtitle.empty())
+        result.current.subtitle =
+            controllerCurrent.subtitle.toStdString();
+    if (result.current.longDescription.empty())
+        result.current.longDescription =
+            controllerCurrent.longDescription.toStdString();
+    if (result.current.artworkUri.empty())
+        result.current.artworkUri =
+            controllerCurrent.artworkUri.toStdString();
+    if (result.current.protocol.empty())
+        result.current.protocol =
+            controllerCurrent.protocol.toStdString();
     const NowPlaying now = m_controller.nowPlaying();
-    if (result.current.kind == MediaKind::Unknown) {
+    if (now.kind != ::MediaKind::Unknown) {
         switch (now.kind) {
         case ::MediaKind::Unknown:
             break;
@@ -506,6 +534,47 @@ PlaybackSnapshot PlaybackBridge::snapshot() const
             static_cast<std::uint64_t>(m_controller.mediaSizeBytes());
     }
     result.next = m_nextMedia;
+    const auto controllerNext = m_controller.nextRequest();
+    if (result.next.uri.empty())
+        result.next.uri = controllerNext.uri.toStdString();
+    if (result.next.metadata.empty())
+        result.next.metadata = controllerNext.metadata.toStdString();
+    if (result.next.title.empty())
+        result.next.title = controllerNext.title.toStdString();
+    if (result.next.artist.empty())
+        result.next.artist = controllerNext.artist.toStdString();
+    if (result.next.creator.empty())
+        result.next.creator = controllerNext.creator.toStdString();
+    if (result.next.album.empty())
+        result.next.album = controllerNext.album.toStdString();
+    if (result.next.description.empty())
+        result.next.description =
+            controllerNext.description.toStdString();
+    if (result.next.subtitle.empty())
+        result.next.subtitle = controllerNext.subtitle.toStdString();
+    if (result.next.longDescription.empty())
+        result.next.longDescription =
+            controllerNext.longDescription.toStdString();
+    if (result.next.artworkUri.empty())
+        result.next.artworkUri =
+            controllerNext.artworkUri.toStdString();
+    if (result.next.protocol.empty())
+        result.next.protocol =
+            controllerNext.protocol.toStdString();
+    switch (controllerNext.kind) {
+    case ::MediaKind::Unknown:
+        break;
+    case ::MediaKind::Video:
+        result.next.kind = MediaKind::Video;
+        break;
+    case ::MediaKind::Audio:
+        result.next.kind = MediaKind::Audio;
+        break;
+    case ::MediaKind::Image:
+        result.next.kind = MediaKind::Image;
+        break;
+    }
+    result.next.source = result.current.source;
     if (!m_controller.nextUri().isEmpty())
         result.next.uri = m_controller.nextUri().toStdString();
     if (!m_controller.nextMetadata().isEmpty())
@@ -517,6 +586,25 @@ PlaybackSnapshot PlaybackBridge::snapshot() const
     result.hasNext = m_controller.hasNext();
     result.hasPrevious = m_controller.hasPrevious();
     result.peerConnected = m_controller.peerConnected();
+    const QVariantMap castSession = m_controller.castSession();
+    result.castSession.connected =
+        castSession.value(QStringLiteral("connected")).toBool();
+    result.castSession.protocol =
+        castSession.value(QStringLiteral("protocol"))
+            .toString()
+            .toStdString();
+    result.castSession.controlPointName =
+        castSession.value(QStringLiteral("controlPointName"))
+            .toString()
+            .toStdString();
+    result.castSession.controlPointAddress =
+        castSession.value(QStringLiteral("controlPointAddress"))
+            .toString()
+            .toStdString();
+    result.castSession.remoteControlRegistered =
+        castSession
+            .value(QStringLiteral("remoteControlRegistered"))
+            .toBool();
     result.playerAvailable = !m_playerLost;
     result.positionSeconds = m_controller.positionSeconds();
     result.durationSeconds = m_controller.durationSeconds();
@@ -542,6 +630,7 @@ PlaybackOutcomeStatus PlaybackBridge::execute(
 {
     if (m_playerLost
         && command.type != PlaybackCommandType::SetPeerConnected
+        && command.type != PlaybackCommandType::SetCastSession
         && command.type != PlaybackCommandType::EndSession) {
         error = "player is unavailable";
         return PlaybackOutcomeStatus::Rejected;
@@ -552,6 +641,8 @@ PlaybackOutcomeStatus PlaybackBridge::execute(
             error = "open requires a URI";
             return PlaybackOutcomeStatus::Rejected;
         }
+        if (command.boolValue)
+            m_controller.clearPlaylist();
         m_controller.openUri(
             controllerRequest(command.media),
             controllerSource(command.media.source));
@@ -644,6 +735,16 @@ PlaybackOutcomeStatus PlaybackBridge::execute(
             m_previousMedia = {};
         }
         m_controller.setPeerConnected(command.boolValue);
+        break;
+    case PlaybackCommandType::SetCastSession:
+        m_controller.setCastSession(
+            command.castSession.connected,
+            QString::fromStdString(command.castSession.protocol),
+            QString::fromStdString(
+                command.castSession.controlPointName),
+            QString::fromStdString(
+                command.castSession.controlPointAddress),
+            command.castSession.remoteControlRegistered);
         break;
     }
     return PlaybackOutcomeStatus::Applied;

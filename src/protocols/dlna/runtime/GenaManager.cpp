@@ -195,7 +195,7 @@ std::string dlnaState(playback::PlaybackState state)
     case PlaybackState::Playing:
         return "PLAYING";
     case PlaybackState::Paused:
-        return "PAUSED";
+        return "PAUSED_PLAYBACK";
     case PlaybackState::Stopped:
         return "STOPPED";
     }
@@ -274,7 +274,7 @@ std::string eventBody(
 
     const std::string state = dlnaState(snapshot.state);
     const std::string duration = durationText(snapshot.durationSeconds);
-    const bool hasMedia = snapshot.state != playback::PlaybackState::NoMedia;
+    const bool hasMedia = !snapshot.current.uri.empty();
     std::ostringstream lastChange;
     lastChange
         << "<Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/AVT/\">"

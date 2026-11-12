@@ -49,7 +49,6 @@ bool looksLikeATitle(const QString &text)
     int digits = 0;
     int currentRun = 0;
     int longestRun = 0;
-
     for (const QChar ch : trimmed) {
         if (ch.isLetter()) {
             ++letters;
@@ -62,22 +61,9 @@ bool looksLikeATitle(const QString &text)
             currentRun = 0;
         }
     }
-
-    // 一个字母都没有 —— 肯定是编号，不可能是标题。
-    // （汉字也算字母：QChar::isLetter() 对中日韩文字返回真。）
-    if (letters == 0)
-        return false;
-
-    // 连续五位以上的数字，基本上都是内部编号。
-    // "41742108132"、"1000140373" 都栽在这条上；而正常标题里的年份是四位，撞不到。
-    if (longestRun >= 5)
-        return false;
-
-    // 数字占比超过四成，也不像人起的名字。
-    if (digits * 10 > (letters + digits) * 4)
-        return false;
-
-    return true;
+    return letters > 0
+        && longestRun < 5
+        && digits * 10 <= (letters + digits) * 4;
 }
 
 QString mediaKindLabel(MediaKind kind)
@@ -108,31 +94,21 @@ bool looksLikePlaceholder(const QString &text)
 {
     static const QStringList junk = {
         QStringLiteral("unknown"), QStringLiteral("unkown"),
-        QStringLiteral("none"),    QStringLiteral("null"),
-        QStringLiteral("n/a"),     QStringLiteral("na"),
-        QStringLiteral("-"),       QStringLiteral("--"),
-        QStringLiteral("未知"),    QStringLiteral("未知艺术家"),
+        QStringLiteral("none"), QStringLiteral("null"),
+        QStringLiteral("n/a"), QStringLiteral("na"),
+        QStringLiteral("-"), QStringLiteral("--"),
+        QStringLiteral("未知"), QStringLiteral("未知艺术家"),
         QStringLiteral("未知歌手"), QStringLiteral("未知专辑"),
         QStringLiteral("无"),
     };
-
-    // 占位值还有好几种包装，都得认：
-    //
-    //   unknown            直白型
-    //   <unknown>          用尖括号包起来（BubbleUPnP 就是这个）
-    //   &lt;unknown&gt;  连尖括号一起转义了 —— 元数据里的实体只解一层，
-    //                      到我们手上就是这副样子（日志里实测到的）
-    //
-    // 所以：把外层的括号/引号剥掉再比。转义那一层的处理在协议层（它才知道
-    // 自己那套转义规则），这儿只管"剥壳 + 查表"。
     QString candidate = text.trimmed();
     while (candidate.size() >= 2
-           && ((candidate.startsWith(QLatin1Char('<')) && candidate.endsWith(QLatin1Char('>')))
+           && ((candidate.startsWith(QLatin1Char('<'))
+                && candidate.endsWith(QLatin1Char('>')))
                || (candidate.startsWith(QLatin1Char('"'))
                    && candidate.endsWith(QLatin1Char('"'))))) {
         candidate = candidate.mid(1, candidate.size() - 2).trimmed();
     }
-
     return junk.contains(candidate.toLower());
 }
 
@@ -185,9 +161,8 @@ QString stripMediaExtension(const QString &text)
     const int dot = text.lastIndexOf(QLatin1Char('.'));
     if (dot <= 0)
         return text;
-
-    const QString ext = text.mid(dot + 1).toLower();
-    return isKnownMediaExtension(ext) ? text.left(dot) : text;
+    const QString extension = text.mid(dot + 1).toLower();
+    return isKnownMediaExtension(extension) ? text.left(dot) : text;
 }
 
 MediaKind mediaKindFromUri(const QString &uri)

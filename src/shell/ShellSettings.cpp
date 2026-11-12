@@ -216,7 +216,7 @@ std::string legacyUuid(
             return uuid;
     }
 
-    // 旧实现写不进标准位置时会退到程序目录。Shell 与旧 MCast.exe
+    // 旧版本写不进标准位置时会退到程序目录。Shell 仍要能读取
     // 通常同目录，因此这里也应从设置文件旁边再找一次。
     std::filesystem::path fallback =
         settingsPath.parent_path() / L"renderer.ini";
@@ -801,6 +801,7 @@ bool ShellSettings::ensureDefaults()
             m_root.SetNamedValue(L"picture", picture);
         }
         std::vector<winrt::hstring> invalidPictureKeys;
+        std::vector<std::pair<winrt::hstring, int>> normalizedPicture;
         for (const auto &[key, value] : picture) {
             int number = 0;
             if (value.ValueType()
@@ -809,11 +810,14 @@ bool ShellSettings::ensureDefaults()
                 invalidPictureKeys.push_back(key);
                 continue;
             }
-            picture.SetNamedValue(
-                key, JsonValue::CreateNumberValue(number));
+            normalizedPicture.emplace_back(key, number);
         }
         for (const auto &key : invalidPictureKeys)
             picture.Remove(key);
+        for (const auto &[key, number] : normalizedPicture) {
+            picture.SetNamedValue(
+                key, JsonValue::CreateNumberValue(number));
+        }
         m_root.SetNamedValue(L"ui", ui);
         m_root.SetNamedValue(L"cast", cast);
         m_root.SetNamedValue(L"device", device);

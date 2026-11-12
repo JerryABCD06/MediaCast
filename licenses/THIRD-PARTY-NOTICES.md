@@ -3,7 +3,8 @@
 > 这份清单对应的是**发布包里实际装了什么**，不是"开发时用过什么"。
 > 开发期用到的工具另见文末一节 —— 它们不进发布包，所以不需要随包附文本。
 >
-> 本文件由项目维护者手工维护。增删依赖时请一并更新它和 `deploy-mcast.ps1`。
+> 本文件由项目维护者手工维护。增删依赖时请一并更新它和 CMake 的
+> `mcast_copy_legal` 复制目标。
 
 ---
 
@@ -57,8 +58,9 @@
 
 ### 5. 本项目自己的内容
 
-`MCast.exe`、`lang/*.json`、`res/` 里的图标、`src/ui/qml/**` 下的界面 ——
-都是本项目自己的，按 **GPL-3.0-or-later** 授权，
+`MCast.Shell.exe`、`MCast.Protocol.exe`、`MCast.Ui.exe`、`lang/`、`config/`、
+`res/` 里的图标和 `src/ui/qml/**` 下的界面都是本项目自己的，按
+**GPL-3.0-or-later** 授权，
 版权 `Wang Yunzheng <wyz-mcast@outlook.com>`。
 
 ---
@@ -67,13 +69,14 @@
 
 **Macast**（<https://github.com/xfangfang/Macast>，GPLv3）：
 
-`src/protocols/dlna/GenaManager.cpp` 里 AVTransport 事件字段那一段，注释写着
+`src/protocols/dlna/runtime/GenaManager.cpp` 所继承的 AVTransport 事件字段逻辑
+最初来自旧 Qt 门面，那里曾注明
 "这一段是照 Macast 抄的"。**如果那部分是逐字照搬，就属于衍生作品**，按 GPLv3
 第 5(a) 条应当在文件里注明来源和修改。我们的项目本来就是 GPL-3.0-or-later，
 **许可上是兼容的**，不存在冲突；但出处该标清楚。
 
 **待确认**：那段到底是"照着思路写的"（字段集合本身不受版权保护）还是"逐字抄的"。
-如果确认是后者，就在该文件头补一行出处说明（或者干脆按自己的写法重写一遍）。
+如果确认是后者，就在当前实现文件头补一行出处说明（或者按自己的写法重写一遍）。
 
 ---
 
