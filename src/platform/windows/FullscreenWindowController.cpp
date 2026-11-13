@@ -7,6 +7,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QCoreApplication>
+#include <QScreen>
 #include <QWindow>
 
 #ifdef Q_OS_WIN
@@ -155,6 +156,27 @@ bool FullscreenWindowController::enter(QWindow *window)
         m_window.clear();
         return false;
     }
+
+    // Qt still accounts for native frame margins even after FluentUI removes
+    // the visible frame. The raw HWND can therefore be monitor-sized while the
+    // QQuickWindow render surface ends short on the right. Let Qt resize to the
+    // screen's logical geometry, then pin the resulting native width back to
+    // x=0. Any margin Qt added stays off-screen and never enters the media
+    // client area.
+    if (QScreen *screen = window->screen()) {
+        window->setGeometry(screen->geometry());
+        RECT adjusted{};
+        if (::GetWindowRect(hwnd, &adjusted)) {
+            ::SetWindowPos(
+                hwnd, HWND_TOPMOST,
+                target.left, target.top,
+                adjusted.right - adjusted.left,
+                target.bottom - target.top + kOverscanPixels,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        }
+    }
+    WindowFrame::setFullscreenBorderless(window, true);
+    WindowFrame::setRoundedCorners(window, false);
     WindowFrame::setTopMost(window, true);
     return true;
 #else
