@@ -5,6 +5,8 @@
 
 #include "WindowFrame.h"
 
+#include <QAbstractNativeEventFilter>
+#include <QCoreApplication>
 #include <QWindow>
 
 #ifdef Q_OS_WIN
@@ -12,10 +14,60 @@
 #endif
 
 struct FullscreenWindowController::State
+#ifdef Q_OS_WIN
+    : QAbstractNativeEventFilter
+#endif
 {
 #ifdef Q_OS_WIN
     HWND hwnd = nullptr;
     WINDOWPLACEMENT placement{};
+    bool filterInstalled = false;
+
+    void installFilter()
+    {
+        if (filterInstalled)
+            return;
+        if (auto *app = QCoreApplication::instance()) {
+            app->installNativeEventFilter(this);
+            filterInstalled = true;
+        }
+    }
+
+    void removeFilter()
+    {
+        if (!filterInstalled)
+            return;
+        if (auto *app = QCoreApplication::instance())
+            app->removeNativeEventFilter(this);
+        filterInstalled = false;
+    }
+
+    bool nativeEventFilter(
+        const QByteArray &eventType, void *message, qintptr *result) override
+    {
+        Q_UNUSED(result);
+        if (!active
+            || (eventType != QByteArrayLiteral("windows_generic_MSG")
+                && eventType != QByteArrayLiteral("windows_dispatcher_MSG"))) {
+            return false;
+        }
+
+        const auto *msg = static_cast<const MSG *>(message);
+        if (!msg || msg->hwnd != hwnd || msg->message != WM_NCCALCSIZE
+            || msg->wParam != TRUE) {
+            return false;
+        }
+
+        auto *params =
+            reinterpret_cast<NCCALCSIZE_PARAMS *>(msg->lParam);
+        if (!params)
+            return false;
+
+        RECT &client = params->rgrc[0];
+        if (client.bottom > client.top)
+            --client.bottom;
+        return false;
+    }
 #endif
     bool active = false;
 };
@@ -29,6 +81,10 @@ FullscreenWindowController::~FullscreenWindowController()
 {
     if (m_state && m_state->active)
         exit(m_window);
+#ifdef Q_OS_WIN
+    if (m_state)
+        m_state->removeFilter();
+#endif
 }
 
 bool FullscreenWindowController::enter(QWindow *window)
@@ -60,6 +116,10 @@ bool FullscreenWindowController::enter(QWindow *window)
     m_state->active = true;
     m_window = window;
 
+#ifdef Q_OS_WIN
+    m_state->installFilter();
+#endif
+
     // A maximized window does not reliably accept a new target rectangle.
     // Restore first; the original WINDOWPLACEMENT above is enough to put it
     // back exactly after fullscreen.
@@ -74,20 +134,23 @@ bool FullscreenWindowController::enter(QWindow *window)
     // Do not use the exact monitor rectangle. DWM treats an exact-monitor
     // window as fullscreen and disables non-client rendering; when the window
     // returns to its normal rectangle, DWMWA_NCRENDERING_ENABLED can remain 0
-    // and the system border/shadow never comes back. A one-pixel overscan is
-    // visually identical (those pixels are off-screen) while keeping DWM in
-    // the ordinary-window path throughout the transition.
+    // and the system border/shadow never comes back. Extend only the bottom by
+    // one pixel: the top edge stays aligned with the monitor, so media content
+    // is not cropped or shifted at the top, while DWM still treats the window
+    // as an ordinary window throughout the transition.
     constexpr int kOverscanPixels = 1;
     if (!::SetWindowPos(
             hwnd, HWND_TOPMOST,
-            target.left - kOverscanPixels,
-            target.top - kOverscanPixels,
-            target.right - target.left + kOverscanPixels * 2,
-            target.bottom - target.top + kOverscanPixels * 2,
+            target.left, target.top,
+            target.right - target.left,
+            target.bottom - target.top + kOverscanPixels,
             SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
         ::SetWindowPlacement(hwnd, &m_state->placement);
         WindowFrame::setTopMost(window, false);
         WindowFrame::applyFramelessWindowChrome(window);
+#ifdef Q_OS_WIN
+        m_state->removeFilter();
+#endif
         m_state->active = false;
         m_state->hwnd = nullptr;
         m_window.clear();
@@ -110,6 +173,9 @@ bool FullscreenWindowController::exit(QWindow *window)
     QWindow *targetWindow =
         window && m_window == window ? window : m_window.data();
     if (!targetWindow) {
+#ifdef Q_OS_WIN
+        m_state->removeFilter();
+#endif
         m_state->active = false;
         m_state->hwnd = nullptr;
         return false;
@@ -117,6 +183,9 @@ bool FullscreenWindowController::exit(QWindow *window)
 
     const HWND hwnd = reinterpret_cast<HWND>(targetWindow->winId());
     if (!hwnd || hwnd != m_state->hwnd) {
+#ifdef Q_OS_WIN
+        m_state->removeFilter();
+#endif
         m_state->active = false;
         m_state->hwnd = nullptr;
         m_window.clear();
@@ -131,6 +200,9 @@ bool FullscreenWindowController::exit(QWindow *window)
     WindowFrame::setTopMost(targetWindow, false);
     WindowFrame::applyFramelessWindowChrome(targetWindow);
 
+#ifdef Q_OS_WIN
+    m_state->removeFilter();
+#endif
     m_state->active = false;
     m_state->hwnd = nullptr;
     m_window.clear();
