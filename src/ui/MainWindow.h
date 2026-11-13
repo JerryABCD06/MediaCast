@@ -59,14 +59,11 @@ public:
     Q_INVOKABLE void pauseCastingForWindowClose();
 
     /**
-     * 进 / 出全屏时要做的**窗口层**调整（QML 那边调不到 Win32 API）。
+     * 进 / 出全屏的窗口层入口。
      *
-     * 现在是两件：
-     *   · 置顶（`WS_EX_TOPMOST`）—— 不全屏时任务栏会压在画面上；
-     *   · 关掉 Win11 的窗口圆角 —— 不然四角露出桌面。
-     *
-     * **为什么不写在 QML 里**：置顶、显示器和 DWM 状态属于平台窗口层。当前实现
-     * 只调整已有 HWND，不重建 QQuickWindow、场景图或 mpv render context。
+     * MainWindow 只负责隐藏和恢复 owned 子窗口。Win32 样式、DWM、原生消息、
+     * 系统菜单、布局锁定和 QWindow/native 几何同步都在
+     * platform/windows/Win32FullscreenWindow 内完成，不重建 QQuickWindow。
      */
     Q_INVOKABLE bool setFullscreenWindowMode(bool on);
 

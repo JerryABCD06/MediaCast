@@ -357,6 +357,9 @@ bool MainWindow::setFullscreenWindowMode(bool on)
     }
 
     const bool exited = m_fullscreen->exit(m_window);
+    if (!exited)
+        return false;
+
     for (const QPointer<QObject> &entry :
          std::as_const(m_fullscreenHiddenChildren)) {
         if (auto *child = qobject_cast<QWindow *>(entry.data()))

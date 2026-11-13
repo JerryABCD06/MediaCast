@@ -3,18 +3,16 @@
 
 #pragma once
 
-#include <QPointer>
-
 #include <memory>
 
 class QWindow;
+class Win32FullscreenWindow;
 
 /**
- * Adjusts the existing native window for borderless fullscreen.
+ * Window-layer facade for entering and leaving borderless fullscreen.
  *
- * The controller never destroys or recreates the QWindow. The QML tree, the
- * QQuickWindow scene graph and the mpv render context therefore survive every
- * fullscreen transition.
+ * The QML tree, QQuickWindow scene graph and mpv render context survive every
+ * transition. All Win32 state is owned by Win32FullscreenWindow.
  */
 class FullscreenWindowController final
 {
@@ -31,8 +29,5 @@ public:
     bool active() const;
 
 private:
-    struct State;
-
-    QPointer<QWindow> m_window;
-    std::unique_ptr<State> m_state;
+    std::unique_ptr<Win32FullscreenWindow> m_native;
 };
