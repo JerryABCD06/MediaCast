@@ -17,7 +17,7 @@ namespace WindowFrame
 {
 
 /**
- * 把"无边框窗口"该有的样式位打一遍（创建时调一次，**原生窗口重建之后也要调**）。
+ * 把"无边框窗口"该有的样式位打一遍。
  *
  * ── 为什么创建时要调 ────────────────────────────────────────────────────
  *
@@ -34,29 +34,10 @@ namespace WindowFrame
  * Win+下 的前提。而 **WS_MAXIMIZEBOX 是"鼠标悬停在最大化键上弹出快速贴靠"的
  * 前提** —— 少了它，Windows 根本不给那套贴靠布局。
  *
- * ── 为什么重建之后还要再调一次 ──────────────────────────────────────────
- *
- * 库那几句 `SetWindowLongPtr` 只跑一次（在它自己的初始化里）。而这个工程的
- * "全屏"会在切换时**把原生窗口拆掉重建**（`QWindow::destroy()` + `show()`，
- * 见 MainWindow::setFullscreenWindowMode）—— 重建出来的窗口是 Qt 按窗口标志
- * 造的全新原生窗口，**库里那套样式位一个都没有**。症状就是他 2026-09-14 报的：
- * 退出全屏后**最大化键悬停不再出快速贴靠**，而且"顶栏上面莫名多出一小块"
- * （客户区的算法跟着变了：`isMaximized` 那条会给客户区留 8 像素，正常最大化的
- * 窗口因为窗口矩形探到屏幕外看不见，重建出来的却看得见）。
- *
- * 所以：**创建时调、原生窗口重建之后也调**。补在**我们自己的代码**里而不是改
- * third_party/FluentUI —— 那样 FluentUI 升级时不会跟我们的改动打架。
+ * 补在**我们自己的代码**里而不是改 third_party/FluentUI —— 那样 FluentUI 升级
+ * 时不会跟我们的改动打架。全屏现在调整现有 HWND，不再借原生窗口重建来补样式。
  */
 void reapplyFramelessStyle(QWindow *window);
-
-/**
- * 重新给窗口挂上 DWM 阴影。
- *
- * 和上一条一个道理：库在创建时用 `DwmExtendFrameIntoClientArea(hwnd, {1,0,0,0})`
- * 挂过一层（左边留 1 像素，DWM 才会给窗口阴影），原生窗口一重建就没了 ——
- * 新窗口看着就像"没影子"的一张贴纸。参数和库里那处保持一致。
- */
-void reapplyDwmShadow(QWindow *window);
 
 /**
  * 全屏期间关掉 DWM 那条 1 像素窗口边框（退出时调回来）。
@@ -75,11 +56,8 @@ void setFullscreenBorderless(QWindow *window, bool borderless);
 /**
  * 设 / 清窗口的原生 owner（从属窗口关系）。
  *
- * Qt 那边对应的入口是 `QWindow::setTransientParent()`，但**它只在窗口创建时
- * 生效一次**（Qt 文档里写死的那句"必须在第一次露面之前设"，实测运行时改它
- * 原生 owner 不动）。而我们需要在运行时动它一次 —— 主窗口切换全屏时会把自己
- * 的原生窗口拆掉重建，而 Win32 的规矩是"销毁 owner 会连带销毁 owned 窗口"，
- * 所以那一下必须先把从属窗口摘下来（owner = nullptr），重建完再挂到新句柄上。
+ * Qt 那边对应的入口是 `QWindow::setTransientParent()`，但它只在窗口创建时
+ * 生效一次。这里直接改原生 owner，用于登记和恢复已经创建的从属窗口。
  *
  * 直接改 `GWLP_HWNDPARENT` 就行，不重建窗口、不影响画面。
  */

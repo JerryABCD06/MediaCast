@@ -9,9 +9,12 @@
 #include <QString>
 #include <QVariantMap>
 
+#include <memory>
+
 class QQmlApplicationEngine;
 class QQmlComponent;
 class QQuickWindow;
+class FullscreenWindowController;
 
 // MainWindow —— 用 QML + FluentUI 搭的界面。**现在是唯一的界面**
 // （旧的 Widgets 界面 2026-09-14 退场了）。
@@ -62,26 +65,18 @@ public:
      *   · 置顶（`WS_EX_TOPMOST`）—— 不全屏时任务栏会压在画面上；
      *   · 关掉 Win11 的窗口圆角 —— 不然四角露出桌面。
      *
-     * **为什么不写在 QML 里**：置顶本来可以用 `Qt::WindowStaysOnTopHint`，但那
-     * 会让 Qt 重建原生窗口，而本工程用的 OpenGL 后端在这一步会丢窗口表面（整窗
-     * 全黑，见 MainWindow.qml 里全屏那一大段）。绕开窗口标志、直接改扩展样式
-     * 就没有这个问题 —— 这是平台相关的活儿，收在 WindowFrame 里。
+     * **为什么不写在 QML 里**：置顶、显示器和 DWM 状态属于平台窗口层。当前实现
+     * 只调整已有 HWND，不重建 QQuickWindow、场景图或 mpv render context。
      */
-    Q_INVOKABLE void setFullscreenWindowMode(bool on);
+    Q_INVOKABLE bool setFullscreenWindowMode(bool on);
 
     /**
      * 把一个**子窗口**（比如"显示效果"）登记成主窗口的从属窗口。
      *
      * 以后再加子窗口，只要建的时候走 QML 那边那个 `createChildWindow(component)`
      * 就够了（它会先按 `transientParent` 建、再调这里登记）——**不用再动全屏那段
-     * 逻辑**。登记之后，主窗口切全屏时这边会统一替它处理：
-     *
-     *   · 主窗口的原生窗口会被拆掉重建（全屏那条路，见 setFullscreenWindowMode），
-     *     而 Win32 的规矩是"**销毁 owner 会连带销毁 owned 窗口**"——所以先把它
-     *     从主窗口上摘开，重建完再挂到新的句柄上；
-     *   · 那一下系统还会把它一并藏起来，owner 回来时它不会自己出现 —— 原来露着
-     *     的替它显式再显示一次；
-     *   · 它的原生窗口这一趟也换了，所以样式位、阴影、几何都替它补回去。
+     * 逻辑**。登记之后，主窗口进入全屏时会暂时隐藏当前可见的从属窗口，退出全屏
+     * 后原样显示；窗口对象、几何和 DWM 状态不需要销毁重建。
      */
     Q_INVOKABLE void adoptChildWindow(QObject *child);
 
@@ -133,12 +128,14 @@ private:
      * 不用连着"谁关了我"的通知一起维护（这个工程在裸指针上栽过，见 docs/待办.md）。
      */
     QList<QPointer<QObject>> m_childWindows;
+    QList<QPointer<QObject>> m_fullscreenHiddenChildren;
 
     QQmlApplicationEngine *m_engine = nullptr;
     QQmlComponent *m_component = nullptr;
     QQuickWindow *m_window = nullptr;
     QQmlComponent *m_castComponent = nullptr;
     QPointer<QObject> m_castWindow;
+    std::unique_ptr<FullscreenWindowController> m_fullscreen;
     qulonglong m_castRequestId = 0;
     /**
      * 正在加载 QML 的那一小会儿。

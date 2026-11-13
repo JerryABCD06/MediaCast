@@ -202,82 +202,35 @@ FluWindow {
     //   · 不许改 `flags` —— 改窗口标志会让 Qt 重建原生窗口，照样黑。置顶得走
     //     Win32 的 `WS_EX_TOPMOST`（见 `Shell.setFullscreenWindowMode`）。
     //
-    // 进出全屏要**自己记、自己摆**：位置尺寸就是 QML 的 x/y/width/height
-    // （逻辑像素，不涉及坐标系换算），
-    // 记不住就会出现"退出全屏回不到原来的位置和大小"。
+    // 当前实现由平台层保存并恢复原生 WINDOWPLACEMENT，然后直接调整现有 HWND
+    // 到目标显示器；QML 不再保存几何、不再 destroy/rebuild 原生窗口。
     property bool fullscreen: false
-
-    /** 进全屏前的窗口几何（逻辑像素）。退出时摆回去。 */
-    property rect savedGeometry: Qt.rect(0, 0, 0, 0)
-    /** 进全屏前是不是最大化着 —— 是的话退出时回到最大化，而不是那个小窗口。 */
-    property bool savedMaximized: false
 
     function enterFullscreen() {
         if (fullscreen)
             return
 
-        savedGeometry = Qt.rect(x, y, width, height)
-        savedMaximized = (visibility === Window.Maximized)
+        // The platform controller adjusts the existing HWND. Do not change
+        // x/y/width/height here and never destroy the QQuickWindow: the QML
+        // scene graph and mpv render context must survive the transition.
+        if (!Shell.setFullscreenWindowMode(true))
+            return
 
         fullscreen = true
         Interaction.setFullscreen(true)
         topBar.visible = false
         fitsAppBarWindows = true
-
-        // 先让窗口层那边置顶、去圆角（QML 调不到 Win32），再摆位置 —— 顺序反了
-        // 会先看见任务栏压在上面一瞬。
-        Shell.setFullscreenWindowMode(true)
-
-        x = screen.virtualX
-        y = screen.virtualY
-        width = screen.width
-        height = screen.height
-
-        // 全屏期间不许拉边改大小（FluFrameless 靠 fixSize 那一位决定边框好不好拖）：
-        // 锁死在刚摆好的这个尺寸上。退出时在下面对称地解开。
-        fixSize = true
-        fixWindowSize()
     }
 
     function exitFullscreen() {
         if (!fullscreen)
             return
 
+        if (!Shell.setFullscreenWindowMode(false))
+            return
+
         fullscreen = false
         Interaction.setFullscreen(false)
-        Shell.setFullscreenWindowMode(false)
-
-        // 先把尺寸锁解开，不然下面那句摆位置会被 min/max 顶住。
-        fixSize = false
-        minimumWidth = 0
-        minimumHeight = 0
-        maximumWidth = 16777215
-        maximumHeight = 16777215
-
-        if (savedMaximized) {
-            // 最大化那份几何交给 Qt 自己算（它记着工作区大小），比我们照着摆准。
-            showMaximized()
-        } else {
-            x = savedGeometry.x
-            y = savedGeometry.y
-            width = savedGeometry.width
-            height = savedGeometry.height
-
-            // **再补一次（下一轮事件循环）**：上面那次赋值是在"原生窗口刚重建完"
-            // 的同一瞬间发生的，实测有时会被平台那边按旧的位置信息盖回去（退出
-            // 全屏后窗口还停在全屏那么大）。隔一轮再摆一次就稳了 —— 这两句是
-            // 幂等的，没被盖回去时等于白写一遍。
-            const g = savedGeometry
-            Qt.callLater(function () {
-                if (!window.fullscreen) {
-                    window.x = g.x
-                    window.y = g.y
-                    window.width = g.width
-                    window.height = g.height
-                }
-            })
-        }
-
         fitsAppBarWindows = false
         topBar.visible = true
     }

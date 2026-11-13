@@ -53,21 +53,6 @@ void reapplyFramelessStyle(QWindow *window)
 #endif
 }
 
-void reapplyDwmShadow(QWindow *window)
-{
-#ifdef Q_OS_WIN
-    const HWND hwnd = nativeHandle(window);
-    if (!hwnd)
-        return;
-
-    // 和 FluFrameless::setShadow() 用的是同一组参数：左边留 1 像素。
-    const MARGINS shadow = { 1, 0, 0, 0 };
-    ::DwmExtendFrameIntoClientArea(hwnd, &shadow);
-#else
-    Q_UNUSED(window);
-#endif
-}
-
 void setFullscreenBorderless(QWindow *window, bool borderless)
 {
 #ifdef Q_OS_WIN

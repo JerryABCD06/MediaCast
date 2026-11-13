@@ -3,6 +3,7 @@
 
 #include "MainWindow.h"
 
+#include "platform/windows/FullscreenWindowController.h"
 #include "platform/windows/WindowFrame.h"
 
 #include <QCoreApplication>
@@ -15,6 +16,7 @@
 
 MainWindow::MainWindow(QObject *parent)
     : QObject(parent)
+    , m_fullscreen(std::make_unique<FullscreenWindowController>())
 {
 }
 
@@ -320,94 +322,46 @@ void MainWindow::adoptChildWindow(QObject *child)
     }
 }
 
-void MainWindow::setFullscreenWindowMode(bool on)
+bool MainWindow::setFullscreenWindowMode(bool on)
 {
-    // 窗口还没建起来就没什么可调的（正常情况下不会发生：这是界面调过来的）。
-    if (!m_window)
-        return;
+    if (!m_window || !m_fullscreen)
+        return false;
 
-    // ── 先把登记过的子窗口从主窗口上摘下来 ────────────────────────────────
-    //
-    // 它们是主窗口的**从属窗口**（owned window，见 MainWindow.qml 里
-    // createChildWindow / adoptChildWindow），而 Win32 有一条规矩：
-    // **销毁 owner 会把 owned 窗口一起销毁**。下面那句 destroy() 正是把主窗口的
-    // 原生窗口拆掉 —— 不先摘，用户开着"显示效果"时一切全屏，它就被系统带走了
-    // （实测就是这么没的）。
-    //
-    // 摘的是**原生那一层**的关系（GWLP_HWNDPARENT），不走 Qt 的 transientParent
-    // —— 那个只在窗口创建时生效一次，运行时改它不动原生 owner。重建完再挂回去。
-    //
-    // 顺手把"露着没有、多大"记下来：重建之后要照原样还给用户。
-    struct ChildState {
-        QWindow *window = nullptr;
-        bool wasVisible = false;
-        QRect geometry;
-    };
-    std::vector<ChildState> children;
-    for (const QPointer<QObject> &entry : std::as_const(m_childWindows)) {
-        auto *childWindow = qobject_cast<QWindow *>(entry.data());
-        if (!childWindow)
-            continue;               // 没建起来 / 已经被销毁（QPointer 自己变空）
-        children.push_back({ childWindow, childWindow->isVisible(), childWindow->geometry() });
-        WindowFrame::setWindowOwner(childWindow, nullptr);
+    if (on == m_fullscreen->active())
+        return true;
+
+    if (on) {
+        // Owned windows are always painted above their owner. Hide the picture
+        // settings window instead of destroying or reparenting it; the same
+        // QWindow objects can be shown again after fullscreen.
+        m_fullscreenHiddenChildren.clear();
+        for (const QPointer<QObject> &entry :
+             std::as_const(m_childWindows)) {
+            auto *child = qobject_cast<QWindow *>(entry.data());
+            if (!child || !child->isVisible())
+                continue;
+            m_fullscreenHiddenChildren.append(child);
+            child->hide();
+        }
+
+        if (!m_fullscreen->enter(m_window)) {
+            for (const QPointer<QObject> &entry :
+                 std::as_const(m_fullscreenHiddenChildren)) {
+                if (auto *child = qobject_cast<QWindow *>(entry.data()))
+                    child->show();
+            }
+            m_fullscreenHiddenChildren.clear();
+            return false;
+        }
+        return true;
     }
 
-    // ── 先把原生窗口拆掉重来 ─────────────────────────────────────────────
-    //
-    // **这是"全屏来回一次就整窗黑"的解药。** 台机器上（AMD Radeon 780M + Qt
-    // 6.11 + OpenGL 后端）窗口表面只要经历过一次"尺寸大改 / 状态切换"，Qt 就
-    // 再也不往上送了：场景照常在渲染（探针数过每秒上百帧、`frameSwapped` 也在
-    // 涨），屏幕和 DWM 手里那份都是纯黑。这不是本工程的毛病 —— 一个跟本工程
-    // 毫无关系的 `qml.exe`，只要 `QSG_RHI_BACKEND=opengl`，同样黑；换 D3D11
-    // 就正常（详见 MainWindow.qml 里全屏那一大段）。
-    //
-    // 而**新建出来的窗口从来不黑**（验过很多次）。所以全屏切换时不跟它讲道理，
-    // 直接把这个原生窗口拆掉、按新尺寸重新建一个：
-    //
-    //   destroy() 放掉原生资源（Qt 会顺手销毁图形那一套、发 sceneGraphInvalidated），
-    //   show()    再建一个新的。QML 那棵树、界面状态全都留着 —— 只有原生窗口
-    //             和图形资源是新的，所以看不出来"换了个窗口"，只闪一下。
-    //
-    // 代价：切换时闪一下（几百毫秒，和之前"先藏一下再切"的观感一样）。换来的是
-    // 切完还能正常显示 —— 值。
-    //
-    // 顺序要紧：**先拆再摆几何**（几何是 QML 紧接着摆的，见 enterFullscreen）——
-    // 在旧表面上改尺寸正是会把它弄坏的那件事。
-    m_window->destroy();
-    m_window->show();
-
-    // **重建出来的窗口要把库那套样式重新打上。** 库只在创建时打过一次，新的
-    // 原生窗口一个都没有 —— 少了它：最大化键悬停不出快速贴靠、客户区算法也变
-    // （退出全屏后"顶栏上面多出一小块"就是它），阴影也没了。见 WindowFrame.h。
-    WindowFrame::reapplyFramelessStyle(m_window);
-
-    WindowFrame::setTopMost(m_window, on);
-    WindowFrame::setRoundedCorners(m_window, !on);
-    // 边框和阴影：全屏时都关掉（它们正好落在屏幕最外圈，就是"四周漏一条缝"），
-    // 退出时把阴影挂回来。边框那个属性退出时也会自动回到系统默认。
-    WindowFrame::setFullscreenBorderless(m_window, on);
-
-    // ── 再按原样把它们挂回去 ──────────────────────────────────────────────
-    for (const ChildState &state : children) {
-        QWindow *child = state.window;
-        if (!child)
-            continue;
-
-        WindowFrame::setWindowOwner(child, m_window);
-
-        // **重建过程中系统会把从属窗口一起藏起来**（"owner 没了"那一下的连带），
-        // 而"owner 又出现"时它**不会**自己回来 —— 所以原来露着的要显式再显示一次。
-        if (!state.wasVisible)
-            continue;
-
-        child->show();
-        // 它的原生窗口这一趟也被换过了，所以和主窗口一样要补一遍样式位和阴影
-        // —— 不补的话回到屏幕上会"四周胖一圈"（库里那几个样式位只在创建时打过
-        // 一次，实测差 16 像素 × 2）。
-        WindowFrame::reapplyFramelessStyle(child);
-        WindowFrame::reapplyDwmShadow(child);
-        // 框架那套算出来的几何和原来也差一点，显式摆回原来的。
-        if (!state.geometry.isNull())
-            child->setGeometry(state.geometry);
+    const bool exited = m_fullscreen->exit(m_window);
+    for (const QPointer<QObject> &entry :
+         std::as_const(m_fullscreenHiddenChildren)) {
+        if (auto *child = qobject_cast<QWindow *>(entry.data()))
+            child->show();
     }
+    m_fullscreenHiddenChildren.clear();
+    return exited;
 }

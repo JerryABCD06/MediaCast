@@ -817,6 +817,8 @@ qt_add_executable(MCast.Ui
     src/ui/DeviceInfo.cpp
     src/platform/windows/WindowFrame.h
     src/platform/windows/WindowFrame.cpp
+    src/platform/windows/FullscreenWindowController.h
+    src/platform/windows/FullscreenWindowController.cpp
     src/platform/windows/SystemAccentColors.h
     src/platform/windows/SystemAccentColors.cpp
     src/platform/MediaControls.h
