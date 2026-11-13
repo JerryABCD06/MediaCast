@@ -70,15 +70,24 @@ bool FullscreenWindowController::enter(QWindow *window)
     WindowFrame::setFullscreenBorderless(window, true);
 
     const RECT &target = monitorInfo.rcMonitor;
+
+    // Do not use the exact monitor rectangle. DWM treats an exact-monitor
+    // window as fullscreen and disables non-client rendering; when the window
+    // returns to its normal rectangle, DWMWA_NCRENDERING_ENABLED can remain 0
+    // and the system border/shadow never comes back. A one-pixel overscan is
+    // visually identical (those pixels are off-screen) while keeping DWM in
+    // the ordinary-window path throughout the transition.
+    constexpr int kOverscanPixels = 1;
     if (!::SetWindowPos(
             hwnd, HWND_TOPMOST,
-            target.left, target.top,
-            target.right - target.left,
-            target.bottom - target.top,
+            target.left - kOverscanPixels,
+            target.top - kOverscanPixels,
+            target.right - target.left + kOverscanPixels * 2,
+            target.bottom - target.top + kOverscanPixels * 2,
             SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
-        WindowFrame::setFullscreenBorderless(window, false);
-        WindowFrame::setRoundedCorners(window, true);
+        ::SetWindowPlacement(hwnd, &m_state->placement);
         WindowFrame::setTopMost(window, false);
+        WindowFrame::applyFramelessWindowChrome(window);
         m_state->active = false;
         m_state->hwnd = nullptr;
         m_window.clear();
@@ -114,23 +123,18 @@ bool FullscreenWindowController::exit(QWindow *window)
         return false;
     }
 
-    WindowFrame::setTopMost(targetWindow, false);
-    WindowFrame::setFullscreenBorderless(targetWindow, false);
-    WindowFrame::setRoundedCorners(targetWindow, true);
-
     const BOOL restored =
         ::SetWindowPlacement(hwnd, &m_state->placement);
-    if (restored) {
-        ::SetWindowPos(
-            hwnd, nullptr, 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
-                | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    if (!restored)
+        return false;
+
+    WindowFrame::setTopMost(targetWindow, false);
+    WindowFrame::applyFramelessWindowChrome(targetWindow);
 
     m_state->active = false;
     m_state->hwnd = nullptr;
     m_window.clear();
-    return restored != FALSE;
+    return true;
 #else
     Q_UNUSED(window);
     return false;

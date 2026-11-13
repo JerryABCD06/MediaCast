@@ -25,7 +25,7 @@ HWND nativeHandle(QWindow *window)
 
 } // namespace
 
-void reapplyFramelessStyle(QWindow *window)
+void applyFramelessWindowChrome(QWindow *window)
 {
 #ifdef Q_OS_WIN
     const HWND hwnd = nativeHandle(window);
@@ -36,10 +36,8 @@ void reapplyFramelessStyle(QWindow *window)
     // 这一套 = 库里创建时打的那三个 + 它少打的那两个。硬要求见头注释。
     const LONG_PTR wanted = style | WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX
                                   | WS_MINIMIZEBOX | WS_SYSMENU;
-    if (wanted == style)
-        return;
-
-    ::SetWindowLongPtrW(hwnd, GWL_STYLE, wanted);
+    if (wanted != style)
+        ::SetWindowLongPtrW(hwnd, GWL_STYLE, wanted);
 
     // 光改样式位不够。系统是在处理 WM_NCCALCSIZE 的时候重算非客户区的，
     // 不主动喊它一声，新样式要等到用户下次拖窗口大小才生效 —— 中间那段时间
@@ -48,6 +46,12 @@ void reapplyFramelessStyle(QWindow *window)
     ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
                        | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    // DWM 属性必须放在最后一次非客户区重算之后。退出全屏时先恢复
+    // WINDOWPLACEMENT，再调这里；函数内部也先重算边框、最后设置 DWM 属性，
+    // 这样普通窗口的边框、阴影和圆角才不会被随后的 SWP_FRAMECHANGED 冲掉。
+    setFullscreenBorderless(window, false);
+    setRoundedCorners(window, true);
 #else
     Q_UNUSED(window);
 #endif

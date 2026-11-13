@@ -121,9 +121,9 @@ bool MainWindow::load()
         emit windowClosed();
     });
 
-    // FluentUI 建这个窗口的时候少设了两个样式位，补上。
-    // 为什么在这儿补、补的是哪几个，见 WindowFrame.h 的注释。
-    WindowFrame::reapplyFramelessStyle(m_window);
+    // 首次启动和退出全屏共用同一份普通窗口外观定义。这里是第一次应用；
+    // FullscreenWindowController 退出时会再次应用同一入口。
+    WindowFrame::applyFramelessWindowChrome(m_window);
 
     return true;
 }
