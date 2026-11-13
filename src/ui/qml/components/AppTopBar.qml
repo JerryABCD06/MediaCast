@@ -283,6 +283,8 @@ FluAppBar {
             iconSize: 16
             contentDescription: qsTr("ui_topbar_info")
             tipBelow: true
+            onPressed: console.log("[Interaction] info button pressed")
+            onReleased: console.log("[Interaction] info button released")
             onActiveFocusChanged: {
                 if (activeFocus)
                     Interaction.focusTopBar()
@@ -298,6 +300,8 @@ FluAppBar {
             iconSize: 16
             contentDescription: qsTr("ui_topbar_settings")
             tipBelow: true
+            onPressed: console.log("[Interaction] settings button pressed")
+            onReleased: console.log("[Interaction] settings button released")
             onActiveFocusChanged: {
                 if (activeFocus)
                     Interaction.focusTopBar()

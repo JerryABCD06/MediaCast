@@ -3,6 +3,8 @@
 
 #include "ui_process/UiInteractionState.h"
 
+#include <QDebug>
+
 namespace mcast::ui_process {
 
 UiInteractionState::UiInteractionState(QObject *parent)
@@ -20,6 +22,12 @@ bool UiInteractionState::showCast()
 
 bool UiInteractionState::showSettings()
 {
+    qInfo().noquote()
+        << "[Interaction] showSettings"
+        << "route=" << static_cast<int>(m_route)
+        << "focus=" << static_cast<int>(m_focusRegion)
+        << "overlay=" << static_cast<int>(m_overlay)
+        << "fullscreen=" << m_fullscreen;
     if (m_fullscreen)
         return false;
 
@@ -47,6 +55,12 @@ bool UiInteractionState::focusTopBar()
 
 bool UiInteractionState::openInfo()
 {
+    qInfo().noquote()
+        << "[Interaction] openInfo"
+        << "route=" << static_cast<int>(m_route)
+        << "focus=" << static_cast<int>(m_focusRegion)
+        << "overlay=" << static_cast<int>(m_overlay)
+        << "fullscreen=" << m_fullscreen;
     if (m_route != Route::Cast || m_overlay != Overlay::None)
         return false;
     m_focusBeforeOverlay = m_focusRegion;

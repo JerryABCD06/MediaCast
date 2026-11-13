@@ -398,6 +398,7 @@ FluWindow {
             Interaction.showCast()
         }
         onSettingsClicked: {
+            console.log("[Interaction] settings button clicked")
             Interaction.showSettings()
         }
         onDisconnectClicked: {
@@ -406,6 +407,7 @@ FluWindow {
             Shell.endCasting()
         }
         onInfoClicked: {
+            console.log("[Interaction] info button clicked")
             if (Interaction.overlay === Interaction.Info)
                 Interaction.closeOverlay()
             else

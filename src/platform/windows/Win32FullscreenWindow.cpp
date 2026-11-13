@@ -7,6 +7,8 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QCoreApplication>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QScreen>
 #include <QTimer>
@@ -166,6 +168,8 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
         if (!active || !targetWindow || !hwnd)
             return false;
 
+        QElapsedTimer timer;
+        timer.start();
         applyingGeometry = true;
         if (::IsZoomed(hwnd))
             ::ShowWindow(hwnd, SW_RESTORE);
@@ -180,9 +184,12 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
             applyingGeometry = false;
             return false;
         }
+        const qint64 firstSetWindowPosMs = timer.elapsed();
 
         if (QScreen *screen = targetWindow->screen()) {
+            const qint64 qtResizeStartedMs = timer.elapsed();
             targetWindow->setGeometry(screen->geometry());
+            const qint64 qtResizeMs = timer.elapsed() - qtResizeStartedMs;
             RECT adjusted{};
             if (::GetWindowRect(hwnd, &adjusted)) {
                 if (!::SetWindowPos(
@@ -196,6 +203,11 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
                     return false;
                 }
             }
+            qInfo().noquote()
+                << "[Fullscreen] geometry timing"
+                << "firstSetWindowPosMs=" << firstSetWindowPosMs
+                << "qtResizeMs=" << qtResizeMs
+                << "totalMs=" << timer.elapsed();
 
             if (targetWindow->size() != screen->geometry().size()) {
                 applyingGeometry = false;
