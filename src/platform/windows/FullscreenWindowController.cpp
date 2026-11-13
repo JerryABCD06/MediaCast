@@ -64,8 +64,8 @@ struct FullscreenWindowController::State
             return false;
 
         RECT &client = params->rgrc[0];
-        if (client.right > client.left)
-            --client.right;
+        if (client.bottom > client.top)
+            --client.bottom;
         return false;
     }
 #endif
@@ -134,23 +134,22 @@ bool FullscreenWindowController::enter(QWindow *window)
     // Do not use the exact monitor rectangle. DWM treats an exact-monitor
     // window as fullscreen and disables non-client rendering; when the window
     // returns to its normal rectangle, DWMWA_NCRENDERING_ENABLED can remain 0
-    // and the system border/shadow never comes back. Extend only the right by
-    // one pixel: DWM's right edge case moves off-screen, while the media client
-    // rect stays exactly monitor-sized because WM_NCCALCSIZE reserves that
-    // pixel as non-client area.
+    // and the system border/shadow never comes back. Extend only the bottom by
+    // one pixel so the top and right media edges stay aligned with the monitor;
+    // WM_NCCALCSIZE reserves that pixel as non-client area.
     constexpr int kOverscanPixels = 1;
     if (!::SetWindowPos(
             hwnd, HWND_TOPMOST,
             target.left, target.top,
-            target.right - target.left + kOverscanPixels,
-            target.bottom - target.top,
+            target.right - target.left,
+            target.bottom - target.top + kOverscanPixels,
             SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
         ::SetWindowPlacement(hwnd, &m_state->placement);
-        WindowFrame::setTopMost(window, false);
-        WindowFrame::applyFramelessWindowChrome(window);
 #ifdef Q_OS_WIN
         m_state->removeFilter();
 #endif
+        WindowFrame::setTopMost(window, false);
+        WindowFrame::applyFramelessWindowChrome(window);
         m_state->active = false;
         m_state->hwnd = nullptr;
         m_window.clear();
@@ -197,12 +196,15 @@ bool FullscreenWindowController::exit(QWindow *window)
     if (!restored)
         return false;
 
+#ifdef Q_OS_WIN
+    // Remove the client-area inset before the normal chrome pass. Otherwise
+    // that pass's SWP_FRAMECHANGED runs WM_NCCALCSIZE with the fullscreen
+    // filter still active and leaves the ordinary window one pixel short.
+    m_state->removeFilter();
+#endif
     WindowFrame::setTopMost(targetWindow, false);
     WindowFrame::applyFramelessWindowChrome(targetWindow);
 
-#ifdef Q_OS_WIN
-    m_state->removeFilter();
-#endif
     m_state->active = false;
     m_state->hwnd = nullptr;
     m_window.clear();
