@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QPointer>
 #include <QScreen>
+#include <QTimer>
 #include <QWindow>
 
 #include <windows.h>
@@ -18,10 +19,16 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
     explicit Impl(QWindow *target)
         : window(target)
     {
+        repairTimer.setInterval(500);
+        repairTimer.setTimerType(Qt::CoarseTimer);
+        QObject::connect(
+            &repairTimer, &QTimer::timeout,
+            &repairTimer, [this] { repairGeometryIfNeeded(); });
     }
 
     ~Impl() override
     {
+        repairTimer.stop();
         removeFilter();
     }
 
@@ -213,6 +220,49 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
         return true;
     }
 
+    void repairGeometryIfNeeded()
+    {
+        if (!active || applyingGeometry)
+            return;
+
+        QWindow *targetWindow = window.data();
+        if (!targetWindow || !hwnd)
+            return;
+
+        const HMONITOR monitor =
+            ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo{};
+        monitorInfo.cbSize = sizeof(monitorInfo);
+        if (!monitor || !::GetMonitorInfoW(monitor, &monitorInfo))
+            return;
+
+        RECT actual{};
+        const bool hasActual = ::GetWindowRect(hwnd, &actual);
+        const bool coversMonitor =
+            hasActual && actual.left <= monitorInfo.rcMonitor.left
+            && actual.top <= monitorInfo.rcMonitor.top
+            && actual.right >= monitorInfo.rcMonitor.right
+            && actual.bottom >= monitorInfo.rcMonitor.bottom;
+        const bool monitorMatches =
+            ::EqualRect(&monitorRect, &monitorInfo.rcMonitor);
+        const QScreen *screen = targetWindow->screen();
+        const bool qtMatches =
+            screen
+            && targetWindow->size() == screen->geometry().size()
+            && qFuzzyCompare(
+                targetWindow->devicePixelRatio(),
+                screen->devicePixelRatio());
+
+        if (coversMonitor && monitorMatches && qtMatches)
+            return;
+
+        monitorRect = monitorInfo.rcMonitor;
+        repairTimer.stop();
+        applyGeometry();
+        if (active)
+            repairTimer.start();
+    }
+
     QPointer<QWindow> window;
     HWND hwnd = nullptr;
     WINDOWPLACEMENT placement{};
@@ -222,6 +272,7 @@ struct Win32FullscreenWindow::Impl final : QAbstractNativeEventFilter
     bool filterInstalled = false;
     bool styleLocked = false;
     bool applyingGeometry = false;
+    QTimer repairTimer;
 };
 
 Win32FullscreenWindow::Win32FullscreenWindow(QWindow *window)
@@ -282,6 +333,7 @@ bool Win32FullscreenWindow::enter()
     WindowFrame::setFullscreenBorderless(targetWindow, true);
 
     if (!state.applyGeometry()) {
+        state.repairTimer.stop();
         state.removeFilter();
         state.restoreSystemMenu();
         ::SetWindowLongPtrW(hwnd, GWL_STYLE, state.normalStyle);
@@ -293,6 +345,7 @@ bool Win32FullscreenWindow::enter()
         state.hwnd = nullptr;
         return false;
     }
+    state.repairTimer.start();
     return true;
 }
 
@@ -304,6 +357,7 @@ bool Win32FullscreenWindow::exit()
 
     QWindow *targetWindow = state.window.data();
     if (!targetWindow) {
+        state.repairTimer.stop();
         state.removeFilter();
         state.active = false;
         state.hwnd = nullptr;
@@ -312,12 +366,14 @@ bool Win32FullscreenWindow::exit()
 
     const HWND hwnd = reinterpret_cast<HWND>(targetWindow->winId());
     if (!hwnd || hwnd != state.hwnd) {
+        state.repairTimer.stop();
         state.removeFilter();
         state.active = false;
         state.hwnd = nullptr;
         return false;
     }
 
+    state.repairTimer.stop();
     state.removeFilter();
     if (state.styleLocked)
         ::SetWindowLongPtrW(hwnd, GWL_STYLE, state.normalStyle);
@@ -338,6 +394,7 @@ bool Win32FullscreenWindow::exit()
         state.installFilter();
         state.lockSystemMenu();
         state.applyGeometry();
+        state.repairTimer.start();
         return false;
     }
 
