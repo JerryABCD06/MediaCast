@@ -64,8 +64,8 @@ struct FullscreenWindowController::State
             return false;
 
         RECT &client = params->rgrc[0];
-        if (client.bottom > client.top)
-            --client.bottom;
+        if (client.right > client.left)
+            --client.right;
         return false;
     }
 #endif
@@ -134,16 +134,16 @@ bool FullscreenWindowController::enter(QWindow *window)
     // Do not use the exact monitor rectangle. DWM treats an exact-monitor
     // window as fullscreen and disables non-client rendering; when the window
     // returns to its normal rectangle, DWMWA_NCRENDERING_ENABLED can remain 0
-    // and the system border/shadow never comes back. Extend only the bottom by
-    // one pixel: the top edge stays aligned with the monitor, so media content
-    // is not cropped or shifted at the top, while DWM still treats the window
-    // as an ordinary window throughout the transition.
+    // and the system border/shadow never comes back. Extend only the right by
+    // one pixel: DWM's right edge case moves off-screen, while the media client
+    // rect stays exactly monitor-sized because WM_NCCALCSIZE reserves that
+    // pixel as non-client area.
     constexpr int kOverscanPixels = 1;
     if (!::SetWindowPos(
             hwnd, HWND_TOPMOST,
             target.left, target.top,
-            target.right - target.left,
-            target.bottom - target.top + kOverscanPixels,
+            target.right - target.left + kOverscanPixels,
+            target.bottom - target.top,
             SWP_SHOWWINDOW | SWP_NOACTIVATE)) {
         ::SetWindowPlacement(hwnd, &m_state->placement);
         WindowFrame::setTopMost(window, false);
