@@ -97,7 +97,15 @@ FluAppBar {
     maximizeText: qsTr("ui_window_maximize")
     closeText: qsTr("ui_window_close")
 
-    Component.onCompleted: bar.ready()
+    Component.onCompleted: {
+        // Standard window buttons stay pointer/assistive-technology accessible,
+        // but never become Tab stops. Keyboard users use the native window
+        // shortcuts handled by Windows.
+        bar.buttonMinimize.focusPolicy = Qt.NoFocus
+        bar.buttonMaximize.focusPolicy = Qt.NoFocus
+        bar.buttonClose.focusPolicy = Qt.NoFocus
+        bar.ready()
+    }
 
     // ── 状态胶囊那两个值：从 castState 翻出来 ────────────────────────────
     //
@@ -207,6 +215,10 @@ FluAppBar {
             iconSize: 16
             contentDescription: qsTr("ui_topbar_back")
             tipBelow: true
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    Interaction.focusTopBar()
+            }
             onClicked: bar.backClicked()
         }
 
@@ -242,6 +254,10 @@ FluAppBar {
             Layout.rightMargin: 6
             visible: Playback.peerConnected
             contentDescription: qsTr("ui_topbar_disconnect")
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    Interaction.focusTopBar()
+            }
             onClicked: bar.disconnectClicked()
 
             // FluButton 的内容项本来就是一个 FluText，这里换成"图标 + 文字"。
@@ -267,6 +283,10 @@ FluAppBar {
             iconSize: 16
             contentDescription: qsTr("ui_topbar_info")
             tipBelow: true
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    Interaction.focusTopBar()
+            }
             onClicked: bar.infoClicked()
         }
 
@@ -278,6 +298,10 @@ FluAppBar {
             iconSize: 16
             contentDescription: qsTr("ui_topbar_settings")
             tipBelow: true
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    Interaction.focusTopBar()
+            }
             onClicked: bar.settingsClicked()
         }
     }

@@ -33,6 +33,11 @@ import FluentUI
 FluIconButton {
     id: control
 
+    // FluIconButton binds Accessible.name to text, but TipIconButton keeps text
+    // empty so the library tooltip does not duplicate TipTooltip. The action
+    // label therefore has to be supplied here explicitly.
+    Accessible.name: contentDescription
+
     /** 悬停时显示的那句话。默认跟 contentDescription 走。空字符串 = 不显示。 */
     property string tip: contentDescription
 

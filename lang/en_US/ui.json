@@ -84,6 +84,13 @@
     "ui_mediabar_fullscreen": "Full screen",
     "ui_mediabar_fullscreen_exit": "Exit full screen",
 
+    "ui_media_menu_volume_up": "Volume up",
+    "ui_media_menu_volume_down": "Volume down",
+    "ui_media_menu_mute": "Mute",
+    "ui_media_menu_unmute": "Unmute",
+    "ui_media_menu_seek_back": "Back 10 seconds",
+    "ui_media_menu_seek_forward": "Forward 10 seconds",
+
     "ui_picture_title": "Display",
     "ui_picture_hint": "All adjustments take effect immediately.",
     "ui_picture_reset": "Reset all",

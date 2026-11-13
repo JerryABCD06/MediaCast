@@ -222,6 +222,10 @@ Item {
     /** 鼠标在栏自己身上（兜底：停在栏上不收）。 */
     HoverHandler {
         id: barHover
+        onHoveredChanged: {
+            if (hovered)
+                Interaction.noteMouseInput()
+        }
     }
 
     /** 鼠标是不是正停在栏上 —— 静止画面那一档靠它兜底（停在栏上不收）。 */
@@ -400,6 +404,7 @@ Item {
 
             FluSlider {
                 id: posSlider
+                focusPolicy: Qt.NoFocus
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
                 from: 0
@@ -613,6 +618,7 @@ Item {
                 // 没有上一条是常态：控制点大多不排下一条、也不按上一首。
                 TipIconButton {
                     readonly property bool canGo: Playback.hasPrevious
+                    focusPolicy: Qt.NoFocus
                     iconSource: FluentIcons.BackSolidBold
                     iconSize: 18
                     iconColor: canGo ? (bar.overPicture ? "#FFFFFFFF"
@@ -643,6 +649,7 @@ Item {
                 // 比对着名字猜靠谱。现在三个键都是实心的，和系统播放器一致。）
                 TipIconButton {
                     readonly property bool showPlay: Playback.paused || Playback.idle
+                    focusPolicy: Qt.NoFocus
                     iconSource: showPlay ? FluentIcons.PlaySolid : FluentIcons.PauseBold
                     // **和其他键一样大。** 以前这里是 24（别的都是 18），一个键
                     // 显大一号，看着像忘了配。
@@ -688,6 +695,7 @@ Item {
                 // 下一个。同上 —— 判据是 Playback.hasNext。
                 TipIconButton {
                     readonly property bool canGo: Playback.hasNext
+                    focusPolicy: Qt.NoFocus
                     iconSource: FluentIcons.ForwardSolidBold
                     iconSize: 18
                     iconColor: canGo ? (bar.overPicture ? "#FFFFFFFF"
@@ -727,6 +735,7 @@ Item {
 
                 // 壳子：字幕开关。功能还没做，先占个位置。
                 TipIconButton {
+                    focusPolicy: Qt.NoFocus
                     iconSource: FluentIcons.Subtitles
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
@@ -743,6 +752,7 @@ Item {
                 // 数字放上面不是装饰：滑块本身看不出"现在是几"，调的时候得有个数可看。
                 TipIconButton {
                     id: btn_volume
+                    focusPolicy: Qt.NoFocus
 
                     // ── 图标按**现在的状态**换 ───────────────────────────────────
                     //
@@ -854,6 +864,7 @@ Item {
                             // Popup 不裁自己的子项（面板四周那圈阴影就是这么画出来的），
                             // 所以伸出去也点得到。
                             TipIconButton {
+                                focusPolicy: Qt.NoFocus
                                 x: -volumePopup.x
                                 y: -volumePopup.y
                                 width: btn_volume.width
@@ -1031,6 +1042,7 @@ Item {
                 // 十来条滑块塞不进一个浮出控件，而且调的时候得能一边看画面一边拖。
                 // 窗口归窗口外壳管，这条栏只把请求发出去（见上面 pictureRequested）。
                 TipIconButton {
+                    focusPolicy: Qt.NoFocus
                     iconSource: FluentIcons.Brightness
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor
@@ -1046,6 +1058,7 @@ Item {
                 // 里那段"一个事实 + 一张表 + 一处执行"），这里不另记一个开关。
                 TipIconButton {
                     readonly property bool isFull: bar.win ? bar.win.fullscreen : false
+                    focusPolicy: Qt.NoFocus
                     iconSource: isFull ? FluentIcons.BackToWindow : FluentIcons.FullScreen
                     iconSize: 18
                     iconColor: bar.overPicture ? "#E6FFFFFF" : FluTheme.fontPrimaryColor

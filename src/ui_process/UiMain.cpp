@@ -14,6 +14,7 @@
 #include "ui/UiState.h"
 #include "ui_process/PlaybackBridge.h"
 #include "ui_process/UiConfirmationBridge.h"
+#include "ui_process/UiInteractionState.h"
 #include "ui_process/UiSession.h"
 #include "ui_process/UiSettingsModel.h"
 
@@ -145,6 +146,10 @@ int main(int argc, char *argv[])
     }
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "UiState", &uiState);
     qmlRegisterSingletonInstance("MediaCast", 1, 0, "Settings", &settings);
+
+    mcast::ui_process::UiInteractionState interaction;
+    qmlRegisterSingletonInstance(
+        "MediaCast", 1, 0, "Interaction", &interaction);
 
     LegalDocs legal;
     QObject::connect(&legal, &LegalDocs::logMessage, writeLog);

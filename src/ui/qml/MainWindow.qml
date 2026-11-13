@@ -220,6 +220,7 @@ FluWindow {
         savedMaximized = (visibility === Window.Maximized)
 
         fullscreen = true
+        Interaction.setFullscreen(true)
         topBar.visible = false
         fitsAppBarWindows = true
 
@@ -243,6 +244,7 @@ FluWindow {
             return
 
         fullscreen = false
+        Interaction.setFullscreen(false)
         Shell.setFullscreenWindowMode(false)
 
         // 先把尺寸锁解开，不然下面那句摆位置会被 min/max 顶住。
@@ -292,7 +294,7 @@ FluWindow {
     // 全屏时的出口。只在全屏下生效 —— 不然以后设置页想用 Esc 返回就没位置了。
     Shortcut {
         sequence: "Escape"
-        enabled: window.fullscreen
+        enabled: window.fullscreen && Interaction.overlay === Interaction.None
         onActivated: window.exitFullscreen()
     }
 
@@ -362,8 +364,10 @@ FluWindow {
     //
     // 为什么不做成平级页签（原来的 FluPivot）：平级页签和二级页是两种导航模型，
     // 混在一起用户会分不清自己在哪一层 —— 尤其"设置"里以后会长出子页面。
-    property int page: 0        // 0 = 投屏，1 = 设置
-    property bool infoOpen: false
+    readonly property int page:
+        Interaction.route === Interaction.Settings ? 1 : 0
+    readonly property bool infoOpen:
+        Interaction.overlay === Interaction.Info
 
     // ── 「显示效果」那个独立窗口 ─────────────────────────────────────────
     //
@@ -438,12 +442,10 @@ FluWindow {
         pageTitle: qsTr("ui_nav_settings")
 
         onBackClicked: {
-            window.infoOpen = false
-            window.page = 0
+            Interaction.showCast()
         }
         onSettingsClicked: {
-            window.infoOpen = false
-            window.page = 1
+            Interaction.showSettings()
         }
         onDisconnectClicked: {
             // 和"关窗口时确认断开"走同一条路：Shell 把意思交给 UiMain，
@@ -451,7 +453,10 @@ FluWindow {
             Shell.endCasting()
         }
         onInfoClicked: {
-            window.infoOpen = !window.infoOpen
+            if (Interaction.overlay === Interaction.Info)
+                Interaction.closeOverlay()
+            else
+                Interaction.openInfo()
         }
 
         // 顶栏上**我们自己的**按钮要登记成"不算标题栏"，否则按下去是拖窗口。
@@ -471,7 +476,12 @@ FluWindow {
         anchors.fill: parent
         hostWindow: window
         visible: window.infoOpen
-        onCloseRequested: window.infoOpen = false
+        onCloseRequested: {
+            Interaction.closeOverlay()
+            Qt.callLater(function () {
+                topBar.infoButton.forceActiveFocus(Qt.TabFocusReason)
+            })
+        }
     }
 
     // ── 页面 ─────────────────────────────────────────────────────────────

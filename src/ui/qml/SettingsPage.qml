@@ -32,8 +32,12 @@ import "legal"
 //
 // **「关于」不在这儿** —— 它在顶栏那个 ⓘ 里（设备名、设备标识、版本、日志位置）。
 // 那是"看"的地方，不是"改"的地方；混进设置页只会让这一页变长。
-Item {
+FocusScope {
     id: page
+
+    focus: Interaction.route === Interaction.Settings
+           && Interaction.focusRegion === Interaction.Settings
+    activeFocusOnTab: true
 
     /** 现在看的是哪个类目：0 = 界面，1 = 投送。 */
     property int category: 0

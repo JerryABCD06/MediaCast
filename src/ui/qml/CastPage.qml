@@ -12,8 +12,74 @@ import "components"
 //
 // 这是个普通 Item，不认识顶栏、也不认识窗口 —— 它只负责把自己这一屏画好。
 // 页面的切换（投屏页 / 设置页）由窗口外壳管，它连那个都不知道。
-Item {
+FocusScope {
     id: page
+
+    readonly property var hostWindow: Window.window
+    readonly property bool mediaFocusActive:
+        Interaction.route === Interaction.Cast
+        && Interaction.focusRegion === Interaction.Media
+
+    focus: mediaFocusActive
+    activeFocusOnTab: true
+
+    function notePointer(mouseSource) {
+        if (mouseSource === Qt.MouseEventSynthesizedByQt)
+            Interaction.noteTouchInput()
+        else
+            Interaction.noteMouseInput()
+    }
+
+    function openMediaMenuAt(x, y) {
+        mediaContextMenu.showAt(x, y)
+    }
+
+    function openMediaMenuFromKeyboard() {
+        Interaction.noteKeyboardInput()
+        mediaContextMenu.showCentered()
+    }
+
+    onActiveFocusChanged: {
+        if (activeFocus)
+            Interaction.focusMedia()
+    }
+
+    Keys.onPressed: (event) => {
+        Interaction.noteKeyboardInput()
+
+        if (event.key === Qt.Key_Menu
+            || (event.key === Qt.Key_F10
+                && (event.modifiers & Qt.ShiftModifier))) {
+            page.openMediaMenuFromKeyboard()
+            event.accepted = true
+            return
+        }
+
+        if (page.hostWindow && page.hostWindow.fullscreen
+            && (event.key === Qt.Key_Tab
+                || event.key === Qt.Key_Backtab)) {
+            event.accepted = true
+        }
+    }
+
+    MediaContextMenu {
+        id: mediaContextMenu
+        anchorItem: page
+        hostWindow: page.hostWindow
+
+        onPictureRequested: {
+            mediaContextMenu.close()
+            page.pictureRequested()
+        }
+        onFullscreenRequested: {
+            mediaContextMenu.close()
+            const target = page.hostWindow
+            Qt.callLater(function () {
+                if (target)
+                    target.toggleFullscreen()
+            })
+        }
+    }
 
     /**
      * 控制栏上「显示效果」被按了 —— 转手报给外面。
@@ -97,6 +163,10 @@ Item {
                 // 开着悬停才收得到"鼠标在框里动了"—— 静止画面那一档（暂停的视频、
                 // 图片）就是靠它把控制栏唤出来的，见 MediaBar 里那段"什么时候露面"。
                 hoverEnabled: true
+                onPressed: (mouse) => {
+                    page.notePointer(mouse.source)
+                    page.forceActiveFocus(Qt.MouseFocusReason)
+                }
                 onPositionChanged: mediaBar.poke()
                 // 「该播还是该暂停」是个状态机问题，规则在 PlaybackController 里
                 // （togglePlayPause）。界面上有两处要用它，各写一份的话迟早只有
@@ -127,6 +197,20 @@ Item {
                     var w = Window.window
                     if (w)
                         w.toggleFullscreen()
+                }
+            }
+
+            // Right click is separated from the left-click surface so opening
+            // the media menu cannot also toggle playback.
+            MouseArea {
+                anchors.fill: parent
+                enabled: Playback.hasMedia
+                acceptedButtons: Qt.RightButton
+                onPressed: (mouse) => {
+                    page.notePointer(mouse.source)
+                    page.forceActiveFocus(Qt.MouseFocusReason)
+                    page.openMediaMenuAt(mouse.x, mouse.y)
+                    mouse.accepted = true
                 }
             }
 

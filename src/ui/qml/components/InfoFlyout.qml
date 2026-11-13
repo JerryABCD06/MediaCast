@@ -9,7 +9,7 @@ import MediaCast 1.0
 
 // Diagnostic flyout anchored under the information button. The upper half is
 // protocol-owned connection information; the lower half is Ui-local MPV data.
-Item {
+FocusScope {
     id: root
 
     property var hostWindow: null
@@ -18,6 +18,22 @@ Item {
     anchors.fill: parent
     visible: false
     z: 1000
+    focus: visible && Interaction.focusRegion === Interaction.Overlay
+    activeFocusOnTab: true
+
+    onVisibleChanged: {
+        if (visible)
+            forceActiveFocus(Qt.PopupFocusReason)
+    }
+
+    Keys.onPressed: (event) => {
+        if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+            root.close()
+            event.accepted = true
+        }
+    }
 
     function close() {
         closeRequested()
@@ -141,12 +157,6 @@ Item {
     readonly property var video: media && media.video ? media.video : null
     readonly property var audio: media && media.audio ? media.audio : null
     readonly property string mediaKind: media && media.kind ? String(media.kind) : ""
-
-    Shortcut {
-        sequences: ["Esc"]
-        enabled: root.visible
-        onActivated: root.close()
-    }
 
     MouseArea {
         anchors.fill: parent
