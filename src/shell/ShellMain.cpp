@@ -1118,6 +1118,7 @@ private:
             generation = ++m_uiGeneration;
         }
         invalidateUiConfirmations(generation);
+        m_uiControlChanged.notify_all();
         return generation;
     }
 
@@ -1140,6 +1141,7 @@ private:
                 generation = m_uiGeneration;
             }
             invalidateUiConfirmations(generation);
+            m_uiControlChanged.notify_all();
         }
     }
 
@@ -2917,6 +2919,7 @@ private:
     std::shared_ptr<mcast::ipc::PipeConnection> m_protocolConnection;
     std::shared_ptr<mcast::ipc::PipeConnection> m_uiControlConnection;
     std::mutex m_uiControlMutex;
+    std::condition_variable m_uiControlChanged;
     bool m_protocolAcceptsUiOpen = false;
     std::mutex m_protocolMutex;
     std::condition_variable m_protocolReady;
@@ -2932,6 +2935,12 @@ private:
     std::uint64_t m_protocolGeneration = 0;
     std::uint64_t m_uiGeneration = 0;
     std::mutex m_confirmationMutex;
+    enum class UiMode {
+        None,
+        Normal,
+        ConfirmationOnly,
+    };
+    UiMode m_uiMode = UiMode::None;
     enum class UiState {
         None,
         Starting,
