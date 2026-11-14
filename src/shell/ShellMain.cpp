@@ -933,12 +933,20 @@ public:
                         m_uiState = UiState::None;
                         m_uiMode = UiMode::None;
                         m_splash.hideImmediately(m_activationId);
+                        m_activationId = 0;
                         m_records.erase(std::remove_if(
                             m_records.begin(), m_records.end(),
                             [](const std::unique_ptr<ChildRecord> &record) {
                                 return record->role == ProcessRole::Ui;
                             }),
                             m_records.end());
+                        {
+                            std::scoped_lock controlLock(
+                                m_uiControlMutex);
+                            m_uiControlConnection.reset();
+                            ++m_uiGeneration;
+                        }
+                        m_uiControlChanged.notify_all();
                     }
                 }
                 if (m_uiState == UiState::Running
@@ -963,6 +971,13 @@ public:
                         m_records.end());
                     m_uiState = UiState::None;
                     m_uiMode = UiMode::None;
+                    m_activationId = 0;
+                    {
+                        std::scoped_lock controlLock(m_uiControlMutex);
+                        m_uiControlConnection.reset();
+                        ++m_uiGeneration;
+                    }
+                    m_uiControlChanged.notify_all();
                 }
             }
 
