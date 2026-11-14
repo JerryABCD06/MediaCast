@@ -234,6 +234,8 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
         std::move(
             resolved.http.begin(), resolved.http.end(),
             std::back_inserter(actions.http));
+        actions.stopNow = resolved.stopNow;
+        actions.stopPeer = std::move(resolved.stopPeer);
         actions.media = std::move(resolved.media);
         return actions;
     }
@@ -424,6 +426,12 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         ? std::move(*m_pending)
         : PendingHttp{};
     m_pending.reset();
+    if (resolution.decision.displaced
+        && resolution.decision.displaced->protocol
+            == cast::ProtocolKind::Dlna) {
+        actions.stopNow = true;
+        actions.stopPeer = resolution.decision.displaced->peer;
+    }
     replaceOperation(actions, resolution.decision);
     const bool newSession =
         !resolution.decision.duplicate

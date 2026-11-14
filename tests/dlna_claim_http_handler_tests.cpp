@@ -106,6 +106,7 @@ struct Harness {
     int playCalls = 0;
     int stopCalls = 0;
     std::string stoppedAddress;
+    std::vector<std::string> events;
     bool throwExecute = false;
     bool openMediaOnExecute = true;
     DlnaClaimHttpHandler handler;
@@ -126,6 +127,7 @@ struct Harness {
                   [this](const DlnaMediaExecution &execution) {
                       if (throwExecute)
                           throw std::runtime_error("execute failed");
+                        events.push_back("open");
                       executions.push_back(execution);
                       if (openMediaOnExecute) {
                           session.openMedia(
@@ -133,10 +135,14 @@ struct Harness {
                           playback.processAll();
                       }
                   },
-                  [this](std::optional<std::uint64_t>) { ++playCalls; },
+                    [this](std::optional<std::uint64_t>) {
+                        events.push_back("play");
+                        ++playCalls;
+                    },
                   [this](
                       const PeerIdentity &peer,
                       std::optional<std::uint64_t>) {
+                        events.push_back("stop");
                       ++stopCalls;
                       stoppedAddress = peer.address;
                   },
@@ -257,8 +263,13 @@ void testCandidateConfirmationHoldsSetAndPlay()
 
     harness.handler.confirmationDecision(key, true, CastTime{102});
     check(harness.executions.size() == 2
-              && harness.executions.back().playRequested,
-          "accepted candidate starts media with attached Play intent");
+              && harness.executions.back().playRequested
+              && harness.stopCalls == 1
+              && harness.stoppedAddress == "192.0.2.10"
+              && harness.events.size() >= 3
+              && harness.events[harness.events.size() - 2] == "stop"
+              && harness.events[harness.events.size() - 1] == "open",
+          "accepted candidate stops the displaced owner before media");
     auto transitioningSeek = harness.handler.handle(request(
         206, "192.0.2.20", "Seek",
         "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit>"
@@ -272,7 +283,7 @@ void testCandidateConfirmationHoldsSetAndPlay()
           "new owner controls are rejected before media readiness");
     result = harness.handler.handle(stopRequest(207, "192.0.2.20"));
     check(result.status == mcast::dlna::net::HttpDispatchStatus::Pending
-              && harness.stopCalls == 0
+              && harness.stopCalls == 1
               && harness.completion(207)
               && harness.completion(207)->status == 500
               && harness.completion(207)->body.find(

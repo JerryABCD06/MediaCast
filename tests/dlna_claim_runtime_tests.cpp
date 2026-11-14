@@ -144,8 +144,10 @@ void testConfirmationDecisionCompletesHeldRequests()
     actions = runtime.confirmationDecision(
         key, true, CastTime{4});
     check(actions.media && actions.media->playRequested
-              && actions.http.empty(),
-          "accepted confirmation starts candidate Open");
+              && actions.http.empty() && actions.stopNow
+              && actions.stopPeer
+              && actions.stopPeer->address == "192.0.2.10",
+          "accepted confirmation stops the displaced owner before Open");
     actions = runtime.mediaReady(
         actions.media->operationId, true, CastTime{5});
     check(actions.playNow

@@ -413,14 +413,31 @@ void DlnaClaimHttpHandler::applyActions(
             cleanupRuntime = true;
         }
     }
-    if (actions.media && m_callbacks.executeMedia) {
+    if (!forceFault && actions.stopNow && actions.stopPeer
+        && m_callbacks.stopNow && m_router.hasTransportMedia()) {
+        try {
+            m_callbacks.stopNow(
+                *actions.stopPeer, actions.ownerEpoch);
+        } catch (const std::exception &exception) {
+            log(
+                std::string("DLNA stop callback failed: ")
+                + exception.what());
+            forceFault = true;
+            cleanupRuntime = true;
+        } catch (...) {
+            log("DLNA stop callback failed");
+            forceFault = true;
+            cleanupRuntime = true;
+        }
+    }
+    if (!forceFault && actions.media && m_callbacks.executeMedia) {
         if (!invoke(m_callbacks.executeMedia, *actions.media)) {
             log("DLNA media execution callback failed");
             forceFault = true;
             cleanupRuntime = true;
         }
     }
-    if (actions.playNow && m_callbacks.playNow) {
+    if (!forceFault && actions.playNow && m_callbacks.playNow) {
         try {
             m_callbacks.playNow(actions.ownerEpoch);
         } catch (const std::exception &exception) {
@@ -430,20 +447,6 @@ void DlnaClaimHttpHandler::applyActions(
             forceFault = true;
         } catch (...) {
             log("DLNA play callback failed");
-            forceFault = true;
-        }
-    }
-    if (actions.stopNow && actions.stopPeer && m_callbacks.stopNow) {
-        try {
-            m_callbacks.stopNow(
-                *actions.stopPeer, actions.ownerEpoch);
-        } catch (const std::exception &exception) {
-            log(
-                std::string("DLNA stop callback failed: ")
-                + exception.what());
-            forceFault = true;
-        } catch (...) {
-            log("DLNA stop callback failed");
             forceFault = true;
         }
     }
