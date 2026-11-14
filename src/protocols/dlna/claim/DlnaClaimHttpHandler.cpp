@@ -183,6 +183,16 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
         }
         if (actions.stopNow)
             m_router.notePeerActivity(request.peerAddress);
+        else if (std::any_of(
+                     actions.http.begin(), actions.http.end(),
+                     [](const DlnaHttpCompletion &completion) {
+                         return completion.success;
+                     })) {
+            log(
+                "DLNA non-owner Stop acknowledged without playback "
+                "change from " + peer.address
+                + ": peer " + peer.id);
+        }
     } else if (sameAddressControlAction(parsed->action)) {
         m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
@@ -415,6 +425,9 @@ void DlnaClaimHttpHandler::applyActions(
     }
     if (!forceFault && actions.stopNow && actions.stopPeer
         && m_callbacks.stopNow && m_router.hasTransportMedia()) {
+        log(
+            "DLNA takeover accepted; stopping displaced owner "
+            "before media start");
         try {
             m_callbacks.stopNow(
                 *actions.stopPeer, actions.ownerEpoch);
