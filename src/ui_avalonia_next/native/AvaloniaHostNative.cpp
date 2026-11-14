@@ -125,6 +125,7 @@ struct HostState
     RenderWakeLatch renderWake;
     std::string glBackend = "not-attached";
     LatestValueIntents pictureIntents;
+    LatestValueIntents volumeIntents;
 
     std::mutex snapshotMutex;
     std::string shellJson = "{}";
@@ -1503,6 +1504,37 @@ void flushPictureIntents(HostState &state)
     }
 }
 
+bool applyLatestVolumeIntents(HostState &state)
+{
+    const auto latest = state.volumeIntents.takeLatest();
+    for (const auto &[name, value] : latest) {
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            continue;
+        }
+        state.playback->setVolumePercent(value);
+        log(
+            state,
+            "UI intent: Volume " + std::to_string(value));
+    }
+    return state.volumeIntents.finishDrain();
+}
+
+void drainVolumeIntents(HostState &state)
+{
+    if (applyLatestVolumeIntents(state)) {
+        postToLoop(state, [&state] {
+            drainVolumeIntents(state);
+        });
+    }
+}
+
+void flushVolumeIntents(HostState &state)
+{
+    while (applyLatestVolumeIntents(state)) {
+    }
+}
+
 } // namespace
 
 MCAST_AVALONIA_HOST_EXPORT int
@@ -1556,14 +1588,18 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_next()
 
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_set_volume(int percent)
 {
-    return postIntent([percent](HostState &state) {
-        if (!playbackCommandsAvailable(state)) {
-            log(state, "UI intent rejected: player unavailable");
-            return;
-        }
-        state.playback->setVolumePercent(percent);
-        log(state, "UI intent: Volume " + std::to_string(percent));
-    });
+    const std::scoped_lock lifecycle(g_lifecycleMutex);
+    if (!g_state || !playbackCommandsAvailable(*g_state))
+        return 0;
+    if (!g_state->volumeIntents.submit("volume", percent))
+        return 1;
+    if (!postToLoop(*g_state, [state = g_state.get()] {
+            drainVolumeIntents(*state);
+        })) {
+        g_state->volumeIntents.reset();
+        return 0;
+    }
+    return 1;
 }
 
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_set_muted(int muted)
@@ -1626,6 +1662,7 @@ mcast_avalonia_host_begin_control_adjustment()
             return;
         }
         flushPictureIntents(state);
+        flushVolumeIntents(state);
         if (state.playbackBridge)
             state.playbackBridge->beginControlAdjustment();
         log(state, "UI intent: BeginControlAdjustment");
@@ -1641,6 +1678,7 @@ mcast_avalonia_host_end_control_adjustment()
             return;
         }
         flushPictureIntents(state);
+        flushVolumeIntents(state);
         if (state.playbackBridge)
             state.playbackBridge->endControlAdjustment();
         log(state, "UI intent: EndControlAdjustment");
