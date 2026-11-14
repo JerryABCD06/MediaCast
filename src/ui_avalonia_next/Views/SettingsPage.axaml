@@ -2,7 +2,8 @@
     x:Class="MCast.Ui.Avalonia.Views.SettingsPage"
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:fa="using:FluentAvalonia.UI.Controls">
+    xmlns:fa="using:FluentAvalonia.UI.Controls"
+    Background="{DynamicResource LayerFillColorDefaultBrush}">
   <fa:FANavigationView
       x:Name="Categories"
       IsBackButtonVisible="False"

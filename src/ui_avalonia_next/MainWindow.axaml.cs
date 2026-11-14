@@ -138,7 +138,7 @@ internal sealed partial class MainWindow : Window
         var settings = ReferenceEquals(
             Navigation.SelectedItem, SettingsNavigationItem);
         _castPage.SetControlsVisible(!settings);
-        _castPage.IsHitTestVisible = !settings;
+        _castPage.SetPageActive(!settings);
         _settingsPage.IsVisible = settings;
         _settingsPage.IsHitTestVisible = settings;
         _settingsPage.ZIndex = settings ? 1 : 0;

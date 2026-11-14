@@ -18,6 +18,8 @@ internal sealed partial class CastPage : UserControl
     private bool _seekDragging;
     private bool _volumeDragging;
     private bool _applyingProjection;
+    private bool _pageActive = true;
+    private bool _controlsAllowed = true;
 
     public event Action? FullscreenRequested;
     public event Action? FrameRendered;
@@ -70,8 +72,6 @@ internal sealed partial class CastPage : UserControl
             SubtitleText.Text = string.IsNullOrWhiteSpace(media.Subtitle)
                 ? projection.Playback.CastSession.ControlPointName
                 : media.Subtitle;
-            IdlePanel.IsVisible = !projection.Playback.HasMedia
-                || projection.Playback.Idle;
             IdleTitle.Text = projection.Playback.PeerConnected
                 ? "Connected"
                 : "Cast to this PC";
@@ -101,6 +101,7 @@ internal sealed partial class CastPage : UserControl
             if (!_volumeDragging)
                 VolumeSlider.Value = projection.Playback.VolumePercent;
             UpdateTimeText();
+            UpdateVisibility();
         }
         finally
         {
@@ -110,8 +111,14 @@ internal sealed partial class CastPage : UserControl
 
     internal void SetControlsVisible(bool visible)
     {
-        ControlsPanel.IsVisible = visible;
-        ControlsPanel.IsHitTestVisible = visible;
+        _controlsAllowed = visible;
+        UpdateVisibility();
+    }
+
+    internal void SetPageActive(bool active)
+    {
+        _pageActive = active;
+        UpdateVisibility();
     }
 
     internal void SetRenderingActive(bool active)
@@ -229,6 +236,17 @@ internal sealed partial class CastPage : UserControl
         var duration = _playback?.DurationSeconds ?? 0;
         TimeText.Text =
             $"{FormatTime(position)} / {FormatTime(duration)}";
+    }
+
+    private void UpdateVisibility()
+    {
+        IsHitTestVisible = _pageActive;
+        ControlsPanel.IsVisible = _pageActive && _controlsAllowed;
+        ControlsPanel.IsHitTestVisible = _pageActive && _controlsAllowed;
+        IdlePanel.IsVisible = _pageActive
+            && (_playback is null
+                || !_playback.HasMedia
+                || _playback.Idle);
     }
 
     private static string FormatTime(double seconds)
