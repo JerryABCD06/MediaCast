@@ -11,6 +11,7 @@
 #include "QtFree/RenderWakeLatch.h"
 #include "QtFree/UiConfirmationBridge.h"
 #include "QtFree/UiSettingsModel.h"
+#include "QtFree/WindowsMediaControls.h"
 #include "ui_process/UiSession.h"
 
 #include <mpv/render_gl.h>
@@ -50,6 +51,7 @@ using mcast::avalonia::qtfree::RenderWakeLatch;
 using mcast::avalonia::qtfree::SettingsSnapshotEvent;
 using mcast::avalonia::qtfree::UiConfirmationBridge;
 using mcast::avalonia::qtfree::UiSettingsModel;
+using mcast::avalonia::qtfree::WindowsMediaControls;
 
 struct MpvProcContext
 {
@@ -87,6 +89,7 @@ struct HostState
     std::unique_ptr<PlaybackController> playback;
     std::unique_ptr<PlaybackBridge> playbackBridge;
     std::unique_ptr<UiConfirmationBridge> confirmation;
+    std::shared_ptr<WindowsMediaControls> mediaControls;
     Connection playbackLogConnection;
     std::vector<Connection> connections;
 
@@ -826,6 +829,52 @@ bool setupHost(HostState &state, std::string &error)
 
         state.playback = std::make_unique<PlaybackController>(
             state.player.get(), state.loop);
+        state.mediaControls =
+            std::make_shared<WindowsMediaControls>(state.loop);
+        state.connections.push_back(
+            state.mediaControls->logMessage.connect(
+                [&state](const std::string &message) {
+                    log(state, message);
+                }));
+        if (!state.mediaControls->attach()) {
+            log(state, "Windows media controls will remain unavailable");
+        }
+        state.connections.push_back(
+            state.mediaControls->playRequested.connect(
+                [state = &state] {
+                    if (state->playback)
+                        state->playback->play();
+                }));
+        state.connections.push_back(
+            state.mediaControls->pauseRequested.connect(
+                [state = &state] {
+                    if (state->playback)
+                        state->playback->pause();
+                }));
+        state.connections.push_back(
+            state.mediaControls->stopRequested.connect(
+                [state = &state] {
+                    if (state->playback)
+                        state->playback->stop();
+                }));
+        state.connections.push_back(
+            state.mediaControls->nextRequested.connect(
+                [state = &state] {
+                    if (state->playback)
+                        state->playback->next();
+                }));
+        state.connections.push_back(
+            state.mediaControls->previousRequested.connect(
+                [state = &state] {
+                    if (state->playback)
+                        state->playback->previous();
+                }));
+        state.connections.push_back(
+            state.mediaControls->seekRequested.connect(
+                [state = &state](double seconds) {
+                    if (state->playback)
+                        state->playback->seekTo(seconds);
+                }));
         state.connections.push_back(state.playback->logMessage.connect(
             [&state](const std::string &message) {
                 log(state, "Playback: " + message);
@@ -833,15 +882,32 @@ bool setupHost(HostState &state, std::string &error)
         state.connections.push_back(state.playback->stateChanged.connect(
             [&state](PlaybackController::State) {
                 schedulePlaybackRefresh(state);
+                if (state.mediaControls)
+                    state.mediaControls->setTransportState(
+                        state.playback->state());
             }));
         state.connections.push_back(state.playback->nowPlayingChanged.connect(
             [&state](const NowPlaying &) {
                 schedulePlaybackRefresh(state);
+                if (state.mediaControls) {
+                    state.mediaControls->setNowPlaying(
+                        state.playback->nowPlaying());
+                    state.mediaControls->setTransportState(
+                        state.playback->state());
+                }
             }));
         state.connections.push_back(state.playback->positionChanged.connect(
-            [&state](double) { schedulePlaybackRefresh(state); }));
+            [&state](double seconds) {
+                schedulePlaybackRefresh(state);
+                if (state.mediaControls)
+                    state.mediaControls->setPosition(seconds);
+            }));
         state.connections.push_back(state.playback->durationChanged.connect(
-            [&state](double) { schedulePlaybackRefresh(state); }));
+            [&state](double seconds) {
+                schedulePlaybackRefresh(state);
+                if (state.mediaControls)
+                    state.mediaControls->setDuration(seconds);
+            }));
         state.connections.push_back(state.playback->volumeChanged.connect(
             [&state](int) { schedulePlaybackRefresh(state); }));
         state.connections.push_back(state.playback->muteChanged.connect(
@@ -858,6 +924,15 @@ bool setupHost(HostState &state, std::string &error)
             [&state] { schedulePlaybackRefresh(state); }));
         state.connections.push_back(state.playback->castSessionChanged.connect(
             [&state] { schedulePlaybackRefresh(state); }));
+        state.connections.push_back(state.playback->queueChanged.connect(
+            [&state](
+                bool hasNext, bool hasPrevious,
+                const std::string &, PlaybackController::PlayMode) {
+                if (state.mediaControls) {
+                    state.mediaControls->setQueueAvailability(
+                        hasNext, hasPrevious);
+                }
+            }));
 
         applyAuthoritativePicture(state);
         if (auto playback = state.session.takePlaybackConnection()) {
@@ -1103,6 +1178,8 @@ MCAST_AVALONIA_HOST_EXPORT void mcast_avalonia_host_destroy()
     state->playbackLogConnection.disconnect();
     if (state->playbackBridge)
         state->playbackBridge->stop();
+    if (state->mediaControls)
+        state->mediaControls->detach();
     if (state->confirmation)
         state->confirmation->stop();
     if (state->playbackRefreshTimer != 0) {

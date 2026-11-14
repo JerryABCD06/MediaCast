@@ -39,6 +39,12 @@ struct NowPlaying
     std::string album;
     std::string lyrics;
     std::string artworkSource;
+
+    bool hasTitle() const { return !title.empty(); }
+    bool isEmpty() const
+    {
+        return title.empty() && artist.empty() && album.empty();
+    }
 };
 
 struct PictureControlInfo

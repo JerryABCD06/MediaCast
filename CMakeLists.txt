@@ -217,6 +217,8 @@ add_library(MCast.AvaloniaHost.Native SHARED
     src/ui_avalonia_next/native/QtFree/UiSettingsModel.cpp
     src/ui_avalonia_next/native/QtFree/UiConfirmationBridge.h
     src/ui_avalonia_next/native/QtFree/UiConfirmationBridge.cpp
+    src/ui_avalonia_next/native/QtFree/WindowsMediaControls.h
+    src/ui_avalonia_next/native/QtFree/WindowsMediaControls.cpp
     src/ui_process/UiSession.h
     src/ui_process/UiSession.cpp)
 target_include_directories(
@@ -228,7 +230,7 @@ target_compile_options(MCast.AvaloniaHost.Native PRIVATE /utf-8)
 target_link_libraries(
     MCast.AvaloniaHost.Native PRIVATE
     mcast_ipc "${MPV_DEV_DIR}/libmpv.lib"
-    winhttp.lib ws2_32.lib)
+    windowsapp.lib winhttp.lib ws2_32.lib)
 set_target_properties(
     MCast.AvaloniaHost.Native PROPERTIES
     CXX_STANDARD 20
