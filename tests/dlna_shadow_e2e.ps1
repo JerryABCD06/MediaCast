@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)][string]$ShellExe,
     [Parameter(Mandatory = $true)][string]$ProtocolExe,
     [Parameter(Mandatory = $true)][string]$UiExe,
-    [string]$QtBin = ''
+    [string]$QtBin = '',
+    [int]$HoldSeconds = 0,
+    [switch]$ShowWindows
 )
 
 $ErrorActionPreference = 'Stop'
@@ -196,8 +198,10 @@ try {
     $startInfo.WorkingDirectory = $shellDirectory
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $false
-    $startInfo.WindowStyle =
-        [System.Diagnostics.ProcessWindowStyle]::Hidden
+    if (-not $ShowWindows) {
+        $startInfo.WindowStyle =
+            [System.Diagnostics.ProcessWindowStyle]::Hidden
+    }
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     if ($QtBin) {
@@ -302,6 +306,9 @@ try {
     }
 
     $testPassed = $true
+    if ($HoldSeconds -gt 0) {
+        Start-Sleep -Seconds $HoldSeconds
+    }
     Write-Output 'DLNA shadow E2E test passed'
 } catch {
     if ($shellProcess) {
