@@ -22,6 +22,7 @@ public sealed class App : Application
     private IClassicDesktopStyleApplicationLifetime? _desktop;
     private MainWindow? _mainWindow;
     private ConfirmationOnlyWindow? _confirmationWindow;
+    private bool _replacingConfirmationWindow;
     private bool _shutdownRequested;
     private bool? _lastControlConnected;
     private bool? _lastRendererLost;
@@ -92,6 +93,8 @@ public sealed class App : Application
         }
         else
         {
+            desktop.ShutdownMode =
+                ShutdownMode.OnMainWindowClose;
             var window = new MainWindow(_host, _log);
             _mainWindow = window;
             desktop.MainWindow = window;
@@ -199,19 +202,39 @@ public sealed class App : Application
         {
             return;
         }
+        _replacingConfirmationWindow = true;
         _confirmationWindow?.CancelFromShell();
-        var window = new ConfirmationOnlyWindow(_host, request);
-        _confirmationWindow = window;
-        if (ownsProcessLifecycle && _desktop is not null)
-            _desktop.MainWindow = window;
-        window.Closed += (_, _) =>
+        _replacingConfirmationWindow = false;
+        ConfirmationOnlyWindow? window = null;
+        try
         {
-            if (ReferenceEquals(_confirmationWindow, window))
-                _confirmationWindow = null;
-            if (ownsProcessLifecycle && !_shutdownRequested)
+            window = new ConfirmationOnlyWindow(_host, request);
+            _confirmationWindow = window;
+            if (ownsProcessLifecycle && _desktop is not null)
+                _desktop.MainWindow = window;
+            window.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_confirmationWindow, window))
+                    _confirmationWindow = null;
+                if (ownsProcessLifecycle
+                    && !_replacingConfirmationWindow
+                    && !_shutdownRequested)
+                    RequestShutdown();
+            };
+            window.Show();
+        }
+        catch (Exception exception)
+        {
+            _log?.Write(
+                "Confirmation window failed: "
+                    + exception.Message);
+            if (window is not null)
+                window.CancelFromShell();
+            _host.RespondCastConfirmation(
+                request.RequestId, accepted: false);
+            if (ownsProcessLifecycle)
                 RequestShutdown();
-        };
-        window.Show();
+        }
     }
 
     private void ApplyShellAppearance(ShellProjection? shell)
