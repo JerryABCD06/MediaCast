@@ -59,6 +59,7 @@ public:
         std::string_view json, std::uint64_t baseVersion,
         std::string &error);
     bool submitDecision(std::uint64_t requestId, bool accepted);
+    void dropConnectionForTest();
 
     Signal<const ConfirmationEvent &> requestReceived;
     Signal<std::uint64_t> cancelReceived;

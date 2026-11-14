@@ -144,6 +144,21 @@ void log(HostState &state, const std::string &message)
         state.logCallback(message.c_str(), state.logContext);
 }
 
+std::optional<std::chrono::milliseconds> testDelay(
+    const char *name)
+{
+    const char *value = std::getenv(name);
+    if (!value || *value == '\0')
+        return std::nullopt;
+    char *end = nullptr;
+    const long milliseconds = std::strtol(value, &end, 10);
+    if (end == value || *end != '\0' || milliseconds < 0
+        || milliseconds > 600000) {
+        return std::nullopt;
+    }
+    return std::chrono::milliseconds(milliseconds);
+}
+
 void notifyChanged(
     HostState &state,
     std::uint32_t dirtyDomains = MCAST_AVALONIA_DIRTY_ALL)
@@ -960,6 +975,23 @@ bool setupHost(HostState &state, std::string &error)
             return false;
         }
         updatePlayback(state);
+    }
+
+    if (const auto delay =
+            testDelay("MCAST_UI_TEST_DISCONNECT_PLAYBACK_MS")) {
+        state.loop.scheduleAfter(*delay, [&state] {
+            log(state, "Test fault: dropping PlaybackPipe");
+            if (state.playbackBridge)
+                state.playbackBridge->dropConnectionForTest();
+        });
+    }
+    if (const auto delay =
+            testDelay("MCAST_UI_TEST_DISCONNECT_CONTROL_MS")) {
+        state.loop.scheduleAfter(*delay, [&state] {
+            log(state, "Test fault: dropping ControlPipe");
+            if (state.confirmation)
+                state.confirmation->dropConnectionForTest();
+        });
     }
 
     state.reconnectWorker = std::jthread(

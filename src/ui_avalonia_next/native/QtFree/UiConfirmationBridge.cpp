@@ -149,6 +149,12 @@ bool UiConfirmationBridge::submitDecision(
     return true;
 }
 
+void UiConfirmationBridge::dropConnectionForTest()
+{
+    if (m_control)
+        m_control->close();
+}
+
 void UiConfirmationBridge::readLoop(std::stop_token stop)
 {
     while (!stop.stop_requested()) {
