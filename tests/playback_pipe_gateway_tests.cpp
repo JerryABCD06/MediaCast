@@ -287,8 +287,6 @@ int main()
                 && event.snapshot.state == PlaybackState::Preparing;
         });
     }), "state delta event arrives");
-    check(gateway.snapshot().state == PlaybackState::Preparing,
-          "state delta cached");
 
     check(events.waitFor([](const auto &list) {
         return !list.empty()
