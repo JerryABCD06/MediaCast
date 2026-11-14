@@ -30,8 +30,9 @@ internal sealed class ConfirmationOnlyWindow : Window
         _host = host;
         Projection = projection;
         Title = "Cast confirmation";
-        Width = 520;
-        Height = 390;
+        Width = 460;
+        MinHeight = 260;
+        SizeToContent = SizeToContent.Height;
         CanResize = false;
         Topmost = true;
         WindowStartupLocation =
