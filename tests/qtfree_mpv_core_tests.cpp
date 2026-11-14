@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -105,6 +106,7 @@ int main()
     bool failed = false;
     bool durationSeen = false;
     bool volumeSeen = false;
+    std::atomic_int renderUpdates = 0;
     std::string failure;
     auto readyConnection = player.ready.connect([&](std::uint64_t) {
         const std::scoped_lock lock(mutex);
@@ -134,6 +136,8 @@ int main()
             volumeSeen = true;
             condition.notify_all();
         });
+    auto renderConnection = player.renderUpdate.connect(
+        [&] { ++renderUpdates; });
 
     MediaLoadRequest request;
     request.logicalUri = wave.string();
@@ -172,8 +176,12 @@ int main()
           "picture control is accepted");
     check(player.pictureControlValue("brightness") == 20,
           "picture control value is readable");
+    check(renderUpdates.load() == 1,
+          "picture control requests a redraw");
     check(player.setPictureControl("sharpen", 25),
           "sharpen filter is accepted");
+    check(renderUpdates.load() == 2,
+          "sharpen control requests a redraw");
 
     const auto info = JsonValue::parse(player.mediaInfoJson());
     check(info.has_value() && info->isObject(),
