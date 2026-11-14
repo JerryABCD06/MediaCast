@@ -323,6 +323,66 @@ start > end      -> 416
 非法 Range       -> 416
 ```
 
+### 3.10 冷启动时 Open 必须等待 PlaybackUiReady
+
+提交：
+
+```text
+e4acc83 fix(protocol): keep cold-start open pending until UI ready
+```
+
+真实故障：
+
+```text
+23:24:20.295 SOAP AVTransport#SetAVTransportURI
+23:24:20.941 Pending DLNA open submitted after reconnect
+23:24:21.053 HLS compatibility plan: wrapped transport stream
+23:24:21.053 DLNA request failed: playback UI is not ready
+23:24:21.932 Playback UI ready
+```
+
+根因不是 MPV 加载完成消息丢失，而是 `PlaybackPipeGateway::snapshot()` 在 UI
+首帧前已经报告 `playerAvailable=true`。Protocol 的 `PlanningPlaybackGateway`
+因此提前启动兼容性规划；规划完成后，上游才返回 `WaitingForPlayer`。此时
+DLNA Session 只收到异步的 `CommandCompleted/Rejected`，无法再把“暂时未就绪”
+与真正失败区分开，最终清除了 pending Open。
+
+修复只改变 Protocol 消费该连接时的可用性投影：
+
+```text
+PlaybackPipe connected
+  + UI player snapshot present
+  + PlaybackUiReady not received
+  -> snapshot.playerAvailable=false
+
+PlaybackUiReady received
+  -> snapshot.playerAvailable follows the authoritative Ui snapshot
+```
+
+因此顺序固定为：
+
+```text
+SetAVTransportURI
+  -> Open held as pending
+  -> PlaybackUiReady
+  -> compatibility planning starts once
+  -> Open
+  -> resulting Play in deferred order
+```
+
+不改变 pipe 名称、消息类型、wire 字段、generation/stateVersion、owner、
+PlaybackUiReady 含义或 Open/Play 顺序。Ui 快照本身仍是播放事实权威；
+Protocol 只是在命令门尚未打开时把它投影为不可接收命令。
+
+回归覆盖：
+
+- UI 快照先到、`PlaybackUiReady` 后到时，命令提交必须返回等待；
+- `PlaybackUiReady` 到达后，同一快照恢复为可接收命令；
+- UI 未就绪时不得启动兼容性规划；
+- 同一 Open 在就绪后只启动一次规划并到达上游；
+- PlaybackPipe 重连、DLNA Session、SOAP、Runtime 和 Qt-free PlaybackBridge
+  既有行为保持不变。
+
 ## 4. 真实交互
 
 lavfi 60 fps 视频经真实三进程 DLNA shadow E2E：
@@ -409,6 +469,7 @@ bad4659 fix(wrapped-ts): honor suffix and invalid ranges
 d6f5c4e test(ui): cover lightweight confirmation-only mode
 c986d34 fix(protocol): skip reconnect after Ui exit
 9643110 test(shell): align handoff wait with protocol timeout
+e4acc83 fix(protocol): keep cold-start open pending until UI ready
 ```
 
 ## 8. 明确未纳入
