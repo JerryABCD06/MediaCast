@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$UiExe,
     [string]$QtBin = '',
     [int]$HoldSeconds = 0,
+    [int]$ExpectUiExitSeconds = 0,
     [switch]$ShowWindows,
     [string]$SourceMediaPath = '',
     [string]$SourceMediaUri = ''
@@ -322,6 +323,23 @@ try {
     $testPassed = $true
     if ($HoldSeconds -gt 0) {
         Start-Sleep -Seconds $HoldSeconds
+    }
+    if ($ExpectUiExitSeconds -gt 0) {
+        $deadline = [DateTime]::UtcNow.AddSeconds($ExpectUiExitSeconds)
+        do {
+            $uiProcesses = Get-CimInstance Win32_Process |
+                Where-Object {
+                    $_.Name -eq 'MCast.Ui.exe' -and
+                    $_.CommandLine -like "*$instance*"
+                }
+            if (-not $uiProcesses) {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($uiProcesses) {
+            throw "Ui did not fail closed within $ExpectUiExitSeconds seconds"
+        }
     }
     Write-Output 'DLNA shadow E2E test passed'
 } catch {

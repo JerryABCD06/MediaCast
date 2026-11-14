@@ -844,6 +844,22 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_avalonia_dlna_shadow_e2e
         PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(
+        NAME mcast_control_pipe_fail_closed
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/dlna_shadow_e2e.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE_DIR:MCast.Shell>/MCast.Ui.exe"
+            -SourceMediaUri
+                "av://lavfi:testsrc=duration=60:size=1280x720:rate=60"
+            -ExpectUiExitSeconds 12)
+    set_tests_properties(
+        mcast_control_pipe_fail_closed
+        PROPERTIES
+            ENVIRONMENT "MCAST_UI_TEST_DISCONNECT_CONTROL_MS=3000"
+            TIMEOUT 60
+            RUN_SERIAL TRUE)
     endif()
 
     add_executable(
