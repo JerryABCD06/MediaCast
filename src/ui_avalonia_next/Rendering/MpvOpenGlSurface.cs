@@ -87,7 +87,7 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
         gl.Clear(0x00004000);
         if (!_attached)
             return;
-        if (_host.RenderFrame(framebuffer, width, height, false))
+        if (_host.RenderFrame(framebuffer, width, height, true))
         {
             FrameRendered?.Invoke();
         }
