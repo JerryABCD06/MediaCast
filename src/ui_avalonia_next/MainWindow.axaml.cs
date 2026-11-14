@@ -23,6 +23,7 @@ internal sealed partial class MainWindow : Window
     private bool _firstFrameSent;
     private bool _allowClose;
     private bool _windowMoving;
+    private bool _closeDialogOpen;
 
     internal MainWindow()
         : this(null!, null!)
@@ -98,6 +99,9 @@ internal sealed partial class MainWindow : Window
         }
 
         e.Cancel = true;
+        if (_closeDialogOpen)
+            return;
+        _closeDialogOpen = true;
         var dialog = new FAContentDialog
         {
             Title = "Close Media Cast Receiver",
@@ -109,15 +113,31 @@ internal sealed partial class MainWindow : Window
             CloseButtonText = "Cancel",
             DefaultButton = FAContentDialogButton.Primary,
         };
-        var result = await dialog.ShowAsync(this);
-        if (result == FAContentDialogResult.None)
-            return;
+        try
+        {
+            var result = await dialog.ShowAsync(this);
+            if (result == FAContentDialogResult.None)
+                return;
 
-        if (result == FAContentDialogResult.Secondary)
-            _host.RequestEndCast();
-        await Task.Run(_host.PauseAndFlushForWindowClose);
-        _allowClose = true;
-        Dispatcher.UIThread.Post(Close);
+            if (result == FAContentDialogResult.Secondary)
+            {
+                _host.RequestEndCast();
+                var deadline =
+                    DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+                while (_host.Current?.Playback.PeerConnected == true
+                       && DateTimeOffset.UtcNow < deadline)
+                {
+                    await Task.Delay(50);
+                }
+            }
+            await Task.Run(_host.PauseAndFlushForWindowClose);
+            _allowClose = true;
+            Dispatcher.UIThread.Post(Close);
+        }
+        finally
+        {
+            _closeDialogOpen = false;
+        }
     }
 
     internal void CloseForHostShutdown()
