@@ -95,6 +95,8 @@ public sealed class App : Application
             var window = new MainWindow(_host, _log);
             _mainWindow = window;
             desktop.MainWindow = window;
+            if (_host.Current?.Confirmation is { } request)
+                ShowConfirmation(request, ownsProcessLifecycle: false);
         }
         base.OnFrameworkInitializationCompleted();
     }
@@ -104,7 +106,7 @@ public sealed class App : Application
     {
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         if (_host?.Current?.Confirmation is { } request)
-            ShowConfirmation(request);
+            ShowConfirmation(request, ownsProcessLifecycle: true);
         else if (_host?.Current?.Shell.TestTakeoverWindow == true)
         {
             ShowConfirmation(new CastConfirmationProjection(
@@ -115,30 +117,31 @@ public sealed class App : Application
                 "Living Room Phone",
                 "192.0.2.10",
                 "Example Movie",
-                10_000));
+                10_000), ownsProcessLifecycle: true);
         }
-        else
-            Dispatcher.UIThread.Post(RequestShutdown);
     }
 
     private void OnHostChanged(HostProjection projection)
     {
         LogHostTransitions(projection);
         ApplyShellAppearance(projection.Shell);
-        if (projection.Shell.ConfirmationOnly)
-        {
-            if (projection.Confirmation is { } request)
-                ShowConfirmation(request);
-            else if (!_shutdownRequested)
-                RequestShutdown();
-            return;
-        }
-
         if (!projection.Shell.UiSessionConnected
             || projection.Renderer.ContextLost
             || !string.IsNullOrEmpty(projection.Shell.FatalReason))
         {
             RequestShutdown();
+            return;
+        }
+
+        if (projection.Confirmation is { } request)
+        {
+            ShowConfirmation(
+                request,
+                ownsProcessLifecycle: projection.Shell.ConfirmationOnly);
+        }
+        else
+        {
+            _confirmationWindow?.CancelFromShell();
         }
     }
 
@@ -185,7 +188,9 @@ public sealed class App : Application
         }
     }
 
-    private void ShowConfirmation(CastConfirmationProjection request)
+    private void ShowConfirmation(
+        CastConfirmationProjection request,
+        bool ownsProcessLifecycle)
     {
         if (_host is null)
             return;
@@ -197,13 +202,13 @@ public sealed class App : Application
         _confirmationWindow?.CancelFromShell();
         var window = new ConfirmationOnlyWindow(_host, request);
         _confirmationWindow = window;
-        if (_desktop is not null)
+        if (ownsProcessLifecycle && _desktop is not null)
             _desktop.MainWindow = window;
         window.Closed += (_, _) =>
         {
             if (ReferenceEquals(_confirmationWindow, window))
                 _confirmationWindow = null;
-            if (!_shutdownRequested)
+            if (ownsProcessLifecycle && !_shutdownRequested)
                 RequestShutdown();
         };
         window.Show();
