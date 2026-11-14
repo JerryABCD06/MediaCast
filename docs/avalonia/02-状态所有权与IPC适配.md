@@ -110,6 +110,19 @@ Shell 选择 confirmation-only
 关闭是否退出 Ui 由 Ui 模式决定：普通模式只关闭辅助确认窗口，confirmation-only
 关闭确认窗口才退出进程。
 
+确认决定的顺序是：
+
+```text
+用户选择
+  -> native EventLoop 执行 submitDecision
+  -> ControlPipe 写入成功/失败返回
+  -> 确认窗口关闭
+```
+
+不能把决定简单 post 到队列后立刻销毁 native host；否则 barrier 之前 bridge 可能
+已经关闭，用户选择会丢失。Shell 也不得在已校验决定后仅因 Ui 随后退出而将决定
+降级为取消。
+
 ## 4. Avalonia 到 native host
 
 Avalonia 只通过语义 ABI 发送用户意图：

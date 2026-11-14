@@ -78,12 +78,18 @@ Protocol 请求 confirmation-only 显示
 信号订阅，随后 `activate()` 回放 pending 请求。Shell 只需要 ControlPipe 已连接；
 这保持了旧版 QML 的窗口生命周期，同时消除了冷启动时的订阅竞态。
 
+用户决定使用同步收口：`RespondCastConfirmation` 必须在 native EventLoop 中执行
+`submitDecision` 并完成 ControlPipe 写入后才返回，确认窗口随后才关闭。Shell 对
+已经通过 source、generation、protocol 和 claimId 校验的决定不再做会丢弃结果的
+二次连接存活检查。
+
 ## 6. 必须保持
 
 - 已有普通窗口时不额外启动 confirmation-only；
 - 同一时刻最多一个 Ui；
 - 主窗口 `UiActivateRequest -> UiFirstFrame` 规则不变；
 - confirmation-only 不使用主窗口首帧看门狗；
+- confirmation 请求处于“正在启动/等待决定”时不能被普通 Ui 激活抢占；
 - 拒绝、超时、关闭、断管全部 fail-closed；
 - claimId / requestId / protocol 校验不变；
 - confirmation-only 不连接 PlaybackPipe、MPV、SMTC；
@@ -137,6 +143,7 @@ ready 超时
 - 没有 MPV/SMTC；
 - 没有 PlaybackPipe；
 - Shell 日志明确记录 Ui 模式；
+- ControlPipe reset 立即失效该 generation 的 pending 并唤醒等待线程；
 - 结束后无残留进程。
 
 ## 9. 实施边界
@@ -190,6 +197,11 @@ Release 端到端演练还验证了：
   -> Shell 启动 MCast.Ui.exe --confirmation-only
   -> 新 Ui 只启动 native host，不创建 MPV、SMTC、PlaybackBridge 或 PlaybackPipe
 ```
+
+普通模式使用 `ShutdownMode.OnMainWindowClose`：主窗口关闭拥有整个普通 Ui 的
+生命周期；确认窗口只是辅助窗口。confirmation-only 才使用
+`OnExplicitShutdown`，由确认窗口关闭收口进程。确认窗口尺寸不再照搬 QML，
+使用 Fluent 内容宽度与内容自适应高度。
 
 `mcast_playback_pipe_gateway_tests` 在完整串行测试中曾出现一次
 `state delta cached` 失败，但单独重跑通过；该测试属于既有 Playback 层，本次
