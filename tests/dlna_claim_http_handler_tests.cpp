@@ -373,6 +373,16 @@ void testDifferentUserAgentIsNotOwner()
     harness.handler.mediaReady(
         harness.executions[0].operationId, true, CastTime{101});
 
+    auto candidateStop = stopRequest(450, "192.0.2.10");
+    candidateStop.headers.front().second = "Other-Control";
+    auto stopResult = harness.handler.handle(candidateStop);
+    check(stopResult.status
+              == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.stopCalls == 0
+              && harness.completion(450)
+              && harness.completion(450)->status == 200,
+          "same-IP candidate Stop is acknowledged without interrupting");
+
     auto other = setUriRequest(
         402, "192.0.2.10", "http://example.test/other.mp4");
     other.headers.front().second = "Other-Control";

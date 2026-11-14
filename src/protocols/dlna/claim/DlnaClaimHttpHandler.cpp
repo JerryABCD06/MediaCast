@@ -165,7 +165,6 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
                 request.requestId, peer, m_now());
         }
     } else if (parsed->action == "Stop") {
-        m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
         if (m_runtime.canControl(peer)
             && !m_runtime.mediaOpening()
@@ -182,6 +181,8 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
             actions = m_runtime.requestStop(
                 request.requestId, peer, m_now());
         }
+        if (actions.stopNow)
+            m_router.notePeerActivity(request.peerAddress);
     } else if (sameAddressControlAction(parsed->action)) {
         m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
