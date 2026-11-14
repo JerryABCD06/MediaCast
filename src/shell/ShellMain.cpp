@@ -1298,6 +1298,136 @@ private:
         return true;
     }
 
+    bool ensureConfirmationUi(
+        std::chrono::steady_clock::time_point deadline,
+        bool &launched, std::string &error)
+    {
+        launched = false;
+        std::scoped_lock lock(m_uiMutex);
+        if (m_uiState == UiState::Running
+            || m_uiState == UiState::Starting) {
+            bool alive = false;
+            {
+                std::scoped_lock recordsLock(m_recordsMutex);
+                ChildRecord *ui = findRecord(ProcessRole::Ui);
+                alive = ui && ui->process.running();
+                if (!alive && ui) {
+                    std::string terminateError;
+                    ui->process.terminate(0, 1000ms, terminateError);
+                    m_records.erase(std::remove_if(
+                        m_records.begin(), m_records.end(),
+                        [](const std::unique_ptr<ChildRecord> &record) {
+                            return record->role == ProcessRole::Ui;
+                        }),
+                        m_records.end());
+                }
+            }
+            if (alive)
+                return true;
+            m_uiState = UiState::None;
+            m_uiMode = UiMode::None;
+            {
+                std::scoped_lock controlLock(m_uiControlMutex);
+                m_uiControlConnection.reset();
+                ++m_uiGeneration;
+            }
+            m_uiControlChanged.notify_all();
+        }
+
+        {
+            std::scoped_lock recordsLock(m_recordsMutex);
+            ChildRecord *staleUi = findRecord(ProcessRole::Ui);
+            if (staleUi) {
+                std::string terminateError;
+                staleUi->process.terminate(0, 1000ms, terminateError);
+            }
+            m_records.erase(std::remove_if(
+                m_records.begin(), m_records.end(),
+                [](const std::unique_ptr<ChildRecord> &record) {
+                    return record->role == ProcessRole::Ui;
+                }),
+                m_records.end());
+        }
+        {
+            std::scoped_lock controlLock(m_uiControlMutex);
+            m_uiControlConnection.reset();
+            ++m_uiGeneration;
+        }
+        m_uiControlChanged.notify_all();
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            error = "cast confirmation UI deadline expired";
+            return false;
+        }
+
+        const std::uint64_t effectiveId = ++m_nextActivationId;
+        m_activationId = effectiveId;
+        m_uiState = UiState::Starting;
+        m_uiMode = UiMode::ConfirmationOnly;
+        if (!launchUi(
+                effectiveId, UiMode::ConfirmationOnly, error)) {
+            m_uiState = UiState::Failed;
+            m_uiMode = UiMode::None;
+            return false;
+        }
+        m_uiState = UiState::Running;
+        m_uiStartedAt = std::chrono::steady_clock::now();
+        launched = true;
+        std::cout << "SHELL_UI_STARTED activation=" << effectiveId
+                  << " mode=confirmation-only\n";
+        return true;
+    }
+
+    bool waitForUiControl(
+        std::chrono::steady_clock::time_point deadline,
+        std::shared_ptr<mcast::ipc::PipeConnection> &connection,
+        std::uint64_t &generation)
+    {
+        std::unique_lock lock(m_uiControlMutex);
+        if (!m_uiControlChanged.wait_until(
+                lock, deadline, [this] {
+                    return static_cast<bool>(m_uiControlConnection)
+                        || m_shuttingDown.load();
+                })) {
+            return false;
+        }
+        if (m_shuttingDown.load())
+            return false;
+        connection = m_uiControlConnection;
+        generation = m_uiGeneration;
+        return static_cast<bool>(connection);
+    }
+
+    void retireConfirmationOnlyUi()
+    {
+        std::scoped_lock lock(m_uiMutex);
+        if (m_uiMode != UiMode::ConfirmationOnly)
+            return;
+        {
+            std::scoped_lock recordsLock(m_recordsMutex);
+            ChildRecord *ui = findRecord(ProcessRole::Ui);
+            if (ui) {
+                std::string terminateError;
+                ui->process.terminate(0, 1000ms, terminateError);
+                m_records.erase(std::remove_if(
+                    m_records.begin(), m_records.end(),
+                    [](const std::unique_ptr<ChildRecord> &record) {
+                        return record->role == ProcessRole::Ui;
+                    }),
+                    m_records.end());
+            }
+        }
+        m_uiState = UiState::None;
+        m_uiMode = UiMode::None;
+        m_activationId = 0;
+        {
+            std::scoped_lock controlLock(m_uiControlMutex);
+            m_uiControlConnection.reset();
+            ++m_uiGeneration;
+        }
+        m_uiControlChanged.notify_all();
+    }
+
     std::optional<bool> requestCastConfirmation(
         mcast::ipc::CastConfirmationRequestInfo request,
         std::uint64_t requestMessageId, std::uint64_t generation)
@@ -1311,6 +1441,30 @@ private:
 
         std::shared_ptr<mcast::ipc::PipeConnection> uiConnection;
         std::uint64_t uiGeneration = 0;
+        bool launchedForRequest = false;
+        {
+            std::scoped_lock uiLock(m_uiControlMutex);
+            uiConnection = m_uiControlConnection;
+            uiGeneration = m_uiGeneration;
+        }
+        if (!uiConnection) {
+            std::string launchError;
+            if (!ensureConfirmationUi(
+                    deadline, launchedForRequest, launchError)) {
+                std::cerr << "confirmation UI launch failed: "
+                          << launchError << '\n';
+                return false;
+            }
+            if (!waitForUiControl(
+                    deadline, uiConnection, uiGeneration)) {
+                if (launchedForRequest)
+                    retireConfirmationOnlyUi();
+                if (m_shuttingDown.load())
+                    return std::nullopt;
+                std::cerr << "confirmation UI ControlPipe timed out\n";
+                return false;
+            }
+        }
 
         auto waiter = std::make_shared<ConfirmationWaiter>();
         waiter->deadline = deadline;
@@ -1319,46 +1473,63 @@ private:
             static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     deadline - std::chrono::steady_clock::now()).count());
-        if (request.remainingTimeoutMs == 0)
+        if (request.remainingTimeoutMs == 0) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return false;
+        }
 
         std::string error;
         const auto uiRequest = mcast::ipc::makeUiCastConfirmationRequestMessage(
             uiRequestMessageId, requestMessageId, request, error);
-        if (!uiRequest)
+        if (!uiRequest) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return false;
+        }
 
+        bool abortPending = false;
         {
             std::scoped_lock uiLock(m_uiControlMutex);
-            uiConnection = m_uiControlConnection;
-            uiGeneration = m_uiGeneration;
-            if (!uiConnection)
-                return false;
-            std::scoped_lock lock(m_confirmationMutex);
-            if (generation != m_protocolGeneration)
-                return std::nullopt;
-            if (m_cancelledProtocolConfirmations.erase(
-                    requestMessageId)
-                != 0) {
-                return std::nullopt;
+            if (m_uiControlConnection != uiConnection
+                || m_uiGeneration != uiGeneration) {
+                abortPending = true;
+            } else {
+                std::scoped_lock lock(m_confirmationMutex);
+                if (generation != m_protocolGeneration
+                    || m_cancelledProtocolConfirmations.erase(
+                           requestMessageId)
+                        != 0) {
+                    abortPending = true;
+                } else {
+                    m_pendingUiConfirmations.emplace(
+                        uiRequestMessageId,
+                        PendingUiConfirmation{
+                            waiter,
+                            uiConnection,
+                            generation,
+                            uiGeneration,
+                            request.protocol,
+                            request.claimId,
+                            requestMessageId,
+                            uiRequestMessageId,
+                            deadline,
+                        });
+                }
             }
-            m_pendingUiConfirmations.emplace(
-                uiRequestMessageId,
-                PendingUiConfirmation{
-                    waiter,
-                    uiConnection,
-                    generation,
-                    uiGeneration,
-                    request.protocol,
-                    request.claimId,
-                    requestMessageId,
-                    uiRequestMessageId,
-                    deadline,
-                });
+        }
+        if (abortPending) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
+            return std::nullopt;
         }
         if (!uiConnection->writeMessage(*uiRequest, 2000ms, error)) {
-            std::scoped_lock lock(m_confirmationMutex);
-            m_pendingUiConfirmations.erase(uiRequestMessageId);
+            {
+                std::scoped_lock lock(m_confirmationMutex);
+                m_pendingUiConfirmations.erase(uiRequestMessageId);
+            }
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return false;
         }
 
@@ -1383,22 +1554,40 @@ private:
                 std::cerr << "UI confirmation cancel failed: "
                           << cancelError << '\n';
             }
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return false;
         }
-        if (!waiter->ready)
+        if (!waiter->ready) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return std::nullopt;
-        if (waiter->cancelled)
+        }
+        if (waiter->cancelled) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return std::nullopt;
+        }
         const bool accepted = waiter->accepted;
         lock.unlock();
+        bool generationChanged = false;
         {
             std::scoped_lock confirmationLock(m_confirmationMutex);
             if (generation != m_protocolGeneration)
-                return std::nullopt;
-            m_pendingUiConfirmations.erase(uiRequestMessageId);
+                generationChanged = true;
+            else
+                m_pendingUiConfirmations.erase(uiRequestMessageId);
         }
-        if (!currentUiConnection(uiConnection, uiGeneration))
+        if (generationChanged) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
             return std::nullopt;
+        }
+        if (!currentUiConnection(uiConnection, uiGeneration)) {
+            if (launchedForRequest)
+                retireConfirmationOnlyUi();
+            return std::nullopt;
+        }
         return accepted;
     }
 
