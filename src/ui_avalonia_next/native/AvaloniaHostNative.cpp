@@ -101,6 +101,7 @@ struct HostState
     bool reconnectPending = false;
 
     std::atomic_bool stopping{false};
+    std::atomic_bool closing{false};
     std::atomic_bool controlConnected{true};
     std::atomic_bool windowPresented{false};
     std::atomic_bool playerRunning{false};
@@ -514,7 +515,8 @@ void updateRenderer(HostState &state)
 
 void evaluatePlaybackReady(HostState &state)
 {
-    if (state.stopping.load() || !state.playbackBridge
+    if (state.stopping.load() || state.closing.load()
+        || !state.playbackBridge
         || !state.playerRunning.load()
         || !state.windowPresented.load()
         || !state.rendererReady.load()
@@ -547,6 +549,8 @@ void attachPlaybackBridge(
     HostState &state,
     std::shared_ptr<mcast::ipc::PipeConnection> connection)
 {
+    if (state.stopping.load() || state.closing.load())
+        return;
     state.playbackLogConnection.disconnect();
     if (state.playbackBridge)
         state.playbackBridge->stop();
@@ -1223,11 +1227,10 @@ MCAST_AVALONIA_HOST_EXPORT void mcast_avalonia_host_destroy()
     }
 
     stopReconnectWorker(*state);
+    log(*state, "Avalonia shutdown: producers stopped");
     state->playbackLogConnection.disconnect();
     if (state->playbackBridge)
         state->playbackBridge->stop();
-    if (state->mediaControls)
-        state->mediaControls->detach();
     if (state->confirmation)
         state->confirmation->stop();
     if (state->playbackRefreshTimer != 0) {
@@ -1242,6 +1245,15 @@ MCAST_AVALONIA_HOST_EXPORT void mcast_avalonia_host_destroy()
     const bool passed = queued
         && barrier.wait_for(10s) == std::future_status::ready;
 
+    if (!passed) {
+        log(*state, "Avalonia shutdown barrier did not complete");
+        state->loop.stop();
+    } else {
+        log(*state, "Avalonia shutdown: event loop drained");
+    }
+    state->connections.clear();
+    if (state->mediaControls)
+        state->mediaControls->detach();
     if (state->player)
         state->player->setRendererAttached(false);
     mpv_render_context *render = nullptr;
@@ -1257,10 +1269,10 @@ MCAST_AVALONIA_HOST_EXPORT void mcast_avalonia_host_destroy()
     state->renderProcContext.reset();
     state->rendererReady = false;
     state->renderWake.clear();
+    log(*state, "Avalonia shutdown: render context released");
     if (state->player)
         state->player->shutdown();
-    if (!passed)
-        log(*state, "Avalonia shutdown barrier did not complete");
+    log(*state, "Avalonia shutdown: MPV event thread stopped");
     state->loop.stop();
     log(*state, "Avalonia native host stopped");
 }
@@ -1561,8 +1573,11 @@ mcast_avalonia_host_pause_and_flush_for_window_close()
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
     if (!g_state->loop.post([state = g_state.get(), done] {
+            state->closing = true;
             if (state->playbackBridge)
                 state->playbackBridge->pauseAndFlushState();
+            if (state->playbackBridge)
+                state->playbackBridge->stop();
             log(*state, "UI intent: PauseAndFlushForWindowClose");
             done->set_value();
         })) {

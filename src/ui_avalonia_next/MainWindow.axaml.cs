@@ -131,7 +131,12 @@ internal sealed partial class MainWindow : Window
                     await Task.Delay(50);
                 }
             }
-            await Task.Run(_host.PauseAndFlushForWindowClose);
+            var flushed = await Task.Run(
+                _host.PauseAndFlushForWindowClose);
+            _log.Write(
+                flushed
+                    ? "Window close: pause and state flush completed"
+                    : "Window close: pause and state flush timed out");
             _allowClose = true;
             Dispatcher.UIThread.Post(Close);
         }
