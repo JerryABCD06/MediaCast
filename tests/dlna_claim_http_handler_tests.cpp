@@ -128,7 +128,7 @@ struct Harness {
                   [this](const DlnaMediaExecution &execution) {
                       if (throwExecute)
                           throw std::runtime_error("execute failed");
-                        events.push_back("open");
+                      events.push_back("open");
                       executions.push_back(execution);
                       if (openMediaOnExecute) {
                           session.openMedia(
@@ -136,16 +136,16 @@ struct Harness {
                           playback.processAll();
                       }
                   },
-                    [this](std::optional<std::uint64_t>) {
-                        events.push_back("play");
-                        ++playCalls;
-                    },
+                  [this](std::optional<std::uint64_t>) {
+                      events.push_back("play");
+                      ++playCalls;
+                  },
                   [this](
                       const PeerIdentity &peer,
                       std::optional<std::uint64_t>) {
-                        if (throwStop)
-                            throw std::runtime_error("stop failed");
-                        events.push_back("stop");
+                      if (throwStop)
+                          throw std::runtime_error("stop failed");
+                      events.push_back("stop");
                       ++stopCalls;
                       stoppedAddress = peer.address;
                   },
@@ -374,6 +374,16 @@ void testOwnerTransportWithoutMediaReturns701()
               && stop.response.body.find("<errorCode>701</errorCode>")
                   != std::string::npos,
           "owner Stop without transport media returns 701");
+
+    auto candidateStop = stopRequest(454, "192.0.2.10");
+    candidateStop.headers.front().second = "Other-Control";
+    const auto candidateResult = harness.handler.handle(candidateStop);
+    check(candidateResult.status
+              == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.stopCalls == 0
+              && harness.completion(454)
+              && harness.completion(454)->status == 200,
+          "same-IP candidate Stop without media is acknowledged");
 }
 
 void testDifferentUserAgentIsNotOwner()
@@ -482,6 +492,27 @@ void testAcceptedTakeoverStopFailureDoesNotOpen()
           "failed displaced-owner Stop prevents candidate media Open");
 }
 
+void testOwnerStopFailureKeepsArbitrationOwner()
+{
+    Harness harness;
+    auto initial = harness.handler.handle(setUriRequest(
+        611, "192.0.2.10", "http://example.test/owner-stop-failure.mp4"));
+    check(initial.status == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.executions.size() == 1,
+          "owner Stop failure test starts the owner");
+    harness.handler.mediaReady(
+        harness.executions[0].operationId, true, CastTime{101});
+
+    harness.throwStop = true;
+    const auto stop = harness.handler.handle(
+        stopRequest(612, "192.0.2.10"));
+    check(stop.status == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.completion(612)
+              && harness.completion(612)->status == 500
+              && harness.coordinator.snapshot().owner.has_value(),
+          "ordinary owner Stop failure does not end arbitration ownership");
+}
+
 } // namespace
 
 int main()
@@ -494,6 +525,7 @@ int main()
     testDifferentUserAgentIsNotOwner();
     testExecuteCallbackFailureFailsClosed();
     testAcceptedTakeoverStopFailureDoesNotOpen();
+    testOwnerStopFailureKeepsArbitrationOwner();
     std::cout << "DLNA claim HTTP handler tests passed\n";
     return 0;
 }

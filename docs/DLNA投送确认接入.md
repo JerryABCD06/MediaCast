@@ -21,7 +21,7 @@ Protocol 单一仲裁执行上下文
 
   DlnaClaimAdapter
     -> 判断动作是否明确要求开始投送
-    -> 保存 Stop/SetURI/Play 的 DLNA 跨请求事务
+    -> 保存 SetURI/Play 候选事务；候选 Stop 不登记为可执行命令
     -> 唯一调用 CastClaimCoordinator
 
   DlnaClaimRuntime

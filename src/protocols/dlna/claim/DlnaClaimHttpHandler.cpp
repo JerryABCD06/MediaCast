@@ -166,7 +166,7 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
         }
     } else if (parsed->action == "Stop") {
         const cast::PeerIdentity peer = peerIdentity(request);
-        if (m_runtime.canControl(peer)
+        if (m_runtime.ownsPeer(peer)
             && !m_runtime.mediaOpening()
             && !m_router.hasTransportMedia()) {
             return {
@@ -423,11 +423,14 @@ void DlnaClaimHttpHandler::applyActions(
             cleanupRuntime = true;
         }
     }
+    const bool takeoverStop = actions.media.has_value();
     if (!forceFault && actions.stopNow && actions.stopPeer
         && m_callbacks.stopNow && m_router.hasTransportMedia()) {
-        log(
-            "DLNA takeover accepted; stopping displaced owner "
-            "before media start");
+        if (takeoverStop) {
+            log(
+                "DLNA takeover accepted; stopping displaced owner "
+                "before media start");
+        }
         try {
             m_callbacks.stopNow(
                 *actions.stopPeer, actions.ownerEpoch);
@@ -436,11 +439,11 @@ void DlnaClaimHttpHandler::applyActions(
                 std::string("DLNA stop callback failed: ")
                 + exception.what());
             forceFault = true;
-            cleanupRuntime = true;
+            cleanupRuntime = takeoverStop;
         } catch (...) {
             log("DLNA stop callback failed");
             forceFault = true;
-            cleanupRuntime = true;
+            cleanupRuntime = takeoverStop;
         }
     }
     if (!forceFault && actions.media && m_callbacks.executeMedia) {
