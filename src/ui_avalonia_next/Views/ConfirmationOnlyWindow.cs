@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -18,6 +19,7 @@ internal sealed class ConfirmationOnlyWindow : Window
     private readonly DispatcherTimer _timer;
     private DateTimeOffset _deadline;
     private bool _closedFromShell;
+    private bool _submitted;
 
     public CastConfirmationProjection Projection { get; }
 
@@ -109,8 +111,32 @@ internal sealed class ConfirmationOnlyWindow : Window
         Close();
     }
 
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Submit(false);
+            e.Handled = true;
+            return;
+        }
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        if (!_submitted && !_closedFromShell)
+        {
+            _submitted = true;
+            _host.RespondCastConfirmation(Projection.RequestId, false);
+        }
+        base.OnClosing(e);
+    }
+
     private void Submit(bool accepted)
     {
+        if (_submitted)
+            return;
+        _submitted = true;
         _host.RespondCastConfirmation(Projection.RequestId, accepted);
         Close();
     }
@@ -123,6 +149,7 @@ internal sealed class ConfirmationOnlyWindow : Window
             _countdown.Text = "Request expired";
             _accept.IsEnabled = false;
             _reject.IsEnabled = false;
+            Submit(false);
             return;
         }
         _countdown.Text =

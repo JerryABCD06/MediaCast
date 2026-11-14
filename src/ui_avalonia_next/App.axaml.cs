@@ -97,6 +97,18 @@ public sealed class App : Application
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         if (_host?.Current?.Confirmation is { } request)
             ShowConfirmation(request);
+        else if (_host?.Current?.Shell.TestTakeoverWindow == true)
+        {
+            ShowConfirmation(new CastConfirmationProjection(
+                9001,
+                1,
+                1,
+                "standalone-peer",
+                "Living Room Phone",
+                "192.0.2.10",
+                "Example Movie",
+                10_000));
+        }
         else
             Dispatcher.UIThread.Post(RequestShutdown);
     }

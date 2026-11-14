@@ -700,6 +700,21 @@ bool setupHost(HostState &state, std::string &error)
                 state.session.settingsVersion(), &error)) {
             return false;
         }
+    } else if (state.options.standalone) {
+        state.settings = std::make_unique<UiSettingsModel>(state.loop);
+        constexpr const char *standaloneSettings = R"({
+            "ui":{"language":"System","darkmode":"System","accentmode":"System","mica":true},
+            "cast":{"newcast":true,"broadcast":false,"broadcast_interval":10000},
+            "device":{"name":"Standalone Ui","udn":"uuid:00000000-0000-4000-8000-000000000001"},
+            "picture":{}
+        })";
+        if (!state.settings->applySnapshot(
+                standaloneSettings, 1, &error)) {
+            return false;
+        }
+        state.languageJson =
+            R"({"resolvedLanguage":"en_US","languages":[{"code":"en_US","name":"English"}]})";
+        state.resolvedLanguage = "en_US";
     } else {
         return false;
     }
