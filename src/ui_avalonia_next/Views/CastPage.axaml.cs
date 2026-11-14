@@ -13,6 +13,9 @@ namespace MCast.Ui.Avalonia.Views;
 
 internal sealed partial class CastPage : UserControl
 {
+    private static readonly TimeSpan s_authorityEchoTimeout =
+        TimeSpan.FromSeconds(2);
+
     private readonly NativeAvaloniaHost _host;
     private readonly MpvOpenGlSurface _surface;
     private readonly Border _interactionLayer = new()
@@ -46,6 +49,11 @@ internal sealed partial class CastPage : UserControl
     private bool _pageActive = true;
     private bool _controlsAllowed = true;
     private bool _playbackCommandsAvailable;
+    private double? _seekPendingValue;
+    private DateTimeOffset _seekPendingUntil;
+    private string? _seekPendingMediaUri;
+    private int? _volumePendingValue;
+    private DateTimeOffset _volumePendingUntil;
     private DateTimeOffset _lastSurfaceClick;
     private Point _lastSurfaceClickPoint;
     private CancellationTokenSource? _pendingSingleClick;
@@ -73,22 +81,22 @@ internal sealed partial class CastPage : UserControl
         SeekSlider.AddHandler(
             PointerPressedEvent,
             OnSeekPressed,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            RoutingStrategies.Tunnel,
             handledEventsToo: true);
         SeekSlider.AddHandler(
             PointerReleasedEvent,
             OnSeekReleased,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            RoutingStrategies.Bubble,
             handledEventsToo: true);
         VolumeSlider.AddHandler(
             PointerPressedEvent,
             OnVolumePressed,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            RoutingStrategies.Tunnel,
             handledEventsToo: true);
         VolumeSlider.AddHandler(
             PointerReleasedEvent,
             OnVolumeReleased,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            RoutingStrategies.Bubble,
             handledEventsToo: true);
         SeekSlider.ValueChanged += OnSeekValueChanged;
         VolumeSlider.ValueChanged += OnVolumeValueChanged;
@@ -175,13 +183,8 @@ internal sealed partial class CastPage : UserControl
 
             SeekSlider.Maximum = Math.Max(
                 1, projection.Playback.DurationSeconds);
-            if (!_seekDragging)
-                SeekSlider.Value = Math.Clamp(
-                    projection.Playback.PositionSeconds,
-                    0,
-                    SeekSlider.Maximum);
-            if (!_volumeDragging)
-                VolumeSlider.Value = projection.Playback.VolumePercent;
+            ApplySeekProjection(projection.Playback);
+            ApplyVolumeProjection(projection.Playback);
             SeekSlider.IsEnabled = _playbackCommandsAvailable;
             VolumeSlider.IsEnabled = _playbackCommandsAvailable;
             MuteButton.IsEnabled = _playbackCommandsAvailable;
@@ -434,18 +437,16 @@ internal sealed partial class CastPage : UserControl
                         return;
                     dragging = true;
                     _host.BeginControlAdjustment();
-                    args.Pointer.Capture(slider);
                 },
-                RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+                RoutingStrategies.Tunnel,
                 handledEventsToo: true);
             slider.AddHandler(
                 PointerReleasedEvent,
                 (_, args) =>
                 {
                     Finish();
-                    args.Pointer.Capture(null);
                 },
-                RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+                RoutingStrategies.Bubble,
                 handledEventsToo: true);
             slider.ValueChanged += (_, args) =>
             {
@@ -567,7 +568,6 @@ internal sealed partial class CastPage : UserControl
     private void OnSeekPressed(object? sender, PointerPressedEventArgs e)
     {
         _seekDragging = true;
-        e.Pointer.Capture(SeekSlider);
     }
 
     private void OnSeekReleased(object? sender, PointerReleasedEventArgs e)
@@ -575,8 +575,7 @@ internal sealed partial class CastPage : UserControl
         if (!_seekDragging)
             return;
         _seekDragging = false;
-        _host.SeekAbsolute(SeekSlider.Value);
-        e.Pointer.Capture(null);
+        CommitSeek(SeekSlider.Value);
     }
 
     private void OnSeekValueChanged(
@@ -589,7 +588,7 @@ internal sealed partial class CastPage : UserControl
             return;
         }
         UpdateTimeText(preview: e.NewValue);
-        _host.SeekAbsolute(e.NewValue);
+        CommitSeek(e.NewValue);
     }
 
     private void OnSeekCaptureLost(object? sender, RoutedEventArgs e)
@@ -597,6 +596,7 @@ internal sealed partial class CastPage : UserControl
         if (!_seekDragging)
             return;
         _seekDragging = false;
+        _seekPendingValue = null;
         _applyingProjection = true;
         try
         {
@@ -616,6 +616,7 @@ internal sealed partial class CastPage : UserControl
         if (!_seekDragging)
             return;
         _seekDragging = false;
+        _seekPendingValue = null;
         _applyingProjection = true;
         try
         {
@@ -634,8 +635,9 @@ internal sealed partial class CastPage : UserControl
         if (_volumeDragging)
             return;
         _volumeDragging = true;
+        _volumePendingValue =
+            (int)Math.Round(VolumeSlider.Value);
         _host.BeginControlAdjustment();
-        e.Pointer.Capture(VolumeSlider);
     }
 
     private void OnVolumeReleased(object? sender, PointerReleasedEventArgs e)
@@ -643,7 +645,6 @@ internal sealed partial class CastPage : UserControl
         if (!_volumeDragging)
             return;
         FinishVolumeAdjustment();
-        e.Pointer.Capture(null);
     }
 
     private void OnVolumeValueChanged(
@@ -653,11 +654,17 @@ internal sealed partial class CastPage : UserControl
             return;
         if (_volumeDragging)
         {
-            _host.SetVolume((int)Math.Round(e.NewValue));
+            var value = (int)Math.Round(e.NewValue);
+            _volumePendingValue = value;
+            _host.SetVolume(value);
             return;
         }
+        var committed = (int)Math.Round(e.NewValue);
+        _volumePendingValue = committed;
+        _volumePendingUntil =
+            DateTimeOffset.UtcNow + s_authorityEchoTimeout;
         _host.BeginControlAdjustment();
-        _host.SetVolume((int)Math.Round(e.NewValue));
+        _host.SetVolume(committed);
         _host.EndControlAdjustment();
     }
 
@@ -676,8 +683,67 @@ internal sealed partial class CastPage : UserControl
     private void FinishVolumeAdjustment()
     {
         _volumeDragging = false;
-        _host.SetVolume((int)Math.Round(VolumeSlider.Value));
+        var value = (int)Math.Round(VolumeSlider.Value);
+        _volumePendingValue = value;
+        _volumePendingUntil =
+            DateTimeOffset.UtcNow + s_authorityEchoTimeout;
+        _host.SetVolume(value);
         _host.EndControlAdjustment();
+    }
+
+    private void CommitSeek(double value)
+    {
+        _seekPendingValue = value;
+        _seekPendingUntil =
+            DateTimeOffset.UtcNow + s_authorityEchoTimeout;
+        _seekPendingMediaUri = _playback?.CurrentMedia.Uri;
+        _host.SeekAbsolute(value);
+    }
+
+    private void ApplySeekProjection(PlaybackProjection playback)
+    {
+        if (_seekDragging)
+            return;
+        if (_seekPendingValue is double pending)
+        {
+            var sameMedia = string.Equals(
+                _seekPendingMediaUri,
+                playback.CurrentMedia.Uri,
+                StringComparison.Ordinal);
+            var echoed = Math.Abs(
+                playback.PositionSeconds - pending) <= 0.75;
+            if (sameMedia
+                && DateTimeOffset.UtcNow < _seekPendingUntil
+                && !echoed)
+            {
+                SeekSlider.Value = Math.Clamp(
+                    pending, 0, SeekSlider.Maximum);
+                return;
+            }
+            _seekPendingValue = null;
+            _seekPendingMediaUri = null;
+        }
+        SeekSlider.Value = Math.Clamp(
+            playback.PositionSeconds,
+            0,
+            SeekSlider.Maximum);
+    }
+
+    private void ApplyVolumeProjection(PlaybackProjection playback)
+    {
+        if (_volumeDragging)
+            return;
+        if (_volumePendingValue is int pending)
+        {
+            if (playback.VolumePercent != pending
+                && DateTimeOffset.UtcNow < _volumePendingUntil)
+            {
+                VolumeSlider.Value = pending;
+                return;
+            }
+            _volumePendingValue = null;
+        }
+        VolumeSlider.Value = playback.VolumePercent;
     }
 
     private void UpdateTimeText(double? preview = null)
