@@ -454,8 +454,6 @@ internal sealed partial class CastPage : UserControl
                     _host.SetPictureControl(
                         control.Name, (int)Math.Round(args.NewValue));
             };
-            slider.PointerCaptureLost += (_, _) => Finish();
-            slider.LostFocus += (_, _) => Finish();
             panel.Children.Add(label);
             panel.Children.Add(slider);
         }
