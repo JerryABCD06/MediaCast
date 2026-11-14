@@ -492,6 +492,24 @@ int main()
         full && full->status == 200
             && full->body.size() == wrapped.size() - 45,
         "full segment strips PNG wrapper");
+    const auto suffix = httpRequest(
+        proxyPort, segmentPath, std::string("-16"));
+    check(
+        suffix && suffix->status == 206
+            && suffix->body.size() == 16
+            && suffix->body
+                == full->body.substr(full->body.size() - 16),
+        "suffix range returns the final transport-stream bytes");
+    const auto outOfRange = httpRequest(
+        proxyPort, segmentPath, std::string("999999-"));
+    check(
+        outOfRange && outOfRange->status == 416,
+        "out-of-range request returns 416");
+    const auto reversed = httpRequest(
+        proxyPort, segmentPath, std::string("15-10"));
+    check(
+        reversed && reversed->status == 416,
+        "reversed range returns 416");
     check(
         server.wrappedRequests.load() == requestsAfterFetch,
         "second segment request is served from cache");

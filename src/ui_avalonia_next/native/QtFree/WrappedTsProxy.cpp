@@ -295,37 +295,68 @@ std::optional<std::string> fetchSegment(
     return std::move(payload->body);
 }
 
-std::optional<std::pair<std::int64_t, std::int64_t>>
-parseRange(std::string_view request)
+struct RangeRequest
 {
+    bool present = false;
+    bool satisfiable = true;
+    std::int64_t first = 0;
+    std::int64_t last = -1;
+    bool suffix = false;
+};
+
+RangeRequest parseRange(std::string_view request)
+{
+    RangeRequest result;
     const std::string lower = lowercaseAscii(request);
     const auto position = lower.find("\r\nrange: bytes=");
     if (position == std::string::npos)
-        return std::nullopt;
+        return result;
+    result.present = true;
+    result.satisfiable = false;
     const auto begin = position + 15;
     const auto end = request.find("\r\n", begin);
     const std::string value(request.substr(
         begin, end == std::string_view::npos
             ? std::string_view::npos : end - begin));
     const auto dash = value.find('-');
-    if (dash == std::string::npos || dash == 0)
-        return std::nullopt;
-    std::int64_t start = 0;
-    if (std::from_chars(
-            value.data(), value.data() + dash, start).ec
-        != std::errc{}) {
-        return std::nullopt;
+    if (dash == std::string::npos || dash + 1 >= value.size())
+        return result;
+    if (dash == 0) {
+        std::int64_t suffixLength = 0;
+        if (std::from_chars(
+                value.data() + 1,
+                value.data() + value.size(),
+                suffixLength).ec
+                != std::errc{}
+            || suffixLength <= 0) {
+            return result;
+        }
+        result.satisfiable = true;
+        result.first = suffixLength;
+        result.suffix = true;
+        return result;
     }
-    std::int64_t finish = -1;
+
+    std::int64_t first = 0;
+    auto parsed = std::from_chars(
+        value.data(), value.data() + dash, first);
+    if (parsed.ec != std::errc{}
+        || parsed.ptr != value.data() + dash) {
+        return result;
+    }
+    std::int64_t last = -1;
     if (dash + 1 < value.size()) {
         if (std::from_chars(
                 value.data() + dash + 1,
-                value.data() + value.size(), finish).ec
+                value.data() + value.size(), last).ec
             != std::errc{}) {
-            finish = -1;
+            return result;
         }
     }
-    return std::pair{start, finish};
+    result.satisfiable = true;
+    result.first = first;
+    result.last = last;
+    return result;
 }
 
 bool sendAll(
@@ -350,7 +381,7 @@ void respond(
     const std::shared_ptr<WrappedTsProxy::State> &state,
     const std::stop_token &stop,
     SOCKET socket, std::string body,
-    std::optional<std::pair<std::int64_t, std::int64_t>> range,
+    RangeRequest range,
     bool headOnly, std::string_view contentType)
 {
     std::int64_t start = 0;
@@ -358,13 +389,41 @@ void respond(
         body.empty() ? -1 : static_cast<std::int64_t>(body.size()) - 1;
     int status = 200;
     std::string contentRange;
-    if (range && !body.empty()) {
-        start = std::clamp<std::int64_t>(
-            range->first, 0, body.size() - 1);
-        end = range->second >= 0
-            ? std::clamp<std::int64_t>(
-                  range->second, start, body.size() - 1)
-            : static_cast<std::int64_t>(body.size()) - 1;
+    if (range.present && (body.empty() || !range.satisfiable)) {
+        const std::string response =
+            "HTTP/1.1 416 Range Not Satisfiable\r\n"
+            "Content-Range: bytes */" + std::to_string(body.size())
+            + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        sendAll(state, stop, socket, response.data(), response.size());
+        return;
+    }
+    if (range.present) {
+        if (range.suffix) {
+            start = std::max<std::int64_t>(
+                0, static_cast<std::int64_t>(body.size())
+                    - range.first);
+            end = static_cast<std::int64_t>(body.size()) - 1;
+        } else {
+            if (range.first >= static_cast<std::int64_t>(body.size())
+                || (range.last >= 0 && range.last < range.first)) {
+                const std::string response =
+                    "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                    "Content-Range: bytes */"
+                    + std::to_string(body.size())
+                    + "\r\nContent-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                sendAll(
+                    state, stop, socket,
+                    response.data(), response.size());
+                return;
+            }
+            start = range.first;
+            end = range.last >= 0
+                ? std::min<std::int64_t>(
+                      range.last,
+                      static_cast<std::int64_t>(body.size()) - 1)
+                : static_cast<std::int64_t>(body.size()) - 1;
+        }
         status = 206;
         contentRange =
             "Content-Range: bytes " + std::to_string(start)
@@ -469,7 +528,7 @@ void handleConnection(
         }
         playlist += "#EXT-X-ENDLIST\n";
         respond(
-            state, stop, socket, std::move(playlist), std::nullopt,
+            state, stop, socket, std::move(playlist), RangeRequest{},
             method == "HEAD", "application/vnd.apple.mpegurl");
         return;
     }
