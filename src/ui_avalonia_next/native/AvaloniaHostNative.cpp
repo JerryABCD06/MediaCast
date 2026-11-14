@@ -174,8 +174,11 @@ void notifyChanged(
 
 void notifyRender(HostState &state)
 {
-    if (!state.renderWake.mark())
-        return;
+    // Track the pending wake for render diagnostics, but do not suppress the
+    // callback. Avalonia owns the single-flight coalescing boundary; a native
+    // latch that drops the callback can wedge when Avalonia consumes or
+    // ignores an already-queued render request.
+    state.renderWake.mark();
     const auto callback = state.renderUpdateCallback.load();
     if (callback)
         callback(state.renderUpdateContext);
