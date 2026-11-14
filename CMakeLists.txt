@@ -196,6 +196,7 @@ add_library(MCast.AvaloniaHost.Native SHARED
     src/ui_avalonia_next/native/QtFree/EventLoop.cpp
     src/ui_avalonia_next/native/QtFree/Json.h
     src/ui_avalonia_next/native/QtFree/Json.cpp
+    src/ui_avalonia_next/native/QtFree/LatestValueIntents.h
     src/ui_avalonia_next/native/QtFree/MediaTypes.h
     src/ui_avalonia_next/native/QtFree/MediaTypes.cpp
     src/ui_avalonia_next/native/QtFree/MediaPlayer.h
@@ -267,6 +268,20 @@ if(BUILD_TESTING)
         COMMAND mcast_qtfree_event_loop_tests)
     set_tests_properties(
         mcast_qtfree_event_loop_tests PROPERTIES TIMEOUT 10)
+
+    add_executable(
+        mcast_qtfree_latest_value_intents_tests
+        tests/qtfree_latest_value_intents_tests.cpp)
+    target_include_directories(
+        mcast_qtfree_latest_value_intents_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/native")
+    target_compile_options(
+        mcast_qtfree_latest_value_intents_tests PRIVATE /utf-8)
+    add_test(
+        NAME mcast_qtfree_latest_value_intents_tests
+        COMMAND mcast_qtfree_latest_value_intents_tests)
+    set_tests_properties(
+        mcast_qtfree_latest_value_intents_tests PROPERTIES TIMEOUT 10)
 
     add_executable(
         mcast_qtfree_json_tests

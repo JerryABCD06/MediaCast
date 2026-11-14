@@ -5,6 +5,7 @@
 
 #include "QtFree/EventLoop.h"
 #include "QtFree/Json.h"
+#include "QtFree/LatestValueIntents.h"
 #include "QtFree/MpvCore.h"
 #include "QtFree/PlaybackBridge.h"
 #include "QtFree/PlaybackController.h"
@@ -40,6 +41,7 @@ using mcast::avalonia::qtfree::Connection;
 using mcast::avalonia::qtfree::EventLoop;
 using mcast::avalonia::qtfree::JsonError;
 using mcast::avalonia::qtfree::JsonValue;
+using mcast::avalonia::qtfree::LatestValueIntents;
 using mcast::avalonia::qtfree::MediaKind;
 using mcast::avalonia::qtfree::MediaRequest;
 using mcast::avalonia::qtfree::MediaSource;
@@ -122,6 +124,7 @@ struct HostState
     std::atomic_bool renderTargetRefreshPending{false};
     RenderWakeLatch renderWake;
     std::string glBackend = "not-attached";
+    LatestValueIntents pictureIntents;
 
     std::mutex snapshotMutex;
     std::string shellJson = "{}";
@@ -1468,6 +1471,38 @@ bool playbackCommandsAvailable(const HostState &state)
         && !state.closing.load();
 }
 
+bool applyLatestPictureIntents(HostState &state)
+{
+    const auto latest = state.pictureIntents.takeLatest();
+    for (const auto &[name, value] : latest) {
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            continue;
+        }
+        state.playback->setPictureControl(name, value);
+        log(
+            state,
+            "UI intent: Picture " + name
+                + "=" + std::to_string(value));
+    }
+    return state.pictureIntents.finishDrain();
+}
+
+void drainPictureIntents(HostState &state)
+{
+    if (applyLatestPictureIntents(state)) {
+        postToLoop(state, [&state] {
+            drainPictureIntents(state);
+        });
+    }
+}
+
+void flushPictureIntents(HostState &state)
+{
+    while (applyLatestPictureIntents(state)) {
+    }
+}
+
 } // namespace
 
 MCAST_AVALONIA_HOST_EXPORT int
@@ -1552,18 +1587,20 @@ mcast_avalonia_host_set_picture_control(
 {
     if (!name)
         return 0;
-    const std::string controlName(name);
-    return postIntent([controlName, value](HostState &state) {
-        if (!playbackCommandsAvailable(state)) {
-            log(state, "UI intent rejected: player unavailable");
-            return;
-        }
-        state.playback->setPictureControl(controlName, value);
-        log(
-            state,
-            "UI intent: Picture " + controlName
-                + "=" + std::to_string(value));
-    });
+    const std::scoped_lock lifecycle(g_lifecycleMutex);
+    if (!g_state || !playbackCommandsAvailable(*g_state))
+        return 0;
+    if (!g_state->pictureIntents.submit(
+            std::string(name), value)) {
+        return 1;
+    }
+    if (!postToLoop(*g_state, [state = g_state.get()] {
+            drainPictureIntents(*state);
+        })) {
+        g_state->pictureIntents.reset();
+        return 0;
+    }
+    return 1;
 }
 
 MCAST_AVALONIA_HOST_EXPORT int
@@ -1574,6 +1611,7 @@ mcast_avalonia_host_reset_picture_controls()
             log(state, "UI intent rejected: player unavailable");
             return;
         }
+        state.pictureIntents.reset();
         state.playback->resetPictureControls();
         log(state, "UI intent: Reset picture");
     });
@@ -1587,6 +1625,7 @@ mcast_avalonia_host_begin_control_adjustment()
             log(state, "UI intent rejected: player unavailable");
             return;
         }
+        flushPictureIntents(state);
         if (state.playbackBridge)
             state.playbackBridge->beginControlAdjustment();
         log(state, "UI intent: BeginControlAdjustment");
@@ -1601,6 +1640,7 @@ mcast_avalonia_host_end_control_adjustment()
             log(state, "UI intent rejected: player unavailable");
             return;
         }
+        flushPictureIntents(state);
         if (state.playbackBridge)
             state.playbackBridge->endControlAdjustment();
         log(state, "UI intent: EndControlAdjustment");
