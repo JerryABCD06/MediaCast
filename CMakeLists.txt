@@ -382,6 +382,36 @@ if(BUILD_TESTING)
         mcast_qtfree_wrapped_ts_proxy_tests
         PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
 
+    add_executable(
+        mcast_qtfree_mpv_core_tests
+        tests/qtfree_mpv_core_tests.cpp
+        src/ui_avalonia_next/native/QtFree/EventLoop.cpp
+        src/ui_avalonia_next/native/QtFree/Json.cpp
+        src/ui_avalonia_next/native/QtFree/MediaTypes.cpp
+        src/ui_avalonia_next/native/QtFree/ImageSequenceStrategy.cpp
+        src/ui_avalonia_next/native/QtFree/WrappedTsProxy.cpp
+        src/ui_avalonia_next/native/QtFree/MpvCore.cpp)
+    target_include_directories(
+        mcast_qtfree_mpv_core_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/native"
+        "${MPV_DEV_DIR}/include")
+    target_compile_options(
+        mcast_qtfree_mpv_core_tests PRIVATE /utf-8)
+    target_link_libraries(
+        mcast_qtfree_mpv_core_tests PRIVATE
+        "${MPV_DEV_DIR}/libmpv.lib" winhttp.lib ws2_32.lib)
+    add_custom_command(
+        TARGET mcast_qtfree_mpv_core_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MPV_DEV_DIR}/libmpv-2.dll"
+            "$<TARGET_FILE_DIR:mcast_qtfree_mpv_core_tests>"
+        COMMENT "复制 libmpv 到 Qt-free MPV 测试目录")
+    add_test(
+        NAME mcast_qtfree_mpv_core_tests
+        COMMAND mcast_qtfree_mpv_core_tests)
+    set_tests_properties(
+        mcast_qtfree_mpv_core_tests PROPERTIES TIMEOUT 25)
+
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
