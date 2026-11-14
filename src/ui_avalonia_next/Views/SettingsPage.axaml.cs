@@ -66,17 +66,17 @@ internal sealed partial class SettingsPage : UserControl
                 languages.FirstOrDefault(
                     item => item.Value == requested)
                 ?? languages[0];
+            var themeMode = PendingOrAuthority(
+                "theme", _shell.ThemeMode);
             ThemeCombo.SelectedItem =
                 s_themes.FirstOrDefault(
-                    item => item.Value
-                        == PendingOrAuthority(
-                            "theme", _shell.ThemeMode))
+                    item => item.Value == themeMode)
                 ?? s_themes[0];
+            var accentMode = PendingOrAuthority(
+                "accent", _shell.AccentMode);
             AccentCombo.SelectedItem =
                 s_accents.FirstOrDefault(
-                    item => item.Value
-                        == PendingOrAuthority(
-                            "accent", _shell.AccentMode))
+                    item => item.Value == accentMode)
                 ?? s_accents[0];
             MicaToggle.IsChecked = PendingOrAuthority(
                 "mica", _shell.MicaEnabled);
