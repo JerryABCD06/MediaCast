@@ -5,7 +5,8 @@ param(
     [string]$QtBin = '',
     [int]$HoldSeconds = 0,
     [switch]$ShowWindows,
-    [string]$SourceMediaPath = ''
+    [string]$SourceMediaPath = '',
+    [string]$SourceMediaUri = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,7 @@ $protocolLog = Join-Path $shellDirectory "MCast.Protocol.$instance.log"
 $logOffset = 0
 $mediaPath = Join-Path $env:TEMP ("mcast-shadow-$instance.wav")
 $ownsMediaPath = $true
+$mediaUri = ''
 $shellProcess = $null
 $callbackListener = $null
 $testPassed = $false
@@ -176,7 +178,10 @@ function Write-SilentWave {
 }
 
 try {
-    if ($SourceMediaPath) {
+    if ($SourceMediaUri) {
+        $mediaUri = $SourceMediaUri
+        $ownsMediaPath = $false
+    } elseif ($SourceMediaPath) {
         $mediaPath = (Resolve-Path -LiteralPath $SourceMediaPath).Path
         $ownsMediaPath = $false
     } else {
@@ -264,7 +269,9 @@ try {
         throw "Initial GENA event was not a LastChange:`n$initialEvent"
     }
 
-    $mediaUri = [uri]::new($mediaPath).AbsoluteUri
+    if (-not $mediaUri) {
+        $mediaUri = [uri]::new($mediaPath).AbsoluteUri
+    }
     $didl = '<DIDL-Lite><item>' +
         '<dc:title xmlns:dc="urn:test">shadow-e2e</dc:title>' +
         '</item></DIDL-Lite>'
