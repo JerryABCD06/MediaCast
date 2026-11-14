@@ -1598,11 +1598,6 @@ private:
                 retireConfirmationOnlyUi();
             return std::nullopt;
         }
-        if (!currentUiConnection(uiConnection, uiGeneration)) {
-            if (launchedForRequest)
-                retireConfirmationOnlyUi();
-            return std::nullopt;
-        }
         return accepted;
     }
 

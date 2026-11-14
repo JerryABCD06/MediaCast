@@ -1817,16 +1817,35 @@ MCAST_AVALONIA_HOST_EXPORT int
 mcast_avalonia_host_respond_cast_confirmation(
     std::uint64_t requestId, int accepted)
 {
-    return postIntent([requestId, accepted](HostState &state) {
-        if (state.confirmation)
-            state.confirmation->submitDecision(
-                requestId, accepted != 0);
-        updateConfirmation(state, nullptr);
-        log(
-            state,
-            "UI intent: Confirmation id="
-                + std::to_string(requestId)
-                + " accepted="
-                + (accepted ? "true" : "false"));
-    });
+    auto completed = std::make_shared<std::promise<bool>>();
+    auto future = completed->get_future();
+    const std::scoped_lock lifecycle(g_lifecycleMutex);
+    if (!g_state)
+        return 0;
+    const bool queued = postToLoop(
+        *g_state,
+        [state = g_state.get(), requestId, accepted, completed] {
+            bool sent = false;
+            try {
+                if (state->confirmation)
+                    sent = state->confirmation->submitDecision(
+                        requestId, accepted != 0);
+                updateConfirmation(*state, nullptr);
+                log(
+                    *state,
+                    "UI intent: Confirmation id="
+                        + std::to_string(requestId)
+                        + " accepted="
+                        + (accepted ? "true" : "false"));
+            } catch (...) {
+                sent = false;
+            }
+            completed->set_value(sent);
+        });
+    if (!queued)
+        return 0;
+    return future.wait_for(3s) == std::future_status::ready
+            && future.get()
+        ? 1
+        : 0;
 }
