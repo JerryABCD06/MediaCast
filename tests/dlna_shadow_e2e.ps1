@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$UiExe,
     [string]$QtBin = '',
     [int]$HoldSeconds = 0,
-    [switch]$ShowWindows
+    [switch]$ShowWindows,
+    [string]$SourceMediaPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,7 @@ $shellDirectory = [System.IO.Path]::GetDirectoryName($ShellExe)
 $protocolLog = Join-Path $shellDirectory "MCast.Protocol.$instance.log"
 $logOffset = 0
 $mediaPath = Join-Path $env:TEMP ("mcast-shadow-$instance.wav")
+$ownsMediaPath = $true
 $shellProcess = $null
 $callbackListener = $null
 $testPassed = $false
@@ -174,7 +176,12 @@ function Write-SilentWave {
 }
 
 try {
-    Write-SilentWave $mediaPath
+    if ($SourceMediaPath) {
+        $mediaPath = (Resolve-Path -LiteralPath $SourceMediaPath).Path
+        $ownsMediaPath = $false
+    } else {
+        Write-SilentWave $mediaPath
+    }
     $callbackListener = [System.Net.Sockets.TcpListener]::new(
         [System.Net.IPAddress]::Loopback, 0)
     $callbackListener.Start()
@@ -329,7 +336,7 @@ try {
         Stop-Process -Id $shellProcess.Id -Force -ErrorAction SilentlyContinue
         [void]$shellProcess.WaitForExit(5000)
     }
-    if (Test-Path -LiteralPath $mediaPath) {
+    if ($ownsMediaPath -and (Test-Path -LiteralPath $mediaPath)) {
         [System.IO.File]::Delete($mediaPath)
     }
     $remaining = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
