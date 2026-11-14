@@ -286,9 +286,11 @@ void DlnaSession::observeHttpClient(
     // While a session owns the renderer, unrelated discovery/query traffic
     // must not replace its identity. A validated media boundary can claim the
     // renderer for another address.
-    if (m_peerConnected && !address.empty()
-        && !isCurrentOwner(address)) {
-        return;
+    if (m_peerConnected && !address.empty()) {
+        if (!isCurrentOwner(address))
+            return;
+        if (address == m_clientAddress && name != m_clientName)
+            return;
     }
     if (m_clientName == name && m_clientAddress == address)
         return;

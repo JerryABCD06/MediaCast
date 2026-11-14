@@ -353,9 +353,20 @@ void testCastSessionInfoTracksRegistration()
     check(session.snapshot().playback.castSession.protocol == "DLNA",
           "cast session is included in the authoritative snapshot");
 
+    session.observeHttpClient(
+        "Other Control", "192.168.10.3");
+    info = session.snapshot().castSession;
+    check(info.controlPointName == "BubbleUPnP 4.6.7.1",
+          "same-address request cannot replace the active control point name");
+    session.newMediaRequested(
+        SessionTime{1}, "Accepted Control", "192.168.10.3");
+    info = session.snapshot().castSession;
+    check(info.controlPointName == "Accepted Control",
+          "accepted media can commit the new control point identity");
+
     session.setSubscriptionCount(
         0, SubscriptionChangeReason::ExplicitRemoval,
-        SessionTime{1});
+        SessionTime{2});
     info = session.snapshot().castSession;
     check(!info.connected && !info.remoteControlRegistered,
           "control point removal clears the session");
