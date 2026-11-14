@@ -33,6 +33,7 @@ internal sealed partial class CastPage : UserControl
     private readonly MenuItem _menuVolumeDown =
         new() { Header = "Volume down" };
     private readonly MenuItem _menuMute = new() { Header = "Mute" };
+    private readonly MenuItem _menuInfo = new() { Header = "Media info" };
     private readonly MenuItem _menuPicture =
         new() { Header = "Display effects" };
     private readonly MenuItem _menuFullscreen =
@@ -205,6 +206,9 @@ internal sealed partial class CastPage : UserControl
     private void OnPicture(object? sender, RoutedEventArgs e)
         => OpenPictureControls();
 
+    private void OnInfo(object? sender, RoutedEventArgs e)
+        => OpenInfo();
+
     private void InitializeMediaMenu()
     {
         _mediaMenu.Opened += (_, _) =>
@@ -254,6 +258,8 @@ internal sealed partial class CastPage : UserControl
         };
         _menuMute.Click += (_, _) =>
             _host.SetMuted(_playback?.Muted != true);
+        _menuInfo.Click += (_, _) =>
+            Dispatcher.UIThread.Post(OpenInfo);
         _menuPicture.Click += (_, _) =>
             Dispatcher.UIThread.Post(OpenPictureControls);
         _menuFullscreen.Click += (_, _) =>
@@ -269,6 +275,7 @@ internal sealed partial class CastPage : UserControl
         _mediaMenu.Items.Add(_menuVolumeUp);
         _mediaMenu.Items.Add(_menuVolumeDown);
         _mediaMenu.Items.Add(_menuMute);
+        _mediaMenu.Items.Add(_menuInfo);
         _mediaMenu.Items.Add(_menuPicture);
         _mediaMenu.Items.Add(_menuFullscreen);
     }
@@ -423,6 +430,84 @@ internal sealed partial class CastPage : UserControl
         reset.Click += (_, _) => _host.ResetPictureControls();
         panel.Children.Add(reset);
         new Flyout { Content = panel }.ShowAt(_interactionLayer);
+    }
+
+    private void OpenInfo()
+    {
+        if (_hostProjection is null)
+            return;
+        var playback = _hostProjection.Playback;
+        var panel = new StackPanel
+        {
+            Spacing = 6,
+            MinWidth = 360,
+            MaxWidth = 520,
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Media info",
+            FontSize = 18,
+            FontWeight = global::Avalonia.Media.FontWeight.SemiBold,
+        });
+        AddInfoLine(
+            panel,
+            "Protocol",
+            playback.CastSession.Connected
+                ? playback.CastSession.Protocol
+                : "Not casting");
+        AddInfoLine(
+            panel,
+            "Control point",
+            playback.CastSession.ControlPointName);
+        AddInfoLine(
+            panel,
+            "Address",
+            playback.CastSession.ControlPointAddress);
+        AddInfoLine(
+            panel,
+            "Media",
+            playback.CurrentMedia.Title);
+        AddInfoLine(
+            panel,
+            "Detail",
+            playback.CurrentMedia.Subtitle);
+        AddInfoLine(
+            panel,
+            "Container",
+            playback.MediaInfo.Container);
+        AddInfoLine(
+            panel,
+            "Duration",
+            FormatTime(playback.MediaInfo.DurationSeconds));
+        if (playback.MediaInfo.Video is { } video)
+        {
+            AddInfoLine(
+                panel,
+                "Video",
+                $"{video.Codec} {video.Width}×{video.Height} "
+                + $"{video.Fps:0.###} fps");
+        }
+        if (playback.MediaInfo.Audio is { } audio)
+        {
+            AddInfoLine(
+                panel,
+                "Audio",
+                $"{audio.Codec} {audio.SampleRate} Hz "
+                + $"{audio.ChannelLayout}");
+        }
+        new Flyout { Content = panel }.ShowAt(_interactionLayer);
+    }
+
+    private static void AddInfoLine(
+        StackPanel panel, string label, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"{label}: {value}",
+            TextWrapping = global::Avalonia.Media.TextWrapping.Wrap,
+        });
     }
 
     private static string PictureControlLabel(string name) => name switch
