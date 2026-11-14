@@ -159,7 +159,7 @@ DlnaClaimOutcome DlnaClaimAdapter::requestStop(
         outcome.deadline = m_pending->deadline;
         return outcome;
     }
-    if (canControl(peer)) {
+    if (ownerMatches(peer)) {
         outcome.disposition = DlnaClaimDisposition::Execute;
         outcome.reason = cast::ClaimReason::None;
         publishOwner(

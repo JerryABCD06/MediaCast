@@ -269,6 +269,16 @@ void testSameAddressDifferentControlIsNotOwner()
             control("app-b", "192.0.2.10"), CastTime{1}).disposition
             == DlnaClaimDisposition::Execute,
         "split control traffic on the owner address can play");
+    check(
+        adapter.requestStop(
+            control("app-b", "192.0.2.10"), CastTime{1}).disposition
+            == DlnaClaimDisposition::Ignored,
+        "same-address control identity cannot stop before claiming");
+    check(
+        adapter.requestStop(
+            control("app-a", "192.0.2.10"), CastTime{1}).disposition
+            == DlnaClaimDisposition::Execute,
+        "the complete owner identity can stop immediately");
 
     const auto other = adapter.beginMedia(
         control("app-b", "192.0.2.10"), media("http://b/two.mp4"),
