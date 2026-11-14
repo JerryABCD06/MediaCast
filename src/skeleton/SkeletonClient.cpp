@@ -554,6 +554,16 @@ bool waitForUiOrPlaybackEnd(
     return false;
 }
 
+bool uiProcessExited(std::uint32_t processId)
+{
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId);
+    if (!process)
+        return true;
+    const DWORD state = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+    return state == WAIT_OBJECT_0;
+}
+
 bool uiPlaybackClient(
     const ClientOptions &options,
     const mcast::ipc::PeerIdentityGrant &expectedProtocol,
@@ -968,6 +978,12 @@ int runClient(const ClientOptions &options)
                             // FILE_FLAG_FIRST_PIPE_INSTANCE listener.
                             currentPlayback.reset();
                             playback.reset();
+                            if (uiProcessExited(processId)) {
+                                protocolLog(
+                                    "Ui process exited; "
+                                    "PlaybackPipe reconnect skipped");
+                                break;
+                            }
                             protocolLog(
                                 "PlaybackPipe disconnected; "
                                 "requesting Ui reconnect");
