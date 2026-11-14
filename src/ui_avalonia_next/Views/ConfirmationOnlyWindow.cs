@@ -30,9 +30,10 @@ internal sealed class ConfirmationOnlyWindow : Window
         _host = host;
         Projection = projection;
         Title = "Cast confirmation";
-        Width = 460;
-        Height = 270;
+        Width = 520;
+        Height = 390;
         CanResize = false;
+        Topmost = true;
         WindowStartupLocation =
             WindowStartupLocation.CenterScreen;
 
@@ -57,7 +58,7 @@ internal sealed class ConfirmationOnlyWindow : Window
             projection.RemainingTimeoutMs);
         _timer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(250),
+            Interval = TimeSpan.FromMilliseconds(100),
         };
         _timer.Tick += (_, _) => UpdateCountdown();
 
@@ -98,7 +99,7 @@ internal sealed class ConfirmationOnlyWindow : Window
         {
             _timer.Start();
             UpdateCountdown();
-            _accept.Focus();
+            _reject.Focus();
         };
         Closed += (_, _) => _timer.Stop();
     }
@@ -169,6 +170,11 @@ internal sealed class ConfirmationOnlyWindow : Window
             {
                 new TextBlock
                 {
+                    Text = ProtocolName(projection.Protocol),
+                    Opacity = 0.72,
+                },
+                new TextBlock
+                {
                     Text = string.IsNullOrWhiteSpace(
                         projection.PeerName)
                         ? "An unknown device"
@@ -189,5 +195,19 @@ internal sealed class ConfirmationOnlyWindow : Window
         };
         Grid.SetRow(panel, row);
         return panel;
+    }
+
+    private static string ProtocolName(int protocol)
+    {
+        return protocol switch
+        {
+            1 => "DLNA",
+            2 => "Google Cast",
+            3 => "AirPlay",
+            4 => "Miracast",
+            5 => "LeLink",
+            6 => "Vendor protocol",
+            _ => "Unknown protocol",
+        };
     }
 }
