@@ -118,6 +118,7 @@ struct HostState
     std::atomic_int lastFramebuffer{0};
     std::atomic_int lastWidth{0};
     std::atomic_int lastHeight{0};
+    std::atomic_bool renderTargetRefreshPending{false};
     RenderWakeLatch renderWake;
     std::string glBackend = "not-attached";
 
@@ -1373,11 +1374,27 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_render_frame(
     const int result =
         mpv_render_context_render(g_state->renderContext, params);
     ++g_state->renderCalls;
-    g_state->lastFramebuffer = framebuffer;
-    g_state->lastWidth = width;
-    g_state->lastHeight = height;
+    const int previousFramebuffer =
+        g_state->lastFramebuffer.exchange(framebuffer);
+    const int previousWidth = g_state->lastWidth.exchange(width);
+    const int previousHeight = g_state->lastHeight.exchange(height);
+    bool targetChanged =
+        previousFramebuffer != framebuffer
+        || previousWidth != width
+        || previousHeight != height;
     if (result < 0) {
         ++g_state->renderFailures;
+        targetChanged = true;
+    }
+    if (targetChanged
+        && !g_state->renderTargetRefreshPending.exchange(true)) {
+        auto *state = g_state.get();
+        state->loop.post([state] {
+            state->renderTargetRefreshPending = false;
+            updateRenderer(*state);
+        });
+    }
+    if (result < 0) {
         return 0;
     }
     if (!g_state->rendererReady.exchange(true)) {

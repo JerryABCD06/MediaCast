@@ -23,6 +23,14 @@ public sealed class App : Application
     private MainWindow? _mainWindow;
     private ConfirmationOnlyWindow? _confirmationWindow;
     private bool _shutdownRequested;
+    private bool? _lastControlConnected;
+    private bool? _lastRendererLost;
+    private bool? _lastRendererReady;
+    private string? _lastFatalReason;
+    private ulong _lastRenderGeneration = ulong.MaxValue;
+    private int _lastFramebuffer = int.MinValue;
+    private int _lastRenderWidth = -1;
+    private int _lastRenderHeight = -1;
 
     public override void Initialize()
     {
@@ -115,6 +123,7 @@ public sealed class App : Application
 
     private void OnHostChanged(HostProjection projection)
     {
+        LogHostTransitions(projection);
         ApplyShellAppearance(projection.Shell);
         if (projection.Shell.ConfirmationOnly)
         {
@@ -130,6 +139,49 @@ public sealed class App : Application
             || !string.IsNullOrEmpty(projection.Shell.FatalReason))
         {
             RequestShutdown();
+        }
+    }
+
+    private void LogHostTransitions(HostProjection projection)
+    {
+        var shell = projection.Shell;
+        var renderer = projection.Renderer;
+        if (_lastControlConnected != shell.UiSessionConnected
+            || _lastRendererLost != renderer.ContextLost
+            || _lastFatalReason != shell.FatalReason)
+        {
+            _lastControlConnected = shell.UiSessionConnected;
+            _lastRendererLost = renderer.ContextLost;
+            _lastFatalReason = shell.FatalReason;
+            _log?.Write(
+                "Host state "
+                + $"controlConnected={shell.UiSessionConnected} "
+                + $"rendererLost={renderer.ContextLost} "
+                + $"fatal={shell.FatalReason}");
+        }
+
+        if (_lastRendererReady != renderer.RendererReady)
+        {
+            _lastRendererReady = renderer.RendererReady;
+            _log?.Write(
+                $"Renderer ready={renderer.RendererReady} "
+                + $"generation={renderer.RenderContextGeneration}");
+        }
+
+        if (_lastRenderGeneration != renderer.RenderContextGeneration
+            || _lastFramebuffer != renderer.LastFramebuffer
+            || _lastRenderWidth != renderer.LastWidth
+            || _lastRenderHeight != renderer.LastHeight)
+        {
+            _lastRenderGeneration = renderer.RenderContextGeneration;
+            _lastFramebuffer = renderer.LastFramebuffer;
+            _lastRenderWidth = renderer.LastWidth;
+            _lastRenderHeight = renderer.LastHeight;
+            _log?.Write(
+                "Render target "
+                + $"generation={renderer.RenderContextGeneration} "
+                + $"framebuffer={renderer.LastFramebuffer} "
+                + $"pixels={renderer.LastWidth}x{renderer.LastHeight}");
         }
     }
 
