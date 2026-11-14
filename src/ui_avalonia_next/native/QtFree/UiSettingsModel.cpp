@@ -205,6 +205,7 @@ bool UiSettingsModel::applySnapshot(
     const int oldInterval = broadcastIntervalMs();
     m_authoritativeRoot = *parsed;
     m_root = m_authoritativeRoot;
+    mergePatch(m_root, m_inFlightPatch);
     mergePatch(m_root, m_patch);
     m_version = version;
     emitChanges(oldMica, oldAccept, oldBroadcast, oldInterval);

@@ -25,6 +25,7 @@ internal sealed partial class SettingsPage : UserControl
         [5000, 10000, 30000, 60000];
 
     private readonly IShellSettingsIntentPort _host;
+    private readonly Dictionary<string, PendingSetting> _pending = [];
     private ShellProjection? _shell;
     private bool _updating;
 
@@ -59,6 +60,7 @@ internal sealed partial class SettingsPage : UserControl
             var requested = _shell.RequestedLanguage;
             if (requested.Length == 0)
                 requested = "System";
+            requested = PendingOrAuthority("language", requested);
             LanguageCombo.ItemsSource = languages;
             LanguageCombo.SelectedItem =
                 languages.FirstOrDefault(
@@ -66,18 +68,27 @@ internal sealed partial class SettingsPage : UserControl
                 ?? languages[0];
             ThemeCombo.SelectedItem =
                 s_themes.FirstOrDefault(
-                    item => item.Value == _shell.ThemeMode)
+                    item => item.Value
+                        == PendingOrAuthority(
+                            "theme", _shell.ThemeMode))
                 ?? s_themes[0];
             AccentCombo.SelectedItem =
                 s_accents.FirstOrDefault(
-                    item => item.Value == _shell.AccentMode)
+                    item => item.Value
+                        == PendingOrAuthority(
+                            "accent", _shell.AccentMode))
                 ?? s_accents[0];
-            MicaToggle.IsChecked = _shell.MicaEnabled;
-            AcceptCastToggle.IsChecked = _shell.AcceptNewCast;
-            BroadcastToggle.IsChecked = _shell.BroadcastEnabled;
+            MicaToggle.IsChecked = PendingOrAuthority(
+                "mica", _shell.MicaEnabled);
+            AcceptCastToggle.IsChecked = PendingOrAuthority(
+                "accept", _shell.AcceptNewCast);
+            BroadcastToggle.IsChecked = PendingOrAuthority(
+                "broadcast", _shell.BroadcastEnabled);
+            var interval = PendingOrAuthority(
+                "interval", _shell.BroadcastIntervalMs);
             BroadcastIntervalCombo.SelectedIndex = Math.Max(
                 0, Array.IndexOf(
-                    s_intervals, _shell.BroadcastIntervalMs));
+                    s_intervals, interval));
         }
         finally
         {
@@ -104,6 +115,7 @@ internal sealed partial class SettingsPage : UserControl
         {
             return;
         }
+        MarkPending("language", choice.Value);
         _host.SetLanguage(
             choice.Value == "System" ? string.Empty : choice.Value);
     }
@@ -115,6 +127,7 @@ internal sealed partial class SettingsPage : UserControl
             && ThemeCombo.SelectedItem
                 is Choice<ThemeMode> choice)
         {
+            MarkPending("theme", choice.Value);
             _host.SetThemeMode(choice.Value);
         }
     }
@@ -126,6 +139,7 @@ internal sealed partial class SettingsPage : UserControl
             && AccentCombo.SelectedItem
                 is Choice<AccentMode> choice)
         {
+            MarkPending("accent", choice.Value);
             _host.SetAccentMode(choice.Value);
         }
     }
@@ -133,19 +147,34 @@ internal sealed partial class SettingsPage : UserControl
     private void MicaClicked(object? sender, RoutedEventArgs e)
     {
         if (!_updating && _shell is not null)
-            _host.SetMica(!_shell.MicaEnabled);
+        {
+            var desired = !PendingOrAuthority(
+                "mica", _shell.MicaEnabled);
+            MarkPending("mica", desired);
+            _host.SetMica(desired);
+        }
     }
 
     private void AcceptCastClicked(object? sender, RoutedEventArgs e)
     {
         if (!_updating && _shell is not null)
-            _host.SetAcceptNewCast(!_shell.AcceptNewCast);
+        {
+            var desired = !PendingOrAuthority(
+                "accept", _shell.AcceptNewCast);
+            MarkPending("accept", desired);
+            _host.SetAcceptNewCast(desired);
+        }
     }
 
     private void BroadcastClicked(object? sender, RoutedEventArgs e)
     {
         if (!_updating && _shell is not null)
-            _host.SetBroadcast(!_shell.BroadcastEnabled);
+        {
+            var desired = !PendingOrAuthority(
+                "broadcast", _shell.BroadcastEnabled);
+            MarkPending("broadcast", desired);
+            _host.SetBroadcast(desired);
+        }
     }
 
     private void BroadcastIntervalChanged(
@@ -155,8 +184,36 @@ internal sealed partial class SettingsPage : UserControl
             return;
         var index = BroadcastIntervalCombo.SelectedIndex;
         if (index >= 0 && index < s_intervals.Length)
+        {
+            MarkPending("interval", s_intervals[index]);
             _host.SetBroadcastInterval(s_intervals[index]);
+        }
     }
+
+    private T PendingOrAuthority<T>(string key, T authority)
+        where T : notnull
+    {
+        if (!_pending.TryGetValue(key, out var pending))
+            return authority;
+        if (DateTimeOffset.UtcNow >= pending.Until
+            || Equals(pending.Value, authority))
+        {
+            _pending.Remove(key);
+            return authority;
+        }
+        return pending.Value is T value ? value : authority;
+    }
+
+    private void MarkPending<T>(string key, T value)
+        where T : notnull
+    {
+        _pending[key] = new PendingSetting(
+            value, DateTimeOffset.UtcNow.AddSeconds(1.5));
+    }
+
+    private sealed record PendingSetting(
+        object Value,
+        DateTimeOffset Until);
 
     private sealed record Choice<T>(string Title, T Value)
     {

@@ -101,9 +101,9 @@ int main()
         error.clear();
         check(model.applySnapshot(initial, 5, &error),
               "same-version snapshot is accepted");
-        check(model.mica() && model.broadcast()
-                  && model.pictureValues().count("contrast") == 0,
-              "same-version snapshot rolls back optimistic patch");
+        check(!model.mica() && !model.broadcast()
+                  && model.pictureValues().at("contrast") == 25,
+              "in-flight patch survives an unrelated snapshot");
         model.rejectPendingPatch();
         check(model.mica() && model.broadcast()
                   && model.broadcastIntervalMs() == 10000,
