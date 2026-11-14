@@ -52,6 +52,7 @@ public:
     UiConfirmationBridge(const UiConfirmationBridge &) = delete;
     UiConfirmationBridge &operator=(const UiConfirmationBridge &) = delete;
 
+    void activate();
     void stop();
     bool sendFirstFrame(
         std::uint64_t activationId, std::string &error);
@@ -85,6 +86,7 @@ private:
     std::unordered_map<
         std::uint64_t, ipc::CastConfirmationRequestInfo>
         m_pending;
+    bool m_activated = false;
     std::atomic_uint64_t m_nextRequestId{100};
     std::atomic_bool m_alive{true};
     std::atomic_bool m_stopped{false};

@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <utility>
+#include <vector>
 
 namespace mcast::avalonia::qtfree {
 namespace {
@@ -50,6 +51,32 @@ void UiConfirmationBridge::stop()
     {
         const std::scoped_lock lock(m_pendingMutex);
         m_pending.clear();
+    }
+}
+
+void UiConfirmationBridge::activate()
+{
+    std::vector<ConfirmationEvent> pending;
+    {
+        const std::scoped_lock lock(m_pendingMutex);
+        if (m_activated)
+            return;
+        m_activated = true;
+        pending.reserve(m_pending.size());
+        for (const auto &[requestId, request] : m_pending) {
+            pending.push_back(
+                ConfirmationEvent{
+                    requestId,
+                    request,
+                    m_titleResolver(request.mediaTitle),
+                });
+        }
+    }
+    for (const auto &event : pending) {
+        post([this, event] {
+            if (m_alive.load())
+                requestReceived.emit(event);
+        });
     }
 }
 
@@ -197,19 +224,23 @@ void UiConfirmationBridge::readLoop(std::stop_token stop)
                 });
                 continue;
             }
+            bool activated = false;
             {
                 const std::scoped_lock lock(m_pendingMutex);
                 m_pending[message.header.messageId] = *request;
+                activated = m_activated;
             }
-            ConfirmationEvent event{
-                message.header.messageId,
-                *request,
-                m_titleResolver(request->mediaTitle),
-            };
-            post([this, event = std::move(event)] {
-                if (m_alive.load())
-                    requestReceived.emit(event);
-            });
+            if (activated) {
+                ConfirmationEvent event{
+                    message.header.messageId,
+                    *request,
+                    m_titleResolver(request->mediaTitle),
+                };
+                post([this, event = std::move(event)] {
+                    if (m_alive.load())
+                        requestReceived.emit(event);
+                });
+            }
         } else if (
             message.header.type
             == ipc::MessageType::UiCastConfirmationCancel) {

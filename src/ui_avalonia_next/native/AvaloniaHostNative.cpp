@@ -846,6 +846,7 @@ bool setupHost(HostState &state, std::string &error)
                 state.confirmation->submitSettings(
                     json, state.settings->version(), error);
             }));
+        state.confirmation->activate();
     }
 
     if (!state.options.confirmationOnly) {

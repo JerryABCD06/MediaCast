@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -115,6 +116,13 @@ int main()
     check(pipes.server->writeMessage(
               *requestMessage, 2s, error),
           error.c_str());
+    std::this_thread::sleep_for(100ms);
+    {
+        std::unique_lock lock(mutex);
+        check(!requestSeen,
+              "request waits until the host activates the bridge");
+    }
+    bridge.activate();
     {
         std::unique_lock lock(mutex);
         check(condition.wait_for(
