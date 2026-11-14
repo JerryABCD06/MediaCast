@@ -56,6 +56,7 @@ internal sealed class NativeAvaloniaHost :
     private string _lastShellJson = "{}";
     private int _refreshQueued;
     private int _renderRefreshQueued;
+    private long _renderRevision;
     private bool _disposed;
 
     public HostProjection? Current { get; private set; }
@@ -641,20 +642,36 @@ internal sealed class NativeAvaloniaHost :
         var target = FromContext(context);
         if (target is null)
             return;
+        Interlocked.Increment(ref target._renderRevision);
+        target.QueueRenderRefresh();
+    }
+
+    private void QueueRenderRefresh()
+    {
         if (Interlocked.Exchange(
-                ref target._renderRefreshQueued, 1) != 0)
+                ref _renderRefreshQueued, 1) != 0)
         {
             return;
         }
         Dispatcher.UIThread.Post(
-            () =>
-            {
-                Interlocked.Exchange(
-                    ref target._renderRefreshQueued, 0);
-                if (!target._disposed)
-                    target.RenderUpdateRequested?.Invoke();
-            },
+            RunRenderRefresh,
             DispatcherPriority.Render);
+    }
+
+    private void RunRenderRefresh()
+    {
+        var revision = Volatile.Read(ref _renderRevision);
+        try
+        {
+            if (!_disposed)
+                RenderUpdateRequested?.Invoke();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _renderRefreshQueued, 0);
+            if (Volatile.Read(ref _renderRevision) != revision)
+                QueueRenderRefresh();
+        }
     }
 
     private static NativeAvaloniaHost? FromContext(IntPtr context)
