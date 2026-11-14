@@ -419,41 +419,13 @@ internal sealed partial class CastPage : UserControl
                     control.Value, control.Minimum, control.Maximum),
             };
             var dragging = false;
-            var lastSentValue =
-                (int)Math.Round(slider.Value);
-            var pendingValue = lastSentValue;
-            // Pointer input can outrun video frames. Keep only the newest
-            // value between display ticks, then force the release value.
-            var flushTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(16),
-            };
-            void PushLatest(bool force)
-            {
-                if (!force && pendingValue == lastSentValue)
-                    return;
-                lastSentValue = pendingValue;
-                _host.SetPictureControl(
-                    control.Name, pendingValue);
-            }
-            void QueueLatest()
-            {
-                pendingValue = (int)Math.Round(slider.Value);
-                if (flushTimer.IsEnabled)
-                    return;
-                PushLatest(force: false);
-                flushTimer.Start();
-            }
-            flushTimer.Tick += (_, _) =>
-                PushLatest(force: false);
             void Finish()
             {
                 if (!dragging)
                     return;
                 dragging = false;
-                flushTimer.Stop();
-                pendingValue = (int)Math.Round(slider.Value);
-                PushLatest(force: true);
+                _host.SetPictureControl(
+                    control.Name, (int)Math.Round(slider.Value));
                 _host.EndControlAdjustment();
             }
 
@@ -476,10 +448,11 @@ internal sealed partial class CastPage : UserControl
                 },
                 RoutingStrategies.Bubble,
                 handledEventsToo: true);
-            slider.ValueChanged += (_, _) =>
+            slider.ValueChanged += (_, args) =>
             {
                 if (dragging)
-                    QueueLatest();
+                    _host.SetPictureControl(
+                        control.Name, (int)Math.Round(args.NewValue));
             };
             slider.PointerCaptureLost += (_, _) => Finish();
             slider.LostFocus += (_, _) => Finish();

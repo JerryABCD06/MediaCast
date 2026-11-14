@@ -1153,7 +1153,6 @@ bool MpvCore::setPictureControl(
     if (result < 0)
         return false;
     pictureControlChanged.emit(name, value);
-    renderUpdate.emit();
     return true;
 }
 
@@ -1199,7 +1198,6 @@ bool MpvCore::applySharpen(int value)
     }
     m_sharpen = value;
     pictureControlChanged.emit("sharpen", value);
-    renderUpdate.emit();
     return true;
 }
 
