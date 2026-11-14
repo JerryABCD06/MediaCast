@@ -96,6 +96,20 @@ PlaybackUiReady
 - confirmation-only 不创建主窗口、MPV 或 PlaybackBridge，不能复用主窗口首帧门;
 - 没有 PlaybackUiReady 时 Protocol 不得下发普通媒体命令。
 
+confirmation-only 的冷启动顺序是：
+
+```text
+Shell 选择 confirmation-only
+  -> Ui ControlPipe Hello
+  -> language catalog / settings snapshot / Protocol grant
+  -> native host 完成确认 bridge 信号订阅
+  -> bridge.activate() 回放启动前暂存的确认请求
+```
+
+普通模式继续使用主窗口 `UiFirstFrame`；confirmation-only 不使用这个信号。确认窗口
+关闭是否退出 Ui 由 Ui 模式决定：普通模式只关闭辅助确认窗口，confirmation-only
+关闭确认窗口才退出进程。
+
 ## 4. Avalonia 到 native host
 
 Avalonia 只通过语义 ABI 发送用户意图：

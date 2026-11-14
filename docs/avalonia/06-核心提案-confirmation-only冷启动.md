@@ -1,7 +1,7 @@
 # 核心改动提案：confirmation-only 自动冷启动
 
 日期：2026-11-14  
-状态：轻量 Ui 已实现并自动验证；Shell 自动冷启动仍被冻结边界阻断
+状态：轻量 Ui、Shell 自动冷启动和确认后升级均已实现并完成 Release 验证
 
 ## 1. 原契约
 
@@ -20,7 +20,7 @@ Ui
   -> confirmation-only：只连接 ControlPipe 并显示确认窗口
 ```
 
-## 2. 当前缺口
+## 2. 已实现结果
 
 confirmation-only Ui 本身已经完成：
 
@@ -33,8 +33,9 @@ confirmation-only Ui 本身已经完成：
 只显示确认窗口并返回决定
 ```
 
-但 Shell 尚未在“主窗口不存在、当前只需要确认”时启动该模式。
-没有现成 ControlPipe 连接时，确认请求只能 fail-closed。
+Shell 现在会在没有可用 Ui、但 Protocol 已请求确认时，按需启动该模式。
+确认请求不会因为 Ui 尚不存在而直接丢失；Shell 保留原始绝对 deadline，
+等待 ControlPipe 建立后转发现有中性确认消息。
 
 ## 3. 为什么 UI 不能单独解决
 
@@ -68,12 +69,14 @@ Protocol 请求 confirmation-only 显示
        有普通 Ui：转发给现有 Ui
        有 confirmation-only Ui：转发给现有 Ui
        都没有：启动 confirmation-only Ui
-  -> 等待 ControlPipe Hello + 辅助窗口 ready
+  -> 等待 ControlPipe Hello
   -> 转发确认请求
 ```
 
-辅助窗口 ready 必须是独立中性信号，不能伪装成主窗口 `UiFirstFrame`。
-如果现有 ControlPipe 没有合适消息，wire 增量必须另行确认。
+这里没有新增 wire 消息，也没有复用主窗口 `UiFirstFrame`。Qt-free
+`UiConfirmationBridge` 在 reader 收到请求时先保留并等待 native host 完成所有
+信号订阅，随后 `activate()` 回放 pending 请求。Shell 只需要 ControlPipe 已连接；
+这保持了旧版 QML 的窗口生命周期，同时消除了冷启动时的订阅竞态。
 
 ## 6. 必须保持
 
@@ -111,7 +114,7 @@ ControlPipe 断开
 无普通 Ui + 需要确认
   -> confirmation-only 启动
   -> Hello
-  -> 辅助窗口 ready
+  -> confirmation bridge 完成激活
   -> 请求显示
   -> 允许 / 拒绝 / 取消 / 超时
 
@@ -136,24 +139,24 @@ ready 超时
 - Shell 日志明确记录 Ui 模式；
 - 结束后无残留进程。
 
-## 9. 请确认
+## 9. 实施边界
 
-请批准修改：
+实际修改范围：
 
 ```text
 src/shell/
-必要时 ControlPipe 的中性增量消息
+src/ui_avalonia_next/
 ```
 
-未批准前，只保留显式开发验收：
+没有修改 Protocol、CastArbiter、Playback 或现有确认消息语义。显式开发验收仍保留：
 
 ```powershell
 MCast.Ui.exe --standalone --confirmation-only --test-takeover-window
 ```
 
-正常自动冷启动不会被声明为已完成。
+自动冷启动路径已由下方 Release 演练覆盖。
 
-## 10. 当前验证边界
+## 10. 验证
 
 新增 CTest：
 
@@ -178,7 +181,17 @@ PlaybackBridge
 
 因此轻量 confirmation-only Ui 已经由自动化证明。
 
-“主窗口不存在时由 Shell 自动选择 confirmation-only 并等待辅助窗口 ready”仍需修改
-Shell/ControlPipe，属于冻结核心边界。本次迁移没有偷偷修改 Shell 或 wire；
-该产品行为继续保留为需要单独确认的核心事项。
+Release 端到端演练还验证了：
+
+```text
+正常 Ui 已建立并完成首个 SetAVTransportURI
+  -> 用户关闭主 Ui
+  -> 第二个候选投送到达
+  -> Shell 启动 MCast.Ui.exe --confirmation-only
+  -> 新 Ui 只启动 native host，不创建 MPV、SMTC、PlaybackBridge 或 PlaybackPipe
+```
+
+`mcast_playback_pipe_gateway_tests` 在完整串行测试中曾出现一次
+`state delta cached` 失败，但单独重跑通过；该测试属于既有 Playback 层，本次
+Shell/UI 改动没有修改该层，后续仍应单独跟踪其串行稳定性。
 

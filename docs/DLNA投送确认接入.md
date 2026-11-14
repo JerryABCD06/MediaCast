@@ -279,16 +279,21 @@ latest MediaRequest
 - HTTP、DLNA Claim、dispatcher、runtime 和进程级测试；
 - 真实控制点的首条媒体、暂停接收、主动断开和窗口重新唤起回归。
 
+冷启动接线已完成且已接入：
+
+- MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI；
+- confirmation-only Ui 保持 ControlPipe 常驻，在确认请求到达后显示独立窗口；
+- 确认请求在 native host 信号订阅前到达时由 bridge 暂存，不会丢失；
+
 尚未完成：
 
 - 跨进程 UDP 的 M-SEARCH 仍受本机防火墙影响，当前由
   `DlnaProtocolRuntime` 动态 SSDP 端口测试覆盖；三进程 E2E 已覆盖 description、
   GENA、SetURI、真实 UI 播放和查询；
 - 不同真实控制点在确认窗口前的等待时长实测；
-- MainWindow 不存在时，由 Shell 按需启动 confirmation-only UI 的完整冷启动
-  故障路径；
 - 接收/确认策略完全收归 Shell 的持久配置数据面；
 - 三进程生产入口的长稳和故障注入。
 
-MainWindow 已存在时，真实 DLNA 投送已经可以触发 QML 确认窗口；冷启动和无 UI
-场景尚未完成全路径验证。
+MainWindow 已存在时和不存在时都可以进入确认路径。无 UI 场景由
+confirmation-only 进程承接；确认允许后必须由 Shell 完成 confirmation-only 到
+Normal Ui 的切换，不能把辅助 Ui 误认为主窗口。
