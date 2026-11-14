@@ -239,6 +239,20 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_qtfree_media_types_tests PROPERTIES TIMEOUT 10)
 
+    add_executable(
+        mcast_qtfree_player_contract_tests
+        tests/qtfree_player_contract_tests.cpp)
+    target_include_directories(
+        mcast_qtfree_player_contract_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/native")
+    target_compile_options(
+        mcast_qtfree_player_contract_tests PRIVATE /utf-8)
+    add_test(
+        NAME mcast_qtfree_player_contract_tests
+        COMMAND mcast_qtfree_player_contract_tests)
+    set_tests_properties(
+        mcast_qtfree_player_contract_tests PROPERTIES TIMEOUT 10)
+
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
