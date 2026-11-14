@@ -74,6 +74,8 @@ public:
     bool canControl(const cast::PeerIdentity &peer) const;
     std::optional<std::uint64_t> operationId() const noexcept;
     std::optional<cast::ClaimKey> pendingKey() const noexcept;
+    std::optional<cast::PeerIdentity> confirmationPreemptionStopPeer(
+        const cast::ClaimKey &key) const;
 
 private:
     struct PendingHttp {

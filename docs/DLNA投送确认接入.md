@@ -244,9 +244,10 @@ latest MediaRequest
 - 未知来源的 `Stop` 返回 `Ignored`；
 - 未知来源的 `Play` 返回 `Rejected`；
 - 用户拒绝或确认超时：清除候选事务，旧 owner 和 epoch 完全不变；
-- 用户允许：存在 displaced DLNA owner 时，runtime 先在事务内 Stop 旧 owner；
-  Stop 成功后才返回候选媒体和 `executeMedia=true`。adapter 对同一 Claim 只发出
-  一次媒体 outcome，runtime 还必须用 owner session ID、epoch 和
+- 用户允许：存在旧 DLNA owner 时，handler 先在 pending 阶段 Stop 旧 owner；
+  Stop 成功后才提交 Confirmation Handoff 并返回候选媒体和 `executeMedia=true`。
+  Stop 失败则把该 pending 作为拒绝收口，旧 owner 不变。adapter 对同一 Claim
+  只发出一次媒体 outcome，runtime 还必须用 owner session ID、epoch 和
   `mediaGeneration` 保证 Open 幂等并拒绝迟到的旧 Open；
 - 重复的 accepted decision 返回 duplicate，`executeMedia` 必须为 false，禁止
   adapter 第二次发出媒体；

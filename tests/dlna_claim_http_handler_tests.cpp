@@ -488,8 +488,14 @@ void testAcceptedTakeoverStopFailureDoesNotOpen()
         harness.confirmations[0].key, true, CastTime{102});
     check(harness.executions.size() == 1
               && harness.completion(602)
-              && harness.completion(602)->status == 500,
-          "failed displaced-owner Stop prevents candidate media Open");
+              && harness.completion(602)->status == 500
+              && harness.completion(602)->body.find(
+                  "<errorCode>701</errorCode>")
+                  != std::string::npos
+              && harness.coordinator.snapshot().owner
+              && harness.coordinator.snapshot().owner->peer.id
+                  == "192.0.2.10|MCast-Test-Control",
+          "failed displaced-owner Stop rejects takeover and keeps owner");
 }
 
 void testOwnerStopFailureKeepsArbitrationOwner()

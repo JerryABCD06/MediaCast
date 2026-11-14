@@ -234,8 +234,6 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::confirmationDecision(
         std::move(
             resolved.http.begin(), resolved.http.end(),
             std::back_inserter(actions.http));
-        actions.stopNow = resolved.stopNow;
-        actions.stopPeer = std::move(resolved.stopPeer);
         actions.media = std::move(resolved.media);
         return actions;
     }
@@ -367,6 +365,20 @@ DlnaClaimRuntime::pendingKey() const noexcept
         : std::nullopt;
 }
 
+std::optional<cast::PeerIdentity>
+DlnaClaimRuntime::confirmationPreemptionStopPeer(
+    const cast::ClaimKey &key) const
+{
+    if (!m_pending || m_pending->key.protocol != key.protocol
+        || m_pending->key.id != key.id) {
+        return std::nullopt;
+    }
+    const auto &owner = m_adapter.snapshot().owner;
+    if (!owner || owner->protocol != cast::ProtocolKind::Dlna)
+        return std::nullopt;
+    return owner->peer;
+}
+
 DlnaClaimRuntimeActions DlnaClaimRuntime::beginExecute(
     DlnaClaimOutcome &&outcome, cast::PeerIdentity requestPeer,
     cast::CastTime now)
@@ -426,12 +438,6 @@ DlnaClaimRuntimeActions DlnaClaimRuntime::beginResolution(
         ? std::move(*m_pending)
         : PendingHttp{};
     m_pending.reset();
-    if (resolution.decision.displaced
-        && resolution.decision.displaced->protocol
-            == cast::ProtocolKind::Dlna) {
-        actions.stopNow = true;
-        actions.stopPeer = resolution.decision.displaced->peer;
-    }
     replaceOperation(actions, resolution.decision);
     const bool newSession =
         !resolution.decision.duplicate
