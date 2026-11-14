@@ -227,6 +227,10 @@ internal sealed partial class CastPage : UserControl
                 },
                 DispatcherPriority.Input);
         };
+        _mediaMenu.Closed += (_, _) =>
+            Dispatcher.UIThread.Post(
+                () => _interactionLayer.Focus(),
+                DispatcherPriority.Input);
         _menuPrevious.Click += (_, _) => _host.Previous();
         _menuPlayPause.Click += (_, _) => _host.TogglePlayPause();
         _menuNext.Click += (_, _) => _host.Next();
