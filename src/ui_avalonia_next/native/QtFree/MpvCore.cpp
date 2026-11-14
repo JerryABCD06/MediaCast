@@ -817,6 +817,9 @@ void MpvCore::eventLoop(std::stop_token stop)
             case IdPause: {
                 const bool paused = property->data
                     && *static_cast<int *>(property->data) != 0;
+                logMessage.emit(
+                    "MPV pause property -> "
+                    + std::string(paused ? "true" : "false"));
                 post([this, paused] { pausedChanged.emit(paused); });
                 break;
             }
@@ -1008,6 +1011,7 @@ void MpvCore::play()
 {
     if (!m_mpv)
         return;
+    logMessage.emit("MPV play command");
     if (m_imageSequenceActive.load())
         m_imageSequence->play();
     if (!m_imageSequenceActive.load() && m_eofReached) {
@@ -1024,6 +1028,7 @@ void MpvCore::pause()
 {
     if (!m_mpv)
         return;
+    logMessage.emit("MPV pause command");
     if (m_imageSequenceActive.load())
         m_imageSequence->pause();
     m_playOnLoad = false;

@@ -343,6 +343,7 @@ void PlaybackController::play()
 {
     if (!hasMedia())
         return;
+    logMessage.emit("PlaybackController::play requested");
     if (m_player)
         m_player->play();
     setState(State::Playing);
@@ -352,6 +353,7 @@ void PlaybackController::pause()
 {
     if (!hasMedia())
         return;
+    logMessage.emit("PlaybackController::pause requested");
     if (m_player)
         m_player->pause();
     setState(State::Paused);

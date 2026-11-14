@@ -50,6 +50,42 @@ playback::PlayMode wirePlayMode(PlaybackController::PlayMode mode)
     return playback::PlayMode::Normal;
 }
 
+const char *commandName(playback::PlaybackCommandType type)
+{
+    using playback::PlaybackCommandType;
+    switch (type) {
+    case PlaybackCommandType::Open: return "Open";
+    case PlaybackCommandType::Play: return "Play";
+    case PlaybackCommandType::Pause: return "Pause";
+    case PlaybackCommandType::Stop: return "Stop";
+    case PlaybackCommandType::Seek: return "Seek";
+    case PlaybackCommandType::Next: return "Next";
+    case PlaybackCommandType::Previous: return "Previous";
+    case PlaybackCommandType::EndSession: return "EndSession";
+    case PlaybackCommandType::SetNext: return "SetNext";
+    case PlaybackCommandType::SetPlayMode: return "SetPlayMode";
+    case PlaybackCommandType::SetVolume: return "SetVolume";
+    case PlaybackCommandType::SetMuted: return "SetMuted";
+    case PlaybackCommandType::SetPictureControl: return "SetPictureControl";
+    case PlaybackCommandType::ResetPictureControls:
+        return "ResetPictureControls";
+    case PlaybackCommandType::SetPeerConnected: return "SetPeerConnected";
+    case PlaybackCommandType::SetCastSession: return "SetCastSession";
+    }
+    return "Unknown";
+}
+
+const char *outcomeName(playback::PlaybackOutcomeStatus outcome)
+{
+    using playback::PlaybackOutcomeStatus;
+    switch (outcome) {
+    case PlaybackOutcomeStatus::Applied: return "Applied";
+    case PlaybackOutcomeStatus::Rejected: return "Rejected";
+    case PlaybackOutcomeStatus::StaleGeneration: return "StaleGeneration";
+    }
+    return "Unknown";
+}
+
 PlaybackController::PlayMode controllerPlayMode(
     playback::PlayMode mode)
 {
@@ -520,14 +556,27 @@ void PlaybackBridge::handleCommand(
     std::uint64_t commandId,
     const playback::PlaybackCommand &command)
 {
+    logMessage.emit(
+        "Playback command " + std::string(commandName(command.type))
+        + " commandId=" + std::to_string(commandId)
+        + " expectedGeneration="
+        + std::to_string(command.expectedGeneration)
+        + " currentGeneration=" + std::to_string(m_generation));
     if (command.expectedGeneration != m_generation) {
         sendCommandResult(
             commandId, playback::PlaybackOutcomeStatus::StaleGeneration,
             "stale playback generation");
+        logMessage.emit(
+            "Playback command StaleGeneration commandId="
+            + std::to_string(commandId));
         return;
     }
     std::string error;
     const auto outcome = execute(command, error);
+    logMessage.emit(
+        "Playback command " + std::string(outcomeName(outcome))
+        + " commandId=" + std::to_string(commandId)
+        + (error.empty() ? std::string{} : " error=" + error));
     if (outcome == playback::PlaybackOutcomeStatus::Applied)
         ++m_stateVersion;
     sendCommandResult(commandId, outcome, error);

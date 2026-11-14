@@ -163,18 +163,23 @@ bool WindowsMediaControls::attach()
                         return;
                     switch (button) {
                     case WMedia::SystemMediaTransportControlsButton::Play:
+                        current->logMessage.emit("SMTC button Play");
                         current->playRequested.emit();
                         break;
                     case WMedia::SystemMediaTransportControlsButton::Pause:
+                        current->logMessage.emit("SMTC button Pause");
                         current->pauseRequested.emit();
                         break;
                     case WMedia::SystemMediaTransportControlsButton::Stop:
+                        current->logMessage.emit("SMTC button Stop");
                         current->stopRequested.emit();
                         break;
                     case WMedia::SystemMediaTransportControlsButton::Next:
+                        current->logMessage.emit("SMTC button Next");
                         current->nextRequested.emit();
                         break;
                     case WMedia::SystemMediaTransportControlsButton::Previous:
+                        current->logMessage.emit("SMTC button Previous");
                         current->previousRequested.emit();
                         break;
                     default:
