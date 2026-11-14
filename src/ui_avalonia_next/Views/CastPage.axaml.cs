@@ -554,8 +554,14 @@ internal sealed partial class CastPage : UserControl
     private void OnSeekValueChanged(
         object? sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_seekDragging)
+        if (_applyingProjection)
+            return;
+        if (_seekDragging) {
             UpdateTimeText(preview: e.NewValue);
+            return;
+        }
+        UpdateTimeText(preview: e.NewValue);
+        _host.SeekAbsolute(e.NewValue);
     }
 
     private void OnSeekCaptureLost(object? sender, RoutedEventArgs e)
@@ -563,9 +569,17 @@ internal sealed partial class CastPage : UserControl
         if (!_seekDragging)
             return;
         _seekDragging = false;
-        if (_playback is not null)
-            SeekSlider.Value = Math.Clamp(
-                _playback.PositionSeconds, 0, SeekSlider.Maximum);
+        _applyingProjection = true;
+        try
+        {
+            if (_playback is not null)
+                SeekSlider.Value = Math.Clamp(
+                    _playback.PositionSeconds, 0, SeekSlider.Maximum);
+        }
+        finally
+        {
+            _applyingProjection = false;
+        }
         UpdateTimeText();
     }
 
@@ -574,9 +588,17 @@ internal sealed partial class CastPage : UserControl
         if (!_seekDragging)
             return;
         _seekDragging = false;
-        if (_playback is not null)
-            SeekSlider.Value = Math.Clamp(
-                _playback.PositionSeconds, 0, SeekSlider.Maximum);
+        _applyingProjection = true;
+        try
+        {
+            if (_playback is not null)
+                SeekSlider.Value = Math.Clamp(
+                    _playback.PositionSeconds, 0, SeekSlider.Maximum);
+        }
+        finally
+        {
+            _applyingProjection = false;
+        }
     }
 
     private void OnVolumePressed(object? sender, PointerPressedEventArgs e)
@@ -599,8 +621,16 @@ internal sealed partial class CastPage : UserControl
     private void OnVolumeValueChanged(
         object? sender, RangeBaseValueChangedEventArgs e)
     {
-        if (!_applyingProjection && _volumeDragging)
+        if (_applyingProjection)
+            return;
+        if (_volumeDragging)
+        {
             _host.SetVolume((int)Math.Round(e.NewValue));
+            return;
+        }
+        _host.BeginControlAdjustment();
+        _host.SetVolume((int)Math.Round(e.NewValue));
+        _host.EndControlAdjustment();
     }
 
     private void OnVolumeCaptureLost(object? sender, RoutedEventArgs e)
