@@ -480,6 +480,12 @@ JsonValue::JsonValue(double value)
 {
 }
 
+JsonValue::JsonValue(const char *value)
+    : m_type(Type::String)
+    , m_string(value ? value : "")
+{
+}
+
 JsonValue::JsonValue(std::string value)
     : m_type(Type::String)
     , m_string(std::move(value))

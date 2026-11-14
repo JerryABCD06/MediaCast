@@ -39,6 +39,10 @@ int main()
           "number round trip");
     check(root->at("text").asString() == "a\nb",
           "escape round trip");
+    check(
+        JsonValue("0.1.0").isString()
+            && JsonValue("0.1.0").asString() == "0.1.0",
+        "string literals do not fall through to bool");
 
     const auto reparsed = JsonValue::parse(root->dump(), &error);
     check(reparsed.has_value(), error.message.c_str());

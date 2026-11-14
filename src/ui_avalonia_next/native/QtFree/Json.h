@@ -33,6 +33,7 @@ public:
     JsonValue() = default;
     explicit JsonValue(bool value);
     explicit JsonValue(double value);
+    explicit JsonValue(const char *value);
     explicit JsonValue(std::string value);
 
     static JsonValue array();
