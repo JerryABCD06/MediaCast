@@ -22,7 +22,7 @@
 ## 当前基线
 
 ```text
-main: `9643110`（最终文档提交后以 `main` HEAD 为准）
+main: `8caba5a`（最终文档提交后以 `main` HEAD 为准）
 旧 UI: Qt 6 / QML / FluentUI / libmpv
 新 UI 目标: Avalonia / .NET
 UI 后端目标: Qt-free native C++
