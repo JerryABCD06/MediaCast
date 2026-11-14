@@ -109,6 +109,33 @@ void testTextPriorityAndArtwork()
     check(result.artworkSource.empty(),
           "protocol artwork cannot reference a local file");
 
+    request.artworkUri = mcast::avalonia::qtfree::fileUriFromPath(
+        (root / "missing-cover.png").string());
+    result = pipeline.resolve(request, tags, {});
+    check(result.artworkSource.empty(),
+          "missing file artwork is rejected");
+
+    const auto directory = root / "cover-directory";
+    std::filesystem::create_directories(directory);
+    request.artworkUri = mcast::avalonia::qtfree::fileUriFromPath(
+        directory.string());
+    result = pipeline.resolve(request, tags, {});
+    check(result.artworkSource.empty(),
+          "directory artwork is rejected");
+
+    const auto oversized = root / "oversized-cover.png";
+    {
+        std::ofstream stream(oversized, std::ios::binary);
+        stream << "png";
+    }
+    std::filesystem::resize_file(
+        oversized, 16u * 1024u * 1024u + 1u);
+    request.artworkUri = mcast::avalonia::qtfree::fileUriFromPath(
+        oversized.string());
+    result = pipeline.resolve(request, tags, {});
+    check(result.artworkSource.empty(),
+          "oversized file artwork is rejected");
+
     std::error_code error;
     std::filesystem::remove_all(root, error);
 }

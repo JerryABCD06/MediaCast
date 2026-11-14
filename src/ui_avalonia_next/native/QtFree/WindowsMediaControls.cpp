@@ -16,14 +16,19 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
+#include <algorithm>
 #include <string>
 
 namespace WMedia = winrt::Windows::Media;
+namespace WFoundation = winrt::Windows::Foundation;
+namespace WStorageFile = winrt::Windows::Storage;
 namespace WStorage = winrt::Windows::Storage::Streams;
 
 namespace mcast::avalonia::qtfree {
@@ -287,11 +292,34 @@ void WindowsMediaControls::setNowPlaying(const NowPlaying &info)
         }
         if (!info.artworkSource.empty()) {
             try {
-                const winrt::Windows::Foundation::Uri uri(
-                    toHString(info.artworkSource));
-                updater.Thumbnail(
-                    WStorage::RandomAccessStreamReference::
-                        CreateFromUri(uri));
+                const std::string lower =
+                    mcast::avalonia::qtfree::lowercaseAscii(
+                        info.artworkSource);
+                if (lower.starts_with("file:")) {
+                    const WFoundation::Uri uri(
+                        toHString(info.artworkSource));
+                    std::wstring path(uri.Path());
+                    if (path.size() >= 3
+                        && path.front() == L'/'
+                        && std::isalpha(
+                               static_cast<unsigned char>(path[1]))
+                            != 0
+                        && path[2] == L':') {
+                        path.erase(path.begin());
+                    }
+                    const auto file =
+                        WStorageFile::StorageFile::GetFileFromPathAsync(
+                            winrt::hstring(path)).get();
+                    updater.Thumbnail(
+                        WStorage::RandomAccessStreamReference::
+                            CreateFromFile(file));
+                } else {
+                    const WFoundation::Uri uri(
+                        toHString(info.artworkSource));
+                    updater.Thumbnail(
+                        WStorage::RandomAccessStreamReference::
+                            CreateFromUri(uri));
+                }
             } catch (...) {
             }
         }
