@@ -100,10 +100,6 @@ internal sealed partial class CastPage : UserControl
             handledEventsToo: true);
         SeekSlider.ValueChanged += OnSeekValueChanged;
         VolumeSlider.ValueChanged += OnVolumeValueChanged;
-        SeekSlider.PointerCaptureLost += OnSeekCaptureLost;
-        VolumeSlider.PointerCaptureLost += OnVolumeCaptureLost;
-        SeekSlider.LostFocus += OnSeekLostFocus;
-        VolumeSlider.LostFocus += OnVolumeLostFocus;
     }
 
     internal void ApplyProjection(HostProjection projection)
@@ -589,45 +585,6 @@ internal sealed partial class CastPage : UserControl
         CommitSeek(e.NewValue);
     }
 
-    private void OnSeekCaptureLost(object? sender, RoutedEventArgs e)
-    {
-        if (!_seekDragging)
-            return;
-        _seekDragging = false;
-        _seekPendingValue = null;
-        _applyingProjection = true;
-        try
-        {
-            if (_playback is not null)
-                SeekSlider.Value = Math.Clamp(
-                    _playback.PositionSeconds, 0, SeekSlider.Maximum);
-        }
-        finally
-        {
-            _applyingProjection = false;
-        }
-        UpdateTimeText();
-    }
-
-    private void OnSeekLostFocus(object? sender, RoutedEventArgs e)
-    {
-        if (!_seekDragging)
-            return;
-        _seekDragging = false;
-        _seekPendingValue = null;
-        _applyingProjection = true;
-        try
-        {
-            if (_playback is not null)
-                SeekSlider.Value = Math.Clamp(
-                    _playback.PositionSeconds, 0, SeekSlider.Maximum);
-        }
-        finally
-        {
-            _applyingProjection = false;
-        }
-    }
-
     private void OnVolumePressed(object? sender, PointerPressedEventArgs e)
     {
         if (_volumeDragging)
@@ -664,18 +621,6 @@ internal sealed partial class CastPage : UserControl
         _host.BeginControlAdjustment();
         _host.SetVolume(committed);
         _host.EndControlAdjustment();
-    }
-
-    private void OnVolumeCaptureLost(object? sender, RoutedEventArgs e)
-    {
-        if (_volumeDragging)
-            FinishVolumeAdjustment();
-    }
-
-    private void OnVolumeLostFocus(object? sender, RoutedEventArgs e)
-    {
-        if (_volumeDragging)
-            FinishVolumeAdjustment();
     }
 
     private void FinishVolumeAdjustment()
