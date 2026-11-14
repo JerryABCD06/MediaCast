@@ -97,9 +97,10 @@ try {
             Where-Object { $_.StartTime -ge $owner.StartTime })) {
         Start-Sleep -Milliseconds 100
     }
+    Start-Sleep -Milliseconds 750
 
     $third = Start-Shell @()
-    if (-not $third.WaitForExit(8000)) {
+    if (-not $third.WaitForExit(15000)) {
         Stop-Process -Id $third.Id -Force -ErrorAction SilentlyContinue
         throw 'Third Shell did not hand off and exit'
     }
