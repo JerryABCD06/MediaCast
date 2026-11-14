@@ -612,6 +612,12 @@ struct ChildRecord {
 class ShellRuntime
 {
 public:
+    enum class UiMode {
+        None,
+        Normal,
+        ConfirmationOnly,
+    };
+
     ShellRuntime(Options options, HANDLE shellMutex)
         : m_options(std::move(options))
         , m_mutex(shellMutex)
@@ -925,6 +931,7 @@ public:
                         std::string terminateError;
                         ui->process.terminate(0, 1000ms, terminateError);
                         m_uiState = UiState::None;
+                        m_uiMode = UiMode::None;
                         m_splash.hideImmediately(m_activationId);
                         m_records.erase(std::remove_if(
                             m_records.begin(), m_records.end(),
@@ -935,6 +942,7 @@ public:
                     }
                 }
                 if (m_uiState == UiState::Running
+                    && m_uiMode == UiMode::Normal
                     && WaitForSingleObject(m_firstFrame, 0) != WAIT_OBJECT_0
                     && std::chrono::steady_clock::now() - m_uiStartedAt
                         > 15000ms) {
@@ -954,6 +962,7 @@ public:
                         }),
                         m_records.end());
                     m_uiState = UiState::None;
+                    m_uiMode = UiMode::None;
                 }
             }
 
@@ -2213,13 +2222,16 @@ private:
             ProcessRole::Protocol, m_options.protocol, arguments, error);
     }
 
-    bool launchUi(std::uint64_t activationId, std::string &error)
+    bool launchUi(
+        std::uint64_t activationId, UiMode mode, std::string &error)
     {
         std::wstring arguments =
             L"--instance=" + widen(m_options.instance)
             + L" --nonce=" + widen(*m_nonce)
             + L" --shell-pid=" + std::to_wstring(GetCurrentProcessId())
             + L" --activation-id=" + std::to_wstring(activationId);
+        if (mode == UiMode::ConfirmationOnly)
+            arguments += L" --confirmation-only";
         return launch(ProcessRole::Ui, m_options.ui, arguments, error);
     }
 
@@ -2257,21 +2269,25 @@ private:
                 return true;
             }
             m_uiState = UiState::None;
+            m_uiMode = UiMode::None;
         }
         effectiveId = ++m_nextActivationId;
         started = true;
         m_uiState = UiState::Starting;
+        m_uiMode = UiMode::Normal;
         m_activationId = effectiveId;
         ResetEvent(m_firstFrame);
         if (!m_splash.show(effectiveId)) {
             error = "cannot show splash window";
             m_splash.hideImmediately(effectiveId);
             m_uiState = UiState::Failed;
+            m_uiMode = UiMode::None;
             return false;
         }
-        if (!launchUi(effectiveId, error)) {
+        if (!launchUi(effectiveId, UiMode::Normal, error)) {
             m_splash.hideImmediately(effectiveId);
             m_uiState = UiState::Failed;
+            m_uiMode = UiMode::None;
             return false;
         }
         m_uiState = UiState::Running;
@@ -2935,11 +2951,6 @@ private:
     std::uint64_t m_protocolGeneration = 0;
     std::uint64_t m_uiGeneration = 0;
     std::mutex m_confirmationMutex;
-    enum class UiMode {
-        None,
-        Normal,
-        ConfirmationOnly,
-    };
     UiMode m_uiMode = UiMode::None;
     enum class UiState {
         None,
