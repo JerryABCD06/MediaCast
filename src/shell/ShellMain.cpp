@@ -1504,6 +1504,11 @@ private:
                 return false;
             }
         }
+        {
+            std::scoped_lock lock(m_uiMutex);
+            if (m_uiMode == UiMode::ConfirmationOnly)
+                m_confirmationUiRequestActive = true;
+        }
 
         auto waiter = std::make_shared<ConfirmationWaiter>();
         waiter->deadline = deadline;
