@@ -4,36 +4,37 @@ using Avalonia.Controls;
 
 namespace MCast.Ui.Avalonia.Platform;
 
-internal sealed class WindowsWindowMoveMonitor : IDisposable
+internal sealed class WindowsWindowInteractionMonitor : IDisposable
 {
-    private const uint WmMoving = 0x0216;
+    private const uint WmEnterSizeMove = 0x0231;
     private const uint WmExitSizeMove = 0x0232;
     private const uint WmNcDestroy = 0x0082;
     private static readonly UIntPtr SubclassId = new(1);
     private static readonly SubclassProc Procedure = WindowSubclass;
-    private static readonly Dictionary<IntPtr, WindowsWindowMoveMonitor>
+    private static readonly Dictionary<IntPtr, WindowsWindowInteractionMonitor>
         Monitors = [];
 
     private readonly IntPtr _handle;
     private readonly Action<bool> _changed;
     private bool _disposed;
-    private bool _moving;
+    private bool _interacting;
 
-    private WindowsWindowMoveMonitor(
+    private WindowsWindowInteractionMonitor(
         IntPtr handle, Action<bool> changed)
     {
         _handle = handle;
         _changed = changed;
     }
 
-    internal static WindowsWindowMoveMonitor? TryCreate(
+    internal static WindowsWindowInteractionMonitor? TryCreate(
         TopLevel topLevel, Action<bool> changed)
     {
         var handle = topLevel.TryGetPlatformHandle()?.Handle
             ?? IntPtr.Zero;
         if (handle == IntPtr.Zero)
             return null;
-        var monitor = new WindowsWindowMoveMonitor(handle, changed);
+        var monitor = new WindowsWindowInteractionMonitor(
+            handle, changed);
         lock (Monitors)
             Monitors[handle] = monitor;
         if (!SetWindowSubclass(
@@ -66,23 +67,16 @@ internal sealed class WindowsWindowMoveMonitor : IDisposable
         IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam,
         UIntPtr subclassId, UIntPtr refData)
     {
-        if (message is WmMoving or WmExitSizeMove)
+        WindowsWindowInteractionMonitor? monitor = null;
+        if (message is WmEnterSizeMove or WmExitSizeMove)
         {
-            WindowsWindowMoveMonitor? monitor;
             lock (Monitors)
                 Monitors.TryGetValue(hWnd, out monitor);
-            if (monitor is not null)
+            if (message == WmEnterSizeMove && monitor is not null
+                && !monitor._interacting)
             {
-                if (message == WmMoving && !monitor._moving)
-                {
-                    monitor._moving = true;
-                    Notify(monitor, true);
-                }
-                else if (message == WmExitSizeMove && monitor._moving)
-                {
-                    monitor._moving = false;
-                    Notify(monitor, false);
-                }
+                monitor._interacting = true;
+                Notify(monitor, true);
             }
         }
         else if (message == WmNcDestroy)
@@ -90,15 +84,22 @@ internal sealed class WindowsWindowMoveMonitor : IDisposable
             lock (Monitors)
                 Monitors.Remove(hWnd);
         }
-        return DefSubclassProc(hWnd, message, wParam, lParam);
+        var result = DefSubclassProc(hWnd, message, wParam, lParam);
+        if (message == WmExitSizeMove && monitor is not null
+            && monitor._interacting)
+        {
+            monitor._interacting = false;
+            Notify(monitor, false);
+        }
+        return result;
     }
 
     private static void Notify(
-        WindowsWindowMoveMonitor monitor, bool moving)
+        WindowsWindowInteractionMonitor monitor, bool interacting)
     {
         try
         {
-            monitor._changed(moving);
+            monitor._changed(interacting);
         }
         catch
         {

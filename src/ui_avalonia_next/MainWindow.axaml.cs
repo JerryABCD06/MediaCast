@@ -19,10 +19,10 @@ internal sealed partial class MainWindow : Window
     private readonly UiDiagnosticLog _log;
     private readonly CastPage _castPage;
     private readonly SettingsPage _settingsPage;
-    private WindowsWindowMoveMonitor? _moveMonitor;
+    private WindowsWindowInteractionMonitor? _windowInteractionMonitor;
     private bool _firstFrameSent;
     private bool _allowClose;
-    private bool _windowMoving;
+    private bool _windowInteractionActive;
     private bool _closeDialogOpen;
 
     internal MainWindow()
@@ -53,14 +53,15 @@ internal sealed partial class MainWindow : Window
 
         Opened += (_, _) =>
         {
-            _moveMonitor = WindowsWindowMoveMonitor.TryCreate(
-                this, OnWindowMoveChanged);
+            _windowInteractionMonitor =
+                WindowsWindowInteractionMonitor.TryCreate(
+                    this, OnWindowInteractionChanged);
             UpdateRenderingActive();
         };
         Closed += (_, _) =>
         {
-            _moveMonitor?.Dispose();
-            _moveMonitor = null;
+            _windowInteractionMonitor?.Dispose();
+            _windowInteractionMonitor = null;
             _host.Changed -= OnHostChanged;
         };
     }
@@ -176,22 +177,22 @@ internal sealed partial class MainWindow : Window
             : WindowState.FullScreen;
     }
 
-    private void OnWindowMoveChanged(bool moving)
+    private void OnWindowInteractionChanged(bool interacting)
     {
-        if (_windowMoving == moving)
+        if (_windowInteractionActive == interacting)
             return;
-        _windowMoving = moving;
+        _windowInteractionActive = interacting;
         _log.Write(
-            moving
-                ? "Window move entered; rendering suspended"
-                : "Window move exited; rendering resumed");
+            interacting
+                ? "Window move/resize entered; rendering suspended"
+                : "Window move/resize exited; rendering resumed");
         UpdateRenderingActive();
     }
 
     private void UpdateRenderingActive()
     {
         _castPage.SetRenderingActive(
-            !_windowMoving
+            !_windowInteractionActive
             && WindowState != WindowState.Minimized);
     }
 
