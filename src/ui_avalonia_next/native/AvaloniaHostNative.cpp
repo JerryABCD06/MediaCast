@@ -137,6 +137,8 @@ struct HostState
     bool applyingAuthoritativePicture = false;
 };
 
+void renderDetachImpl(bool lost, const std::string &reason);
+
 std::mutex g_lifecycleMutex;
 std::unique_ptr<HostState> g_state;
 
@@ -996,6 +998,14 @@ bool setupHost(HostState &state, std::string &error)
             log(state, "Test fault: dropping ControlPipe");
             if (state.confirmation)
                 state.confirmation->dropConnectionForTest();
+        });
+    }
+    if (const auto delay =
+            testDelay("MCAST_UI_TEST_CONTEXT_LOST_MS")) {
+        state.loop.scheduleAfter(*delay, [&state] {
+            log(state, "Test fault: losing OpenGL context");
+            renderDetachImpl(
+                true, "injected OpenGL context loss");
         });
     }
 

@@ -18,6 +18,7 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
     private bool _subscribed;
     private bool _renderingActive = true;
     private bool _contextUsable;
+    private bool _renderFailureReported;
 
     public event Action? FrameRendered;
 
@@ -62,11 +63,14 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
     protected override void OnOpenGlInit(GlInterface gl)
     {
         _gl = gl;
+        _renderFailureReported = false;
         _attached = _host.RenderAttach(_getProc, IntPtr.Zero);
         _contextUsable = _attached;
         Trace(
             $"GL init renderer={gl.Renderer} "
             + $"vendor={gl.Vendor} attached={_attached}");
+        if (!_attached)
+            FailRenderer("Avalonia OpenGL render attach failed");
     }
 
     protected override void OnOpenGlRender(GlInterface gl, int framebuffer)
@@ -81,10 +85,15 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
         gl.Viewport(0, 0, width, height);
         gl.ClearColor(0.025f, 0.04f, 0.06f, 1);
         gl.Clear(0x00004000);
-        if (_attached
-            && _host.RenderFrame(framebuffer, width, height, false))
+        if (!_attached)
+            return;
+        if (_host.RenderFrame(framebuffer, width, height, false))
         {
             FrameRendered?.Invoke();
+        }
+        else
+        {
+            FailRenderer("MPV render frame failed");
         }
     }
 
@@ -99,11 +108,7 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
 
     protected override void OnOpenGlLost()
     {
-        _attached = false;
-        _contextUsable = false;
-        _gl = null;
-        _host.RenderLost("Avalonia OpenGL context lost");
-        Trace("GL context lost; fail closed");
+        FailRenderer("Avalonia OpenGL context lost");
     }
 
     private void OnRenderUpdateRequested()
@@ -120,6 +125,18 @@ internal sealed class MpvOpenGlSurface : OpenGlControlBase
 
     private IntPtr GetProcAddress(IntPtr _, string name)
         => _gl?.GetProcAddress(name) ?? IntPtr.Zero;
+
+    private void FailRenderer(string reason)
+    {
+        if (_renderFailureReported)
+            return;
+        _renderFailureReported = true;
+        _attached = false;
+        _contextUsable = false;
+        _host.RenderLost(reason);
+        _gl = null;
+        Trace($"{reason}; fail closed");
+    }
 
     private static void Trace(string message)
     {
