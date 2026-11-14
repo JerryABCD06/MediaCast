@@ -93,6 +93,9 @@
               Maximum="100"
               Value="100" />
           <Button
+              Content="Picture"
+              Click="OnPicture" />
+          <Button
               Content="Full screen"
               Click="OnFullscreen" />
         </StackPanel>
