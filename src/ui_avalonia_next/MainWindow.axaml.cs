@@ -69,7 +69,11 @@ internal sealed partial class MainWindow : Window
     {
         base.OnPropertyChanged(change);
         if (change.Property == WindowStateProperty)
+        {
+            Navigation.IsPaneVisible =
+                WindowState != WindowState.FullScreen;
             UpdateRenderingActive();
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
