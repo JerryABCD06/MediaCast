@@ -239,12 +239,13 @@ latest MediaRequest
 行为：
 
 - 候选来源的 `Play` 返回 `Pending`，与 `SetURI` 一起等待确认；
-- 候选来源的 `Stop` 返回 `Ignored`，不能停止当前 owner；
-- 当前 owner 的 `Play/Stop` 返回 `Execute`，确认期间继续正常工作；
+- 候选来源的 `Stop` 返回成功但不执行，不能停止当前 owner；
+- 当前 owner 的 `Play` 可走同 IP 控制兼容，`Stop` 必须匹配完整 peer 身份；
 - 未知来源的 `Stop` 返回 `Ignored`；
 - 未知来源的 `Play` 返回 `Rejected`；
 - 用户拒绝或确认超时：清除候选事务，旧 owner 和 epoch 完全不变；
-- 用户允许：返回候选媒体和 `executeMedia=true`；adapter 对同一 Claim 只发出
+- 用户允许：存在 displaced DLNA owner 时，runtime 先在事务内 Stop 旧 owner；
+  Stop 成功后才返回候选媒体和 `executeMedia=true`。adapter 对同一 Claim 只发出
   一次媒体 outcome，runtime 还必须用 owner session ID、epoch 和
   `mediaGeneration` 保证 Open 幂等并拒绝迟到的旧 Open；
 - 重复的 accepted decision 返回 duplicate，`executeMedia` 必须为 false，禁止

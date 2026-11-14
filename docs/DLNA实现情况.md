@@ -216,7 +216,9 @@ Stop 成功 applied
 [投送仲裁与确认.md](投送仲裁与确认.md)，这里只保留协议侧约束：
 
 - 新媒体必须匹配完整 peer 身份；
-- 当前会话的同 IP `Play/Pause/Stop/Seek` 允许，兼容身份分裂控制点；
+- 当前会话的同 IP `Play/Pause/Seek` 允许，兼容身份分裂控制点；
+- `Stop` 必须匹配完整 peer 身份；候选 Stop 只回成功且不改变播放，
+  确认接受后才由 DLNA 换投事务先停止旧 owner；
 - `Next/Previous/SetNext/SetPlayMode` 仍要求完整身份；
 - RenderingControl 和查询不做 owner 写权限检查；
 - candidate 命令不能操作旧 owner；
