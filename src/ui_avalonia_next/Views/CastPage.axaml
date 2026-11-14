@@ -61,6 +61,8 @@
           <Slider
               x:Name="SeekSlider"
               Grid.Column="0"
+              AutomationProperties.Name="Playback position"
+              AutomationProperties.HelpText="Use the arrow keys to seek"
               Minimum="0"
               Maximum="1"
               Value="0" />
@@ -85,6 +87,8 @@
           <Slider
               x:Name="VolumeSlider"
               Width="120"
+              AutomationProperties.Name="Volume"
+              AutomationProperties.HelpText="Use the arrow keys to change volume"
               Minimum="0"
               Maximum="100"
               Value="100" />
