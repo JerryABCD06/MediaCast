@@ -416,27 +416,30 @@ MpvCore::MpvCore(EventLoop &loop)
     : m_loop(loop)
     , m_imageSequence(std::make_unique<ImageSequenceStrategy>(loop))
 {
-    m_imageSequence->positionChanged.connect([this](double seconds) {
-        m_positionSeconds = seconds;
-        positionChanged.emit(seconds);
-    });
-    m_imageSequence->durationChanged.connect([this](double seconds) {
-        m_durationSeconds = seconds;
-        publishMediaSummary(m_mediaEpoch.load());
-        durationChanged.emit(seconds);
-    });
-    m_imageSequence->ended.connect([this] { ended.emit(); });
-    m_imageSequence->loadFailed.connect(
+    m_imageSequenceConnections.push_back(
+        m_imageSequence->positionChanged.connect([this](double seconds) {
+            m_positionSeconds = seconds;
+            positionChanged.emit(seconds);
+        }));
+    m_imageSequenceConnections.push_back(
+        m_imageSequence->durationChanged.connect([this](double seconds) {
+            m_durationSeconds = seconds;
+            publishMediaSummary(m_mediaEpoch.load());
+            durationChanged.emit(seconds);
+        }));
+    m_imageSequenceConnections.push_back(
+        m_imageSequence->ended.connect([this] { ended.emit(); }));
+    m_imageSequenceConnections.push_back(m_imageSequence->loadFailed.connect(
         [this](const std::string &reason) {
             m_loadFailed = true;
             m_imageSequenceActive = false;
             logMessage.emit("图片序列加载失败：" + reason);
             loadFailed.emit(m_pendingLoadGeneration.load(), reason);
-        });
-    m_imageSequence->logMessage.connect(
+        }));
+    m_imageSequenceConnections.push_back(m_imageSequence->logMessage.connect(
         [this](const std::string &message) {
             logMessage.emit(message);
-        });
+        }));
 }
 
 MpvCore::~MpvCore()

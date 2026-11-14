@@ -101,6 +101,7 @@ private:
     std::atomic_bool m_playOnLoad{true};
     std::atomic_bool m_loadFailed{false};
     std::unique_ptr<ImageSequenceStrategy> m_imageSequence;
+    std::vector<Connection> m_imageSequenceConnections;
     std::unique_ptr<WrappedTsProxy> m_wrappedTsProxy;
     std::atomic_bool m_imageSequenceActive{false};
     std::atomic_uint64_t m_imageSequenceLoadGeneration{0};
