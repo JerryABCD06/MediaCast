@@ -149,7 +149,7 @@ net::HttpDispatchResult DlnaClaimHttpHandler::handle(
         }
         m_router.notePeerActivity(request.peerAddress);
         const cast::PeerIdentity peer = peerIdentity(request);
-        if (m_runtime.canControl(peer)
+        if (m_runtime.ownsPeer(peer)
             && !m_runtime.mediaOpening()
             && !m_router.hasTransportMedia()) {
             return {
