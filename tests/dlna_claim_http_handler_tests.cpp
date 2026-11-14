@@ -108,6 +108,7 @@ struct Harness {
     std::string stoppedAddress;
     std::vector<std::string> events;
     bool throwExecute = false;
+    bool throwStop = false;
     bool openMediaOnExecute = true;
     DlnaClaimHttpHandler handler;
 
@@ -142,6 +143,8 @@ struct Harness {
                   [this](
                       const PeerIdentity &peer,
                       std::optional<std::uint64_t>) {
+                        if (throwStop)
+                            throw std::runtime_error("stop failed");
                         events.push_back("stop");
                       ++stopCalls;
                       stoppedAddress = peer.address;
@@ -452,6 +455,33 @@ void testExecuteCallbackFailureFailsClosed()
           "execute callback exception maps to an internal SOAP fault");
 }
 
+void testAcceptedTakeoverStopFailureDoesNotOpen()
+{
+    Harness harness;
+    auto initial = harness.handler.handle(setUriRequest(
+        601, "192.0.2.10", "http://example.test/old.mp4"));
+    check(initial.status == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.executions.size() == 1,
+          "stop failure test starts the old owner");
+    harness.handler.mediaReady(
+        harness.executions[0].operationId, true, CastTime{101});
+
+    auto candidate = setUriRequest(
+        602, "192.0.2.20", "http://example.test/new.mp4");
+    auto result = harness.handler.handle(candidate);
+    check(result.status == mcast::dlna::net::HttpDispatchStatus::Pending
+              && harness.confirmations.size() == 1,
+          "stop failure candidate waits for confirmation");
+
+    harness.throwStop = true;
+    harness.handler.confirmationDecision(
+        harness.confirmations[0].key, true, CastTime{102});
+    check(harness.executions.size() == 1
+              && harness.completion(602)
+              && harness.completion(602)->status == 500,
+          "failed displaced-owner Stop prevents candidate media Open");
+}
+
 } // namespace
 
 int main()
@@ -463,6 +493,7 @@ int main()
     testOwnerTransportWithoutMediaReturns701();
     testDifferentUserAgentIsNotOwner();
     testExecuteCallbackFailureFailsClosed();
+    testAcceptedTakeoverStopFailureDoesNotOpen();
     std::cout << "DLNA claim HTTP handler tests passed\n";
     return 0;
 }

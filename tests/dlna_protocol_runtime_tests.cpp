@@ -519,6 +519,138 @@ void testMediaLoadFailureFailsHttp()
     runtime.stop();
 }
 
+void testCandidateStopWaitsForTakeoverDecision()
+{
+    WinsockRuntime winsock;
+    std::string error;
+    check(winsock.initialize(error), "candidate Stop test Winsock initializes");
+
+    FakePlaybackGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "Runtime Test",
+            "uuid:runtime-stop-test",
+            0,
+            0,
+            true,
+            false,
+            true,
+            false,
+            10s,
+            {},
+            [](const std::string &) {},
+        });
+    check(runtime.start(error),
+          "candidate Stop test runtime starts: " + error);
+
+    std::string ownerResponse;
+    std::atomic_bool ownerDone{false};
+    std::jthread ownerClient([&] {
+        ownerResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.10",
+                setUriBody(
+                    "http://example.test/owner.mp4",
+                    "192.0.2.10")));
+        ownerDone = true;
+    });
+    processPlaybackUntil(
+        playback, [&] { return ownerDone.load(); });
+    ownerClient.join();
+    check(ownerResponse.starts_with("HTTP/1.1 200 OK"),
+          "candidate Stop test owner starts");
+
+    const auto beforeStop = playback.snapshot();
+    const std::string candidateStop =
+        "<?xml version=\"1.0\"?>"
+        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+        "<s:Body><u:Stop "
+        "xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+        "<InstanceID>0</InstanceID></u:Stop></s:Body></s:Envelope>";
+    std::string stopResponse;
+    std::atomic_bool stopDone{false};
+    std::jthread stopClient([&] {
+        stopResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.20", candidateStop, "Stop"));
+        stopDone = true;
+    });
+    const auto stopDeadline = std::chrono::steady_clock::now() + 2s;
+    while (!stopDone.load()
+           && std::chrono::steady_clock::now() < stopDeadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    check(stopDone.load() && stopResponse.starts_with("HTTP/1.1 200 OK"),
+          "candidate Stop is acknowledged immediately");
+    stopClient.join();
+    const auto afterStop = playback.snapshot();
+    check(afterStop.current.uri == beforeStop.current.uri
+              && afterStop.state == beforeStop.state
+              && afterStop.positionSeconds == beforeStop.positionSeconds,
+          "candidate Stop cannot change the current owner playback");
+
+    std::string rejectedResponse;
+    std::atomic_bool rejectedDone{false};
+    std::jthread rejectedClient([&] {
+        rejectedResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.20",
+                setUriBody(
+                    "http://example.test/candidate-stop.mp4",
+                    "192.0.2.20")));
+        rejectedDone = true;
+    });
+    check(port.waitForPrompt().has_value(),
+          "candidate after Stop reaches confirmation");
+    const auto beforeReject = playback.snapshot();
+    port.decide(false);
+    const auto rejectDeadline = std::chrono::steady_clock::now() + 2s;
+    while (!rejectedDone.load()
+           && std::chrono::steady_clock::now() < rejectDeadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    rejectedClient.join();
+    const auto afterReject = playback.snapshot();
+    check(rejectedDone.load()
+              && rejectedResponse.find("<errorCode>701</errorCode>")
+                  != std::string::npos
+              && afterReject.current.uri == beforeReject.current.uri
+              && afterReject.state == beforeReject.state
+              && afterReject.positionSeconds
+                  == beforeReject.positionSeconds,
+          "rejected takeover preserves the current owner after Stop");
+
+    std::string acceptedResponse;
+    std::atomic_bool acceptedDone{false};
+    std::jthread acceptedClient([&] {
+        acceptedResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.20",
+                setUriBody(
+                    "http://example.test/accepted-stop.mp4",
+                    "192.0.2.20")));
+        acceptedDone = true;
+    });
+    check(port.waitForPrompt().has_value(),
+          "retried candidate reaches confirmation");
+    port.decide(true);
+    processPlaybackUntil(
+        playback, [&] { return acceptedDone.load(); });
+    acceptedClient.join();
+    check(acceptedResponse.starts_with("HTTP/1.1 200 OK")
+              && playback.snapshot().current.uri
+                  == "http://example.test/accepted-stop.mp4",
+          "accepted takeover runs Stop before the candidate media");
+
+    runtime.stop();
+}
+
 void testNewOwnerCancelsPendingOpen()
 {
     WinsockRuntime winsock;
@@ -610,6 +742,8 @@ void testNewOwnerCancelsPendingOpen()
     check(port.waitForPrompt().has_value(),
           "new owner reaches confirmation");
     port.decide(true);
+    // The confirmation worker submits the displaced-owner Stop before media.
+    std::this_thread::sleep_for(100ms);
 
     const auto secondDeadline =
         std::chrono::steady_clock::now() + 3s;
@@ -1194,6 +1328,8 @@ int main()
     testEndToEndInitialMediaAndConfirmation();
     std::cerr << "[ RUN ] media load failure\n";
     testMediaLoadFailureFailsHttp();
+    std::cerr << "[ RUN ] candidate Stop waits for takeover\n";
+    testCandidateStopWaitsForTakeoverDecision();
     std::cerr << "[ RUN ] new owner cancels pending open\n";
     testNewOwnerCancelsPendingOpen();
     std::cerr << "[ RUN ] early command completion\n";
