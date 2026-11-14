@@ -9,6 +9,11 @@ project(MediaCastReceiver LANGUAGES CXX RC)
 
 include(CTest)
 
+option(
+    MCAST_BUILD_LEGACY_QML_UI
+    "Build the retired Qt/QML Ui only for comparison"
+    OFF)
+
 # The runtime dependency is shared by the application and the headless MPV
 # integration test. Keep its location defined before the test targets.
 set(MPV_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/mpv-dev")
@@ -183,6 +188,58 @@ target_link_libraries(
 set_target_properties(MCast.Protocol PROPERTIES WIN32_EXECUTABLE TRUE)
 
 add_dependencies(MCast.Shell MCast.Protocol)
+
+add_library(MCast.AvaloniaHost.Native SHARED
+    src/ui_avalonia_next/native/AvaloniaHostNative.h
+    src/ui_avalonia_next/native/AvaloniaHostNative.cpp
+    src/ui_avalonia_next/native/QtFree/EventLoop.h
+    src/ui_avalonia_next/native/QtFree/EventLoop.cpp
+    src/ui_avalonia_next/native/QtFree/Json.h
+    src/ui_avalonia_next/native/QtFree/Json.cpp
+    src/ui_avalonia_next/native/QtFree/MediaTypes.h
+    src/ui_avalonia_next/native/QtFree/MediaTypes.cpp
+    src/ui_avalonia_next/native/QtFree/MediaPlayer.h
+    src/ui_avalonia_next/native/QtFree/MetadataPipeline.h
+    src/ui_avalonia_next/native/QtFree/MetadataPipeline.cpp
+    src/ui_avalonia_next/native/QtFree/ImageSequenceStrategy.h
+    src/ui_avalonia_next/native/QtFree/ImageSequenceStrategy.cpp
+    src/ui_avalonia_next/native/QtFree/WrappedTsProxy.h
+    src/ui_avalonia_next/native/QtFree/WrappedTsProxy.cpp
+    src/ui_avalonia_next/native/QtFree/MpvCore.h
+    src/ui_avalonia_next/native/QtFree/MpvCore.cpp
+    src/ui_avalonia_next/native/QtFree/PlaybackController.h
+    src/ui_avalonia_next/native/QtFree/PlaybackController.cpp
+    src/ui_avalonia_next/native/QtFree/PlaybackBridge.h
+    src/ui_avalonia_next/native/QtFree/PlaybackBridge.cpp
+    src/ui_avalonia_next/native/QtFree/RenderWakeLatch.h
+    src/ui_avalonia_next/native/QtFree/Signal.h
+    src/ui_avalonia_next/native/QtFree/UiSettingsModel.h
+    src/ui_avalonia_next/native/QtFree/UiSettingsModel.cpp
+    src/ui_avalonia_next/native/QtFree/UiConfirmationBridge.h
+    src/ui_avalonia_next/native/QtFree/UiConfirmationBridge.cpp
+    src/ui_process/UiSession.h
+    src/ui_process/UiSession.cpp)
+target_include_directories(
+    MCast.AvaloniaHost.Native PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/native"
+    "${MPV_DEV_DIR}/include")
+target_compile_options(MCast.AvaloniaHost.Native PRIVATE /utf-8)
+target_link_libraries(
+    MCast.AvaloniaHost.Native PRIVATE
+    mcast_ipc "${MPV_DEV_DIR}/libmpv.lib"
+    winhttp.lib ws2_32.lib)
+set_target_properties(
+    MCast.AvaloniaHost.Native PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED TRUE
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_custom_command(
+    TARGET MCast.AvaloniaHost.Native POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${MPV_DEV_DIR}/libmpv-2.dll"
+        "$<TARGET_FILE_DIR:MCast.AvaloniaHost.Native>"
+    COMMENT "复制 libmpv 到 Avalonia native host 目录")
 
 if(BUILD_TESTING)
     add_executable(
@@ -417,6 +474,7 @@ if(BUILD_TESTING)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
     set_tests_properties(mcast_ipc_tests PROPERTIES TIMEOUT 10)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_executable(
         mcast_metadata_pipeline_tests
         tests/metadata_pipeline_tests.cpp
@@ -441,6 +499,7 @@ if(BUILD_TESTING)
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(
         mcast_metadata_pipeline_tests PROPERTIES TIMEOUT 10)
+    endif()
 
     add_executable(
         mcast_protocol_control_dispatcher_tests
@@ -532,6 +591,7 @@ if(BUILD_TESTING)
         NAME mcast_late_binding_playback_gateway_tests
         COMMAND mcast_late_binding_playback_gateway_tests)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_executable(
         mcast_playback_bridge_tests
         tests/playback_bridge_tests.cpp
@@ -558,6 +618,7 @@ if(BUILD_TESTING)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
             -Executable "$<TARGET_FILE:mcast_playback_bridge_tests>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 
     add_executable(
         mcast_planning_playback_gateway_tests
@@ -570,6 +631,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_planning_playback_gateway_tests PROPERTIES TIMEOUT 10)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_executable(
         mcast_ui_settings_model_tests
         tests/ui_settings_model_tests.cpp
@@ -610,6 +672,7 @@ if(BUILD_TESTING)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/qt_test_runner.ps1"
             -Executable "$<TARGET_FILE:mcast_ui_interaction_state_tests>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 
     add_executable(
         mcast_shell_settings_tests
@@ -756,6 +819,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_dlna_protocol_runtime_tests PROPERTIES TIMEOUT 15)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_test(
         NAME mcast_dlna_shadow_e2e
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -764,6 +828,10 @@ if(BUILD_TESTING)
             -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
             -UiExe "$<TARGET_FILE:MCast.Ui>"
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(
+        mcast_dlna_shadow_e2e
+        PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+    endif()
 
     add_executable(
         mcast_shell_language_tests
@@ -782,10 +850,6 @@ if(BUILD_TESTING)
         COMMAND mcast_shell_language_tests)
     set_tests_properties(
         mcast_shell_language_tests PROPERTIES TIMEOUT 10)
-    set_tests_properties(
-        mcast_dlna_shadow_e2e
-        PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
-
     add_executable(
         mcast_gena_manager_tests
         tests/gena_manager_tests.cpp)
@@ -809,6 +873,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_dlna_claim_confirmation_worker_tests PROPERTIES TIMEOUT 10)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_executable(
         mcast_image_sequence_playlist_tests
         tests/image_sequence_playlist_tests.cpp
@@ -859,6 +924,7 @@ if(BUILD_TESTING)
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(
         mcast_mpv_image_sequence_tests PROPERTIES TIMEOUT 15)
+    endif()
 
     add_test(
         NAME mcast_process_skeleton_smoke
@@ -910,6 +976,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_protocol_receiving_command PROPERTIES TIMEOUT 20)
 
+    if(MCAST_BUILD_LEGACY_QML_UI)
     add_test(
         NAME mcast_direct_internal_entry_guards
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -920,10 +987,11 @@ if(BUILD_TESTING)
             -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(
         mcast_direct_internal_entry_guards PROPERTIES TIMEOUT 20)
+    endif()
 endif()
 
-# Qt Widgets 只用于极小的宿主窗口，Network 提供 QLocalSocket；
-# Quick + QuickControls2 是主窗口。
+if(MCAST_BUILD_LEGACY_QML_UI)
+# Retired Qt/QML comparison build only.
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Quick QuickControls2)
 
 qt_standard_project_setup()
@@ -973,6 +1041,7 @@ add_custom_target(mcast_copy_fluentui_qml ALL
             "$<TARGET_FILE_DIR:MCast.Ui>/qml/FluentUI"
     COMMENT "复制 FluentUI QML 模块到构建目录")
 add_dependencies(mcast_copy_fluentui_qml fluentuiplugin)
+endif()
 
 # ── libmpv（内嵌播放后端）──────────────────────────────────────────────────
 #
@@ -991,9 +1060,8 @@ if(NOT (EXISTS "${MPV_DEV_DIR}/include/mpv/client.h"))
         "如果只是换了 mpv 版本，按上面注释里的三条命令重新生成导入库即可。")
 endif()
 
-# ── 真实 Qt/QML Ui 进程 ─────────────────────────────────────────────────
-#
-# 它由生产 Shell 启动；无 Qt 的 MCast.UiSkeleton 只用于进程监督自动测试。
+if(MCAST_BUILD_LEGACY_QML_UI)
+# Retired Qt/QML Ui process.
 qt_add_executable(MCast.Ui
     src/ui_process/UiMain.cpp
     src/ui_process/PlaybackBridge.h
@@ -1064,12 +1132,37 @@ target_compile_options(MCast.Ui PRIVATE /utf-8)
 set_target_properties(MCast.Ui PROPERTIES WIN32_EXECUTABLE TRUE)
 add_dependencies(MCast.Ui fluentuiplugin)
 add_dependencies(MCast.Shell MCast.Ui)
+endif()
+
 add_custom_target(mcast_copy_libmpv ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MPV_DEV_DIR}/libmpv-2.dll"
-            "$<TARGET_FILE_DIR:MCast.Ui>"
+            "$<TARGET_FILE_DIR:MCast.Shell>"
     COMMENT "复制 libmpv-2.dll 到 Ui 进程目录")
-add_dependencies(MCast.Ui mcast_copy_libmpv)
+add_dependencies(MCast.Shell mcast_copy_libmpv)
+
+if(NOT MCAST_BUILD_LEGACY_QML_UI)
+    find_program(DOTNET_EXECUTABLE NAMES dotnet REQUIRED)
+    set(
+        MCAST_AVALONIA_UI_PROJECT
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/MCast.Ui.Avalonia.csproj")
+    add_custom_target(
+        MCast.Ui.Managed
+        COMMAND "${DOTNET_EXECUTABLE}" publish
+            "${MCAST_AVALONIA_UI_PROJECT}"
+            -c "$<IF:$<CONFIG:Debug>,Debug,Release>"
+            --nologo
+            -o "$<TARGET_FILE_DIR:MCast.Shell>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:MCast.AvaloniaHost.Native>"
+            "$<TARGET_FILE_DIR:MCast.Shell>"
+        COMMENT "发布 Qt-free Avalonia Ui 进程")
+    add_dependencies(
+        MCast.Ui.Managed
+        MCast.AvaloniaHost.Native
+        mcast_copy_libmpv)
+    add_dependencies(MCast.Shell MCast.Ui.Managed)
+endif()
 
 # ── 语言 ─────────────────────────────────────────────────────────────────
 #
@@ -1097,12 +1190,12 @@ add_dependencies(MCast.Shell mcast_copy_lang)
 # before showing it locally and publishing it to Windows media controls.
 add_custom_target(mcast_copy_metadata_pipeline ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:MCast.Ui>/config"
+            "$<TARGET_FILE_DIR:MCast.Shell>/config"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/config/metadata-pipeline.json"
-            "$<TARGET_FILE_DIR:MCast.Ui>/config/metadata-pipeline.json"
+            "$<TARGET_FILE_DIR:MCast.Shell>/config/metadata-pipeline.json"
     COMMENT "复制 Ui 元数据管线规则到构建目录")
-add_dependencies(MCast.Ui mcast_copy_metadata_pipeline)
+add_dependencies(MCast.Shell mcast_copy_metadata_pipeline)
 
 # ── 法律文本与第三方许可 ────────────────────────────────────────────────
 #
@@ -1115,16 +1208,16 @@ add_dependencies(MCast.Ui mcast_copy_metadata_pipeline)
 # SUPPORT、CODE_OF_CONDUCT）留在 docs/legal/ 不下发。
 add_custom_target(mcast_copy_legal ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:MCast.Ui>/legal"
+            "$<TARGET_FILE_DIR:MCast.Shell>/legal"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/PRIVACY.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/LEGAL-NOTICES.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/TRADEMARKS.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/docs/legal/CODECS.md"
-            "$<TARGET_FILE_DIR:MCast.Ui>/legal"
+            "$<TARGET_FILE_DIR:MCast.Shell>/legal"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
-            "$<TARGET_FILE_DIR:MCast.Ui>/licenses"
+            "$<TARGET_FILE_DIR:MCast.Shell>/licenses"
     COMMENT "复制法律声明与第三方许可到构建目录")
-add_dependencies(MCast.Ui mcast_copy_legal)
+add_dependencies(MCast.Shell mcast_copy_legal)
 

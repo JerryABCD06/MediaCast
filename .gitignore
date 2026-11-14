@@ -3,6 +3,10 @@
 # Qt Creator 的构建目录和命令行 CMake 的输出都在这里。它们随时可以重新生成，
 # 而且里面有几 GB 的中间文件（PDB、ILK、obj），不进版本控制。
 build/
+out/
+src/ui_avalonia_next/bin/
+src/ui_avalonia_next/obj/
+MCast.Ui.Avalonia.log
 
 # ── Qt Creator 的工程私有设置 ────────────────────────────────────────────
 #
