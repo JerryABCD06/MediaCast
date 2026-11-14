@@ -362,6 +362,26 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_qtfree_image_sequence_tests PROPERTIES TIMEOUT 10)
 
+    add_executable(
+        mcast_qtfree_wrapped_ts_proxy_tests
+        tests/qtfree_wrapped_ts_proxy_tests.cpp
+        src/ui_avalonia_next/native/QtFree/MediaTypes.cpp
+        src/ui_avalonia_next/native/QtFree/WrappedTsProxy.cpp)
+    target_link_libraries(
+        mcast_qtfree_wrapped_ts_proxy_tests PRIVATE
+        winhttp.lib ws2_32.lib)
+    target_include_directories(
+        mcast_qtfree_wrapped_ts_proxy_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/ui_avalonia_next/native")
+    target_compile_options(
+        mcast_qtfree_wrapped_ts_proxy_tests PRIVATE /utf-8)
+    add_test(
+        NAME mcast_qtfree_wrapped_ts_proxy_tests
+        COMMAND mcast_qtfree_wrapped_ts_proxy_tests)
+    set_tests_properties(
+        mcast_qtfree_wrapped_ts_proxy_tests
+        PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+
     add_executable(mcast_ipc_tests tests/ipc_tests.cpp)
     target_link_libraries(mcast_ipc_tests PRIVATE mcast_ipc)
     add_test(NAME mcast_ipc_tests COMMAND mcast_ipc_tests)
