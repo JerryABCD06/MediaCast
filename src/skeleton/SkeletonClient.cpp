@@ -962,6 +962,12 @@ int runClient(const ClientOptions &options)
                             if (waitReason != "PlaybackPipe disconnected")
                                 break;
 
+                            // The watcher captures the old gateway by value and
+                            // keeps a second local owner. Both must release the
+                            // connection before recreating the same
+                            // FILE_FLAG_FIRST_PIPE_INSTANCE listener.
+                            currentPlayback.reset();
+                            playback.reset();
                             protocolLog(
                                 "PlaybackPipe disconnected; "
                                 "requesting Ui reconnect");
