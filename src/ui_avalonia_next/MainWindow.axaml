@@ -1,0 +1,28 @@
+<Window
+    x:Class="MCast.Ui.Avalonia.MainWindow"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:fa="using:FluentAvalonia.UI.Controls"
+    Title="Media Cast Receiver"
+    Width="1000"
+    Height="750"
+    MinWidth="760"
+    MinHeight="520">
+  <fa:FANavigationView
+      x:Name="Navigation"
+      IsBackButtonVisible="False"
+      IsSettingsVisible="False"
+      PaneDisplayMode="Left"
+      PaneTitle="Media Cast">
+    <fa:FANavigationView.MenuItems>
+      <fa:FANavigationViewItem
+          x:Name="CastNavigationItem"
+          Content="Cast" />
+      <fa:FANavigationViewItem
+          x:Name="SettingsNavigationItem"
+          Content="Settings" />
+    </fa:FANavigationView.MenuItems>
+    <Grid x:Name="ContentHost" />
+  </fa:FANavigationView>
+</Window>
+

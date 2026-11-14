@@ -1,0 +1,11 @@
+<Application
+    x:Class="MCast.Ui.Avalonia.App"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sty="using:FluentAvalonia.Styling"
+    RequestedThemeVariant="Default">
+  <Application.Styles>
+    <sty:FluentAvaloniaTheme />
+  </Application.Styles>
+</Application>
+

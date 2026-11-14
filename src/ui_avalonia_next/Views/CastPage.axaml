@@ -1,0 +1,123 @@
+<UserControl
+    x:Class="MCast.Ui.Avalonia.Views.CastPage"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Grid Background="#07111C">
+    <Grid x:Name="VideoHost" />
+
+    <Border
+        x:Name="IdlePanel"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Center"
+        Padding="28,22"
+        CornerRadius="12"
+        Background="#B3121D2B">
+      <StackPanel Spacing="6">
+        <TextBlock
+            x:Name="IdleTitle"
+            FontSize="24"
+            FontWeight="SemiBold"
+            Foreground="White"
+            Text="Cast to this PC" />
+        <TextBlock
+            x:Name="IdleSubtitle"
+            Foreground="#BFD0DF"
+            Text="Waiting for a media cast" />
+      </StackPanel>
+    </Border>
+
+    <Border
+        x:Name="ControlsPanel"
+        VerticalAlignment="Bottom"
+        Margin="18"
+        Padding="14,10"
+        CornerRadius="10"
+        Background="#D20A111A">
+      <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*,Auto">
+        <StackPanel
+            Grid.Row="0"
+            Grid.Column="0"
+            Orientation="Horizontal"
+            Spacing="6">
+          <Button
+              x:Name="PreviousButton"
+              Content="Prev"
+              Click="OnPrevious" />
+          <Button
+              x:Name="PlayPauseButton"
+              Content="Play"
+              Click="OnPlayPause" />
+          <Button
+              x:Name="NextButton"
+              Content="Next"
+              Click="OnNext" />
+        </StackPanel>
+
+        <Grid
+            Grid.Row="0"
+            Grid.Column="1"
+            Margin="12,0"
+            ColumnDefinitions="*,Auto">
+          <Slider
+              x:Name="SeekSlider"
+              Grid.Column="0"
+              Minimum="0"
+              Maximum="1"
+              Value="0" />
+          <TextBlock
+              x:Name="TimeText"
+              Grid.Column="1"
+              Margin="10,0,0,0"
+              VerticalAlignment="Center"
+              Foreground="#E7F0F8"
+              Text="00:00 / 00:00" />
+        </Grid>
+
+        <StackPanel
+            Grid.Row="0"
+            Grid.Column="2"
+            Orientation="Horizontal"
+            Spacing="8">
+          <Button
+              x:Name="MuteButton"
+              Content="Mute"
+              Click="OnMute" />
+          <Slider
+              x:Name="VolumeSlider"
+              Width="120"
+              Minimum="0"
+              Maximum="100"
+              Value="100" />
+          <Button
+              Content="Full screen"
+              Click="OnFullscreen" />
+        </StackPanel>
+
+        <Grid
+            Grid.Row="1"
+            Grid.ColumnSpan="3"
+            Margin="0,8,0,0"
+            ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Spacing="2">
+            <TextBlock
+                x:Name="TitleText"
+                FontSize="16"
+                FontWeight="SemiBold"
+                Foreground="White"
+                Text="Not casting" />
+            <TextBlock
+                x:Name="SubtitleText"
+                Foreground="#BFD0DF"
+                Text="" />
+          </StackPanel>
+          <Button
+              x:Name="EndCastButton"
+              Grid.Column="1"
+              Content="End cast"
+              Click="OnEndCast" />
+        </Grid>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>
+

@@ -1,0 +1,121 @@
+<UserControl
+    x:Class="MCast.Ui.Avalonia.Views.SettingsPage"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:fa="using:FluentAvalonia.UI.Controls">
+  <fa:FANavigationView
+      x:Name="Categories"
+      IsBackButtonVisible="False"
+      IsSettingsVisible="False"
+      OpenPaneLength="200"
+      PaneDisplayMode="Left"
+      PaneTitle="Settings">
+    <fa:FANavigationView.MenuItems>
+      <fa:FANavigationViewItem
+          x:Name="UiNavigationItem"
+          Content="Appearance" />
+      <fa:FANavigationViewItem
+          x:Name="CastNavigationItem"
+          Content="Casting" />
+    </fa:FANavigationView.MenuItems>
+
+    <Grid Margin="24">
+      <StackPanel x:Name="UiPane" Spacing="14">
+        <TextBlock
+            FontSize="24"
+            FontWeight="SemiBold"
+            Text="Appearance" />
+        <Border
+            Padding="16"
+            CornerRadius="8"
+            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+          <Grid
+              ColumnDefinitions="190,260"
+              RowDefinitions="Auto,Auto,Auto,Auto"
+              RowSpacing="12">
+            <TextBlock
+                VerticalAlignment="Center"
+                Text="Language" />
+            <ComboBox
+                x:Name="LanguageCombo"
+                Grid.Column="1"
+                SelectionChanged="LanguageChanged" />
+            <TextBlock
+                Grid.Row="1"
+                VerticalAlignment="Center"
+                Text="Theme" />
+            <ComboBox
+                x:Name="ThemeCombo"
+                Grid.Row="1"
+                Grid.Column="1"
+                SelectionChanged="ThemeChanged" />
+            <TextBlock
+                Grid.Row="2"
+                VerticalAlignment="Center"
+                Text="Accent" />
+            <ComboBox
+                x:Name="AccentCombo"
+                Grid.Row="2"
+                Grid.Column="1"
+                SelectionChanged="AccentChanged" />
+            <TextBlock
+                Grid.Row="3"
+                VerticalAlignment="Center"
+                Text="Mica backdrop" />
+            <ToggleSwitch
+                x:Name="MicaToggle"
+                Grid.Row="3"
+                Grid.Column="1"
+                Click="MicaClicked" />
+          </Grid>
+        </Border>
+      </StackPanel>
+
+      <StackPanel
+          x:Name="CastPane"
+          IsVisible="False"
+          Spacing="14">
+        <TextBlock
+            FontSize="24"
+            FontWeight="SemiBold"
+            Text="Casting" />
+        <Border
+            Padding="16"
+            CornerRadius="8"
+            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+          <Grid
+              ColumnDefinitions="210,260"
+              RowDefinitions="Auto,Auto,Auto"
+              RowSpacing="12">
+            <TextBlock
+                VerticalAlignment="Center"
+                Text="Accept new casts" />
+            <ToggleSwitch
+                x:Name="AcceptCastToggle"
+                Grid.Column="1"
+                Click="AcceptCastClicked" />
+            <TextBlock
+                Grid.Row="1"
+                VerticalAlignment="Center"
+                Text="DLNA broadcast" />
+            <ToggleSwitch
+                x:Name="BroadcastToggle"
+                Grid.Row="1"
+                Grid.Column="1"
+                Click="BroadcastClicked" />
+            <TextBlock
+                Grid.Row="2"
+                VerticalAlignment="Center"
+                Text="Broadcast interval" />
+            <ComboBox
+                x:Name="BroadcastIntervalCombo"
+                Grid.Row="2"
+                Grid.Column="1"
+                SelectionChanged="BroadcastIntervalChanged" />
+          </Grid>
+        </Border>
+      </StackPanel>
+    </Grid>
+  </fa:FANavigationView>
+</UserControl>
+
