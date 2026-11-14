@@ -429,7 +429,14 @@ internal sealed partial class CastPage : UserControl
         var reset = new Button { Content = "Reset all" };
         reset.Click += (_, _) => _host.ResetPictureControls();
         panel.Children.Add(reset);
-        new Flyout { Content = panel }.ShowAt(_interactionLayer);
+        var scroller = new ScrollViewer
+        {
+            Content = panel,
+            MaxHeight = 520,
+            VerticalScrollBarVisibility =
+                global::Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+        };
+        new Flyout { Content = scroller }.ShowAt(_interactionLayer);
     }
 
     private void OpenInfo()
