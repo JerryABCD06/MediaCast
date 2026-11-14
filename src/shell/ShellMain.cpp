@@ -617,6 +617,11 @@ public:
         Normal,
         ConfirmationOnly,
     };
+    enum class UiControlWait {
+        Connected,
+        TimedOut,
+        Aborted,
+    };
 
     ShellRuntime(Options options, HANDLE shellMutex)
         : m_options(std::move(options))
@@ -932,6 +937,7 @@ public:
                         ui->process.terminate(0, 1000ms, terminateError);
                         m_uiState = UiState::None;
                         m_uiMode = UiMode::None;
+                        m_confirmationUiRequestActive = false;
                         m_splash.hideImmediately(m_activationId);
                         m_activationId = 0;
                         m_records.erase(std::remove_if(
@@ -940,13 +946,7 @@ public:
                                 return record->role == ProcessRole::Ui;
                             }),
                             m_records.end());
-                        {
-                            std::scoped_lock controlLock(
-                                m_uiControlMutex);
-                            m_uiControlConnection.reset();
-                            ++m_uiGeneration;
-                        }
-                        m_uiControlChanged.notify_all();
+                        resetUiControlConnection();
                     }
                 }
                 if (m_uiState == UiState::Running
@@ -971,13 +971,9 @@ public:
                         m_records.end());
                     m_uiState = UiState::None;
                     m_uiMode = UiMode::None;
+                    m_confirmationUiRequestActive = false;
                     m_activationId = 0;
-                    {
-                        std::scoped_lock controlLock(m_uiControlMutex);
-                        m_uiControlConnection.reset();
-                        ++m_uiGeneration;
-                    }
-                    m_uiControlChanged.notify_all();
+                    resetUiControlConnection();
                 }
             }
 
@@ -1146,6 +1142,18 @@ private:
         return generation;
     }
 
+    void resetUiControlConnection()
+    {
+        std::uint64_t generation = 0;
+        {
+            std::scoped_lock lock(m_uiControlMutex);
+            m_uiControlConnection.reset();
+            generation = ++m_uiGeneration;
+        }
+        invalidateUiConfirmations(generation);
+        m_uiControlChanged.notify_all();
+    }
+
     void clearUiControlConnection(
         const std::shared_ptr<mcast::ipc::PipeConnection> &connection)
     {
@@ -1239,6 +1247,7 @@ private:
             m_recentConfirmationDecisions.clear();
         }
         sendConfirmationCancels(targets);
+        m_uiControlChanged.notify_all();
         return generation;
     }
 
@@ -1338,15 +1347,15 @@ private:
                 }
             }
             if (alive)
+            {
+                if (m_uiMode == UiMode::ConfirmationOnly)
+                    m_confirmationUiRequestActive = true;
                 return true;
+            }
             m_uiState = UiState::None;
             m_uiMode = UiMode::None;
-            {
-                std::scoped_lock controlLock(m_uiControlMutex);
-                m_uiControlConnection.reset();
-                ++m_uiGeneration;
-            }
-            m_uiControlChanged.notify_all();
+            m_confirmationUiRequestActive = false;
+            resetUiControlConnection();
         }
 
         {
@@ -1363,12 +1372,7 @@ private:
                 }),
                 m_records.end());
         }
-        {
-            std::scoped_lock controlLock(m_uiControlMutex);
-            m_uiControlConnection.reset();
-            ++m_uiGeneration;
-        }
-        m_uiControlChanged.notify_all();
+        resetUiControlConnection();
 
         if (std::chrono::steady_clock::now() >= deadline) {
             error = "cast confirmation UI deadline expired";
@@ -1379,10 +1383,12 @@ private:
         m_activationId = effectiveId;
         m_uiState = UiState::Starting;
         m_uiMode = UiMode::ConfirmationOnly;
+        m_confirmationUiRequestActive = true;
         if (!launchUi(
                 effectiveId, UiMode::ConfirmationOnly, error)) {
             m_uiState = UiState::Failed;
             m_uiMode = UiMode::None;
+            m_confirmationUiRequestActive = false;
             return false;
         }
         m_uiState = UiState::Running;
@@ -1393,24 +1399,36 @@ private:
         return true;
     }
 
-    bool waitForUiControl(
+    UiControlWait waitForUiControl(
         std::chrono::steady_clock::time_point deadline,
+        std::uint64_t requestMessageId,
+        std::uint64_t protocolGeneration,
         std::shared_ptr<mcast::ipc::PipeConnection> &connection,
         std::uint64_t &generation)
     {
+        const auto aborted = [&] {
+            if (m_shuttingDown.load())
+                return true;
+            std::scoped_lock lock(m_confirmationMutex);
+            return protocolGeneration != m_protocolGeneration
+                || m_cancelledProtocolConfirmations.contains(
+                    requestMessageId);
+        };
         std::unique_lock lock(m_uiControlMutex);
         if (!m_uiControlChanged.wait_until(
-                lock, deadline, [this] {
+                lock, deadline, [&] {
                     return static_cast<bool>(m_uiControlConnection)
-                        || m_shuttingDown.load();
+                        || aborted();
                 })) {
-            return false;
+            return aborted() ? UiControlWait::Aborted
+                             : UiControlWait::TimedOut;
         }
-        if (m_shuttingDown.load())
-            return false;
+        if (aborted())
+            return UiControlWait::Aborted;
         connection = m_uiControlConnection;
         generation = m_uiGeneration;
-        return static_cast<bool>(connection);
+        return connection ? UiControlWait::Connected
+                          : UiControlWait::Aborted;
     }
 
     void retireConfirmationOnlyUi()
@@ -1434,19 +1452,23 @@ private:
         }
         m_uiState = UiState::None;
         m_uiMode = UiMode::None;
+        m_confirmationUiRequestActive = false;
         m_activationId = 0;
-        {
-            std::scoped_lock controlLock(m_uiControlMutex);
-            m_uiControlConnection.reset();
-            ++m_uiGeneration;
-        }
-        m_uiControlChanged.notify_all();
+        resetUiControlConnection();
     }
 
     std::optional<bool> requestCastConfirmation(
         mcast::ipc::CastConfirmationRequestInfo request,
         std::uint64_t requestMessageId, std::uint64_t generation)
     {
+        struct RequestGuard {
+            ShellRuntime *owner = nullptr;
+            ~RequestGuard()
+            {
+                if (owner)
+                    owner->finishConfirmationUiRequest();
+            }
+        } requestGuard{this};
         if (m_shuttingDown.load())
             return std::nullopt;
         const auto deadline = std::chrono::steady_clock::now()
@@ -1470,11 +1492,13 @@ private:
                           << launchError << '\n';
                 return false;
             }
-            if (!waitForUiControl(
-                    deadline, uiConnection, uiGeneration)) {
+            const auto waitResult = waitForUiControl(
+                deadline, requestMessageId, generation,
+                uiConnection, uiGeneration);
+            if (waitResult != UiControlWait::Connected) {
                 if (launchedForRequest)
                     retireConfirmationOnlyUi();
-                if (m_shuttingDown.load())
+                if (waitResult == UiControlWait::Aborted)
                     return std::nullopt;
                 std::cerr << "confirmation UI ControlPipe timed out\n";
                 return false;
@@ -1601,6 +1625,12 @@ private:
         return accepted;
     }
 
+    void finishConfirmationUiRequest()
+    {
+        std::scoped_lock lock(m_uiMutex);
+        m_confirmationUiRequestActive = false;
+    }
+
     void startProtocolConfirmation(
         mcast::ipc::CastConfirmationRequestInfo request,
         std::uint64_t requestMessageId, std::uint64_t generation,
@@ -1714,6 +1744,7 @@ private:
                 m_pendingUiConfirmations.erase(found);
             }
         }
+        m_uiControlChanged.notify_all();
         if (!waiter)
             return;
         waiter->readyCondition.notify_all();
@@ -2468,7 +2499,8 @@ private:
             }
             if (alive) {
                 if (m_uiMode == UiMode::ConfirmationOnly) {
-                    if (hasPendingUiConfirmation()) {
+                    if (m_confirmationUiRequestActive
+                        || hasPendingUiConfirmation()) {
                         bringProcessWindowToFront(aliveProcessId);
                         effectiveId = m_activationId;
                         started = false;
@@ -2491,13 +2523,9 @@ private:
                     }
                     m_uiState = UiState::None;
                     m_uiMode = UiMode::None;
+                    m_confirmationUiRequestActive = false;
                     m_activationId = 0;
-                    {
-                        std::scoped_lock controlLock(m_uiControlMutex);
-                        m_uiControlConnection.reset();
-                        ++m_uiGeneration;
-                    }
-                    m_uiControlChanged.notify_all();
+                    resetUiControlConnection();
                 } else {
                     m_uiMode = UiMode::Normal;
                     m_splash.bringToFront(m_activationId);
@@ -2509,13 +2537,9 @@ private:
             }
             m_uiState = UiState::None;
             m_uiMode = UiMode::None;
+            m_confirmationUiRequestActive = false;
         }
-        {
-            std::scoped_lock controlLock(m_uiControlMutex);
-            m_uiControlConnection.reset();
-            ++m_uiGeneration;
-        }
-        m_uiControlChanged.notify_all();
+        resetUiControlConnection();
         effectiveId = ++m_nextActivationId;
         started = true;
         m_uiState = UiState::Starting;
@@ -3197,6 +3221,7 @@ private:
     std::uint64_t m_uiGeneration = 0;
     std::mutex m_confirmationMutex;
     UiMode m_uiMode = UiMode::None;
+    bool m_confirmationUiRequestActive = false;
     enum class UiState {
         None,
         Starting,
