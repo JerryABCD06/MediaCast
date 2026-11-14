@@ -2424,6 +2424,12 @@ private:
         return launch(ProcessRole::Ui, m_options.ui, arguments, error);
     }
 
+    bool hasPendingUiConfirmation()
+    {
+        std::scoped_lock lock(m_confirmationMutex);
+        return !m_pendingUiConfirmations.empty();
+    }
+
     bool activateUi(
         std::uint64_t activationId, std::uint64_t &effectiveId,
         bool &started, std::string &error)
@@ -2451,15 +2457,55 @@ private:
                 }
             }
             if (alive) {
-                m_splash.bringToFront(m_activationId);
-                bringProcessWindowToFront(aliveProcessId);
-                effectiveId = m_activationId;
-                started = false;
-                return true;
+                if (m_uiMode == UiMode::ConfirmationOnly) {
+                    if (hasPendingUiConfirmation()) {
+                        bringProcessWindowToFront(aliveProcessId);
+                        effectiveId = m_activationId;
+                        started = false;
+                        return true;
+                    }
+                    {
+                        std::scoped_lock recordsLock(m_recordsMutex);
+                        ChildRecord *ui = findRecord(ProcessRole::Ui);
+                        if (ui) {
+                            std::string terminateError;
+                            ui->process.terminate(
+                                0, 1000ms, terminateError);
+                        }
+                        m_records.erase(std::remove_if(
+                            m_records.begin(), m_records.end(),
+                            [](const std::unique_ptr<ChildRecord> &record) {
+                                return record->role == ProcessRole::Ui;
+                            }),
+                            m_records.end());
+                    }
+                    m_uiState = UiState::None;
+                    m_uiMode = UiMode::None;
+                    m_activationId = 0;
+                    {
+                        std::scoped_lock controlLock(m_uiControlMutex);
+                        m_uiControlConnection.reset();
+                        ++m_uiGeneration;
+                    }
+                    m_uiControlChanged.notify_all();
+                } else {
+                    m_uiMode = UiMode::Normal;
+                    m_splash.bringToFront(m_activationId);
+                    bringProcessWindowToFront(aliveProcessId);
+                    effectiveId = m_activationId;
+                    started = false;
+                    return true;
+                }
             }
             m_uiState = UiState::None;
             m_uiMode = UiMode::None;
         }
+        {
+            std::scoped_lock controlLock(m_uiControlMutex);
+            m_uiControlConnection.reset();
+            ++m_uiGeneration;
+        }
+        m_uiControlChanged.notify_all();
         effectiveId = ++m_nextActivationId;
         started = true;
         m_uiState = UiState::Starting;
