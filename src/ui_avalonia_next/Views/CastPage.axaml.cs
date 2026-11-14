@@ -45,6 +45,7 @@ internal sealed partial class CastPage : UserControl
     private bool _applyingProjection;
     private bool _pageActive = true;
     private bool _controlsAllowed = true;
+    private bool _playbackCommandsAvailable;
     private DateTimeOffset _lastSurfaceClick;
     private Point _lastSurfaceClickPoint;
     private CancellationTokenSource? _pendingSingleClick;
@@ -101,6 +102,10 @@ internal sealed partial class CastPage : UserControl
     {
         _hostProjection = projection;
         _playback = projection.Playback;
+        _playbackCommandsAvailable =
+            projection.Playback.PlayerAvailable
+            && projection.Renderer.RendererReady
+            && !projection.Renderer.ContextLost;
         _applyingProjection = true;
         try
         {
@@ -117,9 +122,15 @@ internal sealed partial class CastPage : UserControl
                 ? "Waiting for the next media"
                 : "Waiting for a media cast";
 
-            PreviousButton.IsEnabled = projection.Playback.HasPrevious;
-            NextButton.IsEnabled = projection.Playback.HasNext;
-            PlayPauseButton.IsEnabled = projection.Playback.HasMedia;
+            PreviousButton.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasPrevious;
+            NextButton.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasNext;
+            PlayPauseButton.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasMedia;
             EndCastButton.IsEnabled = projection.Playback.PeerConnected;
             PlayPauseButton.Content = projection.Playback.Paused
                 || projection.Playback.Idle
@@ -128,17 +139,29 @@ internal sealed partial class CastPage : UserControl
             MuteButton.Content = projection.Playback.Muted
                 ? "Unmute"
                 : "Mute";
-            _menuPrevious.IsEnabled = projection.Playback.HasPrevious;
-            _menuNext.IsEnabled = projection.Playback.HasNext;
-            _menuPlayPause.IsEnabled = projection.Playback.HasMedia;
+            _menuPrevious.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasPrevious;
+            _menuNext.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasNext;
+            _menuPlayPause.IsEnabled =
+                _playbackCommandsAvailable
+                && projection.Playback.HasMedia;
             _menuPlayPause.Header = projection.Playback.Paused
                 || projection.Playback.Idle
                 ? "Play"
                 : "Pause";
-            _menuSeekBack.IsEnabled = projection.Playback.HasMedia
+            _menuSeekBack.IsEnabled = _playbackCommandsAvailable
+                && projection.Playback.HasMedia
                 && projection.Playback.DurationSeconds > 0;
-            _menuSeekForward.IsEnabled = projection.Playback.HasMedia
+            _menuSeekForward.IsEnabled = _playbackCommandsAvailable
+                && projection.Playback.HasMedia
                 && projection.Playback.DurationSeconds > 0;
+            _menuVolumeUp.IsEnabled = _playbackCommandsAvailable;
+            _menuVolumeDown.IsEnabled = _playbackCommandsAvailable;
+            _menuMute.IsEnabled = _playbackCommandsAvailable;
+            _menuPicture.IsEnabled = _playbackCommandsAvailable;
             _menuMute.Header = projection.Playback.Muted
                 ? "Unmute"
                 : "Mute";
@@ -159,6 +182,10 @@ internal sealed partial class CastPage : UserControl
                     SeekSlider.Maximum);
             if (!_volumeDragging)
                 VolumeSlider.Value = projection.Playback.VolumePercent;
+            SeekSlider.IsEnabled = _playbackCommandsAvailable;
+            VolumeSlider.IsEnabled = _playbackCommandsAvailable;
+            MuteButton.IsEnabled = _playbackCommandsAvailable;
+            PictureButton.IsEnabled = _playbackCommandsAvailable;
             UpdateTimeText();
             UpdateVisibility();
         }
@@ -325,7 +352,8 @@ internal sealed partial class CastPage : UserControl
             await Task.Delay(250, cancellation.Token);
             Dispatcher.UIThread.Post(() =>
             {
-                if (!cancellation.IsCancellationRequested)
+                if (!cancellation.IsCancellationRequested
+                    && _playbackCommandsAvailable)
                     _host.TogglePlayPause();
             });
         }

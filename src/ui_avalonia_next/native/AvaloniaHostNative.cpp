@@ -1448,14 +1448,27 @@ int postIntent(Function function)
         ? 1 : 0;
 }
 
+bool playbackCommandsAvailable(const HostState &state)
+{
+    return state.playback
+        && state.playerRunning.load()
+        && state.rendererReady.load()
+        && !state.contextLost.load()
+        && !state.stopping.load()
+        && !state.closing.load();
+}
+
 } // namespace
 
 MCAST_AVALONIA_HOST_EXPORT int
 mcast_avalonia_host_toggle_play_pause()
 {
     return postIntent([](HostState &state) {
-        if (state.playback)
-            state.playback->togglePlayPause();
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->togglePlayPause();
         log(state, "UI intent: TogglePlayPause");
     });
 }
@@ -1463,8 +1476,11 @@ mcast_avalonia_host_toggle_play_pause()
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_seek(double seconds)
 {
     return postIntent([seconds](HostState &state) {
-        if (state.playback)
-            state.playback->seekTo(seconds);
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->seekTo(seconds);
         log(state, "UI intent: Seek " + std::to_string(seconds));
     });
 }
@@ -1472,8 +1488,11 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_seek(double seconds)
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_previous()
 {
     return postIntent([](HostState &state) {
-        if (state.playback)
-            state.playback->previous();
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->previous();
         log(state, "UI intent: Previous");
     });
 }
@@ -1481,8 +1500,11 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_previous()
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_next()
 {
     return postIntent([](HostState &state) {
-        if (state.playback)
-            state.playback->next();
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->next();
         log(state, "UI intent: Next");
     });
 }
@@ -1490,8 +1512,11 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_next()
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_set_volume(int percent)
 {
     return postIntent([percent](HostState &state) {
-        if (state.playback)
-            state.playback->setVolumePercent(percent);
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->setVolumePercent(percent);
         log(state, "UI intent: Volume " + std::to_string(percent));
     });
 }
@@ -1499,8 +1524,11 @@ MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_set_volume(int percent)
 MCAST_AVALONIA_HOST_EXPORT int mcast_avalonia_host_set_muted(int muted)
 {
     return postIntent([muted](HostState &state) {
-        if (state.playback)
-            state.playback->setMuted(muted != 0);
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->setMuted(muted != 0);
         log(
             state,
             "UI intent: Muted "
@@ -1516,8 +1544,11 @@ mcast_avalonia_host_set_picture_control(
         return 0;
     const std::string controlName(name);
     return postIntent([controlName, value](HostState &state) {
-        if (state.playback)
-            state.playback->setPictureControl(controlName, value);
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->setPictureControl(controlName, value);
         log(
             state,
             "UI intent: Picture " + controlName
@@ -1529,8 +1560,11 @@ MCAST_AVALONIA_HOST_EXPORT int
 mcast_avalonia_host_reset_picture_controls()
 {
     return postIntent([](HostState &state) {
-        if (state.playback)
-            state.playback->resetPictureControls();
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
+        state.playback->resetPictureControls();
         log(state, "UI intent: Reset picture");
     });
 }
@@ -1539,6 +1573,10 @@ MCAST_AVALONIA_HOST_EXPORT int
 mcast_avalonia_host_begin_control_adjustment()
 {
     return postIntent([](HostState &state) {
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
         if (state.playbackBridge)
             state.playbackBridge->beginControlAdjustment();
         log(state, "UI intent: BeginControlAdjustment");
@@ -1549,6 +1587,10 @@ MCAST_AVALONIA_HOST_EXPORT int
 mcast_avalonia_host_end_control_adjustment()
 {
     return postIntent([](HostState &state) {
+        if (!playbackCommandsAvailable(state)) {
+            log(state, "UI intent rejected: player unavailable");
+            return;
+        }
         if (state.playbackBridge)
             state.playbackBridge->endControlAdjustment();
         log(state, "UI intent: EndControlAdjustment");

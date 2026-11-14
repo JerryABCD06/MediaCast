@@ -96,6 +96,7 @@
               Content="Info"
               Click="OnInfo" />
           <Button
+              x:Name="PictureButton"
               Content="Picture"
               Click="OnPicture" />
           <Button
