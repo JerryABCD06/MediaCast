@@ -860,6 +860,22 @@ if(BUILD_TESTING)
             ENVIRONMENT "MCAST_UI_TEST_DISCONNECT_CONTROL_MS=3000"
             TIMEOUT 60
             RUN_SERIAL TRUE)
+    add_test(
+        NAME mcast_playback_pipe_reconnect
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/dlna_shadow_e2e.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE_DIR:MCast.Shell>/MCast.Ui.exe"
+            -SourceMediaUri
+                "av://lavfi:testsrc=duration=90:size=1280x720:rate=60"
+            -ExpectPlaybackReconnectSeconds 15)
+    set_tests_properties(
+        mcast_playback_pipe_reconnect
+        PROPERTIES
+            ENVIRONMENT "MCAST_UI_TEST_DISCONNECT_PLAYBACK_MS=3000"
+            TIMEOUT 60
+            RUN_SERIAL TRUE)
     endif()
 
     add_executable(

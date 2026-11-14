@@ -5,6 +5,7 @@ param(
     [string]$QtBin = '',
     [int]$HoldSeconds = 0,
     [int]$ExpectUiExitSeconds = 0,
+    [int]$ExpectPlaybackReconnectSeconds = 0,
     [switch]$ShowWindows,
     [string]$SourceMediaPath = '',
     [string]$SourceMediaUri = ''
@@ -14,6 +15,12 @@ $ErrorActionPreference = 'Stop'
 $instance = 'shadow-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $shellDirectory = [System.IO.Path]::GetDirectoryName($ShellExe)
 $protocolLog = Join-Path $shellDirectory "MCast.Protocol.$instance.log"
+$uiLog = Join-Path $shellDirectory 'MCast.Ui.Avalonia.log'
+$uiLogOffset = if (Test-Path -LiteralPath $uiLog) {
+    (Get-Item -LiteralPath $uiLog).Length
+} else {
+    0
+}
 $logOffset = 0
 $mediaPath = Join-Path $env:TEMP ("mcast-shadow-$instance.wav")
 $ownsMediaPath = $true
@@ -66,6 +73,40 @@ function Wait-ProtocolLogMatch {
         Start-Sleep -Milliseconds 100
     }
     throw "Protocol log did not match $($Pattern.ToString())`nLOG:`n$(Read-AppendedLog)"
+}
+
+function Read-TextSinceOffset {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][long]$Offset
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return ''
+    }
+    $stream = [System.IO.FileStream]::new(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite)
+    try {
+        if ($stream.Length -le $Offset) {
+            return ''
+        }
+        $stream.Position = $Offset
+        $reader = [System.IO.StreamReader]::new(
+            $stream,
+            [System.Text.Encoding]::UTF8,
+            $true,
+            1024,
+            $true)
+        try {
+            return $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Send-TcpHttp {
@@ -323,6 +364,51 @@ try {
     $testPassed = $true
     if ($HoldSeconds -gt 0) {
         Start-Sleep -Seconds $HoldSeconds
+    }
+    if ($ExpectPlaybackReconnectSeconds -gt 0) {
+        $uiBefore = @(Get-CimInstance Win32_Process |
+            Where-Object {
+                $_.Name -eq 'MCast.Ui.exe' -and
+                $_.CommandLine -like "*$instance*"
+            })
+        if ($uiBefore.Count -ne 1) {
+            throw "Expected one Ui process before reconnect, found $($uiBefore.Count)"
+        }
+        $null = Wait-ProtocolLogMatch -Pattern (
+            [regex]'PlaybackPipe reconnected'
+        ) -TimeoutMs ($ExpectPlaybackReconnectSeconds * 1000)
+        $uiAfter = @(Get-CimInstance Win32_Process |
+            Where-Object {
+                $_.Name -eq 'MCast.Ui.exe' -and
+                $_.CommandLine -like "*$instance*"
+            })
+        if ($uiAfter.Count -ne 1 -or
+            $uiAfter[0].ProcessId -ne $uiBefore[0].ProcessId) {
+            throw 'Ui process changed during PlaybackPipe reconnect'
+        }
+        $runLog = Read-TextSinceOffset -Path $uiLog -Offset $uiLogOffset
+        $readyCount = [regex]::Matches(
+            $runLog, 'PlaybackUiReady sent').Count
+        $contextCount = [regex]::Matches(
+            $runLog, 'Render context attached generation=').Count
+        $firstFrameCount = [regex]::Matches(
+            $runLog, 'Avalonia first frame presented').Count
+        $reconnectCount = [regex]::Matches(
+            $runLog, 'Playback reconnect \d+ completed').Count
+        if ($readyCount -lt 2 -or
+            $contextCount -ne 1 -or
+            $firstFrameCount -ne 1 -or
+            $reconnectCount -lt 1) {
+            throw (
+                'Playback reconnect invariants failed: ' +
+                "ready=$readyCount context=$contextCount " +
+                "firstFrame=$firstFrameCount reconnect=$reconnectCount")
+        }
+        $protocolRunLog = Read-AppendedLog
+        if ([regex]::Matches(
+                $protocolRunLog, 'Playback UI ready').Count -lt 2) {
+            throw 'Protocol did not receive a second Playback UI ready'
+        }
     }
     if ($ExpectUiExitSeconds -gt 0) {
         $deadline = [DateTime]::UtcNow.AddSeconds($ExpectUiExitSeconds)
