@@ -500,6 +500,11 @@ int main()
             && suffix->body
                 == full->body.substr(full->body.size() - 16),
         "suffix range returns the final transport-stream bytes");
+    const auto openEnded = httpRequest(
+        proxyPort, segmentPath, std::string("0-"));
+    check(
+        openEnded && openEnded->status == 206,
+        "open-ended range is accepted");
     const auto outOfRange = httpRequest(
         proxyPort, segmentPath, std::string("999999-"));
     check(

@@ -319,9 +319,11 @@ RangeRequest parseRange(std::string_view request)
         begin, end == std::string_view::npos
             ? std::string_view::npos : end - begin));
     const auto dash = value.find('-');
-    if (dash == std::string::npos || dash + 1 >= value.size())
+    if (dash == std::string::npos)
         return result;
     if (dash == 0) {
+        if (dash + 1 >= value.size())
+            return result;
         std::int64_t suffixLength = 0;
         if (std::from_chars(
                 value.data() + 1,
