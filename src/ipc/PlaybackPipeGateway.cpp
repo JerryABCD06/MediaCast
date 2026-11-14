@@ -96,7 +96,12 @@ PlaybackPipeGateway::~PlaybackPipeGateway()
 PlaybackSnapshot PlaybackPipeGateway::snapshot() const
 {
     std::scoped_lock lock(m_snapshotMutex);
-    return m_snapshot;
+    PlaybackSnapshot result = m_snapshot;
+    // A connected Ui can publish its player snapshot before the first frame,
+    // but Protocol must keep treating it as unavailable until PlaybackUiReady.
+    if (!m_hasSnapshot || !m_uiReady)
+        result.playerAvailable = false;
+    return result;
 }
 
 PlaybackCommandSubmission PlaybackPipeGateway::submit(

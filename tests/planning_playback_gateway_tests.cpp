@@ -4,6 +4,7 @@
 #include "playback/PlanningPlaybackGateway.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -30,12 +31,17 @@ void check(bool condition, const char *message)
 class FakeGateway final : public PlaybackGateway
 {
 public:
+    explicit FakeGateway(bool available = true)
+        : m_available(available)
+    {
+    }
+
     PlaybackSnapshot snapshot() const override
     {
         PlaybackSnapshot value;
         value.generation = 7;
         value.stateVersion = 3;
-        value.playerAvailable = true;
+        value.playerAvailable = m_available.load();
         return value;
     }
 
@@ -49,8 +55,17 @@ public:
             m_submitted.push_back(command);
         }
         m_changed.notify_all();
+        if (!m_available)
+            return {
+                false, PlaybackSubmissionStatus::WaitingForPlayer, 0, 7,
+                "playback UI is not ready", 3};
         return {
             true, PlaybackSubmissionStatus::Queued, commandId, 7, {}, 3};
+    }
+
+    void setAvailable(bool available)
+    {
+        m_available = available;
     }
 
     std::uint64_t addEventListener(
@@ -111,6 +126,7 @@ private:
     std::vector<PlaybackCommand> m_submitted;
     std::function<void(const PlaybackEvent &)> m_listener;
     std::uint64_t m_nextCommandId = 101;
+    std::atomic_bool m_available;
 };
 
 struct PlannerGate {
@@ -284,6 +300,39 @@ int main()
         }), "an expired plan is rejected after the planner returns");
         check(upstream.submissionCount() == 0,
               "an expired plan never reaches upstream");
+    }
+    {
+        FakeGateway upstream(false);
+        std::atomic_int planningCalls = 0;
+        PlanningPlaybackGateway planning(
+            upstream,
+            [&planningCalls](const MediaRequest &request, std::string &) {
+                ++planningCalls;
+                return request;
+            });
+
+        PlaybackCommand open;
+        open.type = PlaybackCommandType::Open;
+        open.expectedGeneration = 7;
+        open.media.uri = "http://media.test/cold-start.m3u8";
+        const auto waiting = planning.submit(open);
+        check(!waiting.queued
+                  && waiting.status
+                      == PlaybackSubmissionStatus::WaitingForPlayer,
+              "planning preserves the upstream waiting state");
+        check(upstream.waitForSubmissionCount(1),
+              "a not-ready Open reaches upstream without planning");
+        check(planningCalls.load() == 0,
+              "no compatibility plan starts before the UI is ready");
+
+        upstream.setAvailable(true);
+        const auto ready = planning.submit(open);
+        check(ready.queued && ready.commandId != 0,
+              "the same Open can be planned after readiness");
+        check(upstream.waitForSubmissionCount(2),
+              "the ready Open reaches upstream");
+        check(planningCalls.load() == 1,
+              "the ready Open starts exactly one compatibility plan");
     }
 
     std::cout << "Planning playback gateway tests passed\n";

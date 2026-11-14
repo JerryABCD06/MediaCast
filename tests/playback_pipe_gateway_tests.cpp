@@ -260,6 +260,8 @@ int main()
     check(endCastRequested.load(),
           "UI end-cast request reaches the protocol gateway");
     check(gateway.snapshot().generation == 1, "initial generation cached");
+    check(!gateway.snapshot().playerAvailable,
+          "PlaybackUiReady is required before the player is command-ready");
 
     PlaybackCommand open;
     open.type = PlaybackCommandType::Open;
@@ -272,6 +274,8 @@ int main()
     std::this_thread::sleep_for(250ms);
     const auto first = gateway.submit(open);
     check(first.queued && first.commandId != 0, "first command queues");
+    check(gateway.snapshot().playerAvailable,
+          "player becomes command-ready after PlaybackUiReady");
     check(events.waitFor([](const auto &list) {
         return std::any_of(list.begin(), list.end(), [](const auto &event) {
             return event.kind == PlaybackEventKind::CommandCompleted;
