@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ShellExe,
     [Parameter(Mandatory = $true)][string]$ProtocolExe,
     [Parameter(Mandatory = $true)][string]$UiExe,
-    [Parameter(Mandatory = $true)][string]$QtBin
+    [string]$QtBin = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -200,10 +200,13 @@ try {
         [System.Diagnostics.ProcessWindowStyle]::Hidden
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.Environment['PATH'] =
-        $QtBin + ';' + $startInfo.Environment['PATH']
-    $startInfo.Environment['QT_PLUGIN_PATH'] =
-        [System.IO.Path]::GetFullPath((Join-Path $QtBin '..\plugins'))
+    if ($QtBin) {
+        $startInfo.Environment['PATH'] =
+            $QtBin + ';' + $startInfo.Environment['PATH']
+        $startInfo.Environment['QT_PLUGIN_PATH'] =
+            [System.IO.Path]::GetFullPath(
+                (Join-Path $QtBin '..\plugins'))
+    }
     $shellProcess = [System.Diagnostics.Process]::Start($startInfo)
     $stdoutTask = $shellProcess.StandardOutput.ReadToEndAsync()
     $stderrTask = $shellProcess.StandardError.ReadToEndAsync()

@@ -833,6 +833,17 @@ if(BUILD_TESTING)
     set_tests_properties(
         mcast_dlna_shadow_e2e
         PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+    else()
+    add_test(
+        NAME mcast_avalonia_dlna_shadow_e2e
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/dlna_shadow_e2e.ps1"
+            -ShellExe "$<TARGET_FILE:MCast.Shell>"
+            -ProtocolExe "$<TARGET_FILE:MCast.Protocol>"
+            -UiExe "$<TARGET_FILE_DIR:MCast.Shell>/MCast.Ui.exe")
+    set_tests_properties(
+        mcast_avalonia_dlna_shadow_e2e
+        PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     endif()
 
     add_executable(
