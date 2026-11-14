@@ -892,6 +892,15 @@ if(BUILD_TESTING)
             ENVIRONMENT "MCAST_UI_TEST_CONTEXT_LOST_MS=3000"
             TIMEOUT 60
             RUN_SERIAL TRUE)
+    add_test(
+        NAME mcast_confirmation_only_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/confirmation_only_smoke.ps1"
+            -UiExe "$<TARGET_FILE_DIR:MCast.Shell>/MCast.Ui.exe")
+    set_tests_properties(
+        mcast_confirmation_only_smoke
+        PROPERTIES TIMEOUT 20 RUN_SERIAL TRUE)
     endif()
 
     add_executable(
