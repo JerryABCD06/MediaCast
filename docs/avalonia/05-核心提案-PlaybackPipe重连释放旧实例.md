@@ -1,7 +1,7 @@
 # 核心改动提案：PlaybackPipe 重连前释放旧实例
 
 日期：2026-11-14  
-状态：提案，未实施
+状态：已实施并验证
 
 ## 1. 原契约
 
@@ -150,4 +150,44 @@ src/skeleton/SkeletonClient.cpp
 ```
 
 只改变旧 PlaybackPipe 实例的释放时机。未批准前，不修改该文件。
+
+## 9. 实施记录
+
+提交：
+
+```text
+ccd44f0 fix(protocol): release old playback pipe before reconnect
+f23a192 test(ui): verify PlaybackPipe reconnect invariants
+c986d34 fix(protocol): skip reconnect after Ui exit
+```
+
+实施内容严格限制为释放时机：
+
+```text
+detach 旧 gateway
+清除 activePlayback
+currentPlayback.reset()
+playback.reset()
+再创建同名 listener
+```
+
+另外补齐了 UI 进程已经退出时不再发起无意义重连：若断开时 Ui PID 已终止，
+Protocol 跳过 reconnect，重新进入持久模式的 `UiOpenReady` 门禁。
+
+真实故障结果：
+
+```text
+PlaybackPipe disconnected
+Playback UI ready
+PlaybackPipe reconnected
+Ui playback reconnect completed
+```
+
+验收同时证明：
+
+- Ui PID 不变；
+- render context 只 attach 一次；
+- MainWindow 第一帧只出现一次；
+- `PlaybackUiReady` 收到两次；
+- 播放位置继续增长。
 

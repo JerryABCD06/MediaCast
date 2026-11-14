@@ -1,7 +1,7 @@
 # 核心改动提案：confirmation-only 自动冷启动
 
 日期：2026-11-14  
-状态：提案，未实施
+状态：轻量 Ui 已实现并自动验证；Shell 自动冷启动仍被冻结边界阻断
 
 ## 1. 原契约
 
@@ -152,4 +152,33 @@ MCast.Ui.exe --standalone --confirmation-only --test-takeover-window
 ```
 
 正常自动冷启动不会被声明为已完成。
+
+## 10. 当前验证边界
+
+新增 CTest：
+
+```text
+mcast_confirmation_only_smoke
+```
+
+它启动：
+
+```text
+MCast.Ui.exe --standalone --confirmation-only --test-takeover-window
+```
+
+并断言当前 Ui 运行日志中不存在：
+
+```text
+Render context attached
+MPV:
+Windows media controls attached
+PlaybackBridge
+```
+
+因此轻量 confirmation-only Ui 已经由自动化证明。
+
+“主窗口不存在时由 Shell 自动选择 confirmation-only 并等待辅助窗口 ready”仍需修改
+Shell/ControlPipe，属于冻结核心边界。本次迁移没有偷偷修改 Shell 或 wire；
+该产品行为继续保留为需要单独确认的核心事项。
 
