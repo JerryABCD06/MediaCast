@@ -225,6 +225,29 @@ int main()
             && secondInfo->at("duration_seconds").asNumber() > 3.5,
         "media summary belongs to new load");
 
+    {
+        const std::scoped_lock lock(mutex);
+        ready = false;
+        failed = false;
+        durationSeen = false;
+        failure.clear();
+    }
+    MediaLoadRequest missing;
+    missing.logicalUri =
+        (wave.parent_path() / "mcast-missing-media.wav").string();
+    missing.loadGeneration = 13;
+    player.load(missing);
+    check(player.mediaInfoJson() == "{}",
+          "failed load clears the previous media summary");
+    {
+        std::unique_lock lock(mutex);
+        check(condition.wait_for(
+                  lock, 8s, [&] { return failed; }),
+              "missing media reports load failure");
+    }
+    check(player.mediaInfoJson() == "{}",
+          "failed load does not republish an old summary");
+
     readyConnection.disconnect();
     failedConnection.disconnect();
     durationConnection.disconnect();
