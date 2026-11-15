@@ -35,7 +35,29 @@ third_party/FluentUI/.git-upstream/
 # 被跟踪进了仓库 —— 已经用 `git rm -r --cached .vs` 清掉跟踪，这儿补上规矩。
 .vs/
 
+# ── 通用生成物与本机状态 ────────────────────────────────────────────────
+#
+# 构建目录已经单独忽略；这里再兜住直接落在源码树里的日志、调试文件、
+# 编辑器配置和 Shell 的本机运行状态，避免误提交。
+*.log
+*.dmp
+*.ilk
+*.pdb
+*.tmp
+*.temp
+CMakeUserPresets.json
+.idea/
+.vscode/
+.DS_Store
+MediaCast.json
+MediaCast.Shell.json
+
+# ── 本地凭据 ────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
 *.swp
-*~ 
+*~
 Thumbs.db
 desktop.ini
