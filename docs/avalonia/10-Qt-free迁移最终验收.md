@@ -329,6 +329,7 @@ start > end      -> 416
 
 ```text
 e4acc83 fix(protocol): keep cold-start open pending until UI ready
+0b219db fix(dlna): compare playback generation for readiness
 ```
 
 真实故障：
@@ -382,6 +383,74 @@ Protocol 只是在命令门尚未打开时把它投影为不可接收命令。
 - 同一 Open 在就绪后只启动一次规划并到达上游；
 - PlaybackPipe 重连、DLNA Session、SOAP、Runtime 和 Qt-free PlaybackBridge
   既有行为保持不变。
+
+### 3.11 Playback generation 前进时 stateVersion 可以重置
+
+提交：
+
+```text
+0b219db fix(dlna): compare playback generation for readiness
+```
+
+真实故障表现为方向性确认：
+
+```text
+LANERC -> 抖音：不弹确认
+抖音 -> LANERC：正常弹确认
+```
+
+根因不在同 IP 控制放宽。DLNA Runtime 的 Open readiness 基线只保存了
+`stateVersion`，没有保存它所属的 playback `generation`：
+
+```text
+旧 Ui: generation=2, stateVersion 已增长到较大值
+新 Ui: generation=3, stateVersion 从 1 重新开始
+```
+
+因此 LANERC 已经实际进入 `PLAYING`，Runtime 仍用旧 Ui 的高
+`baselineStateVersion` 判断新 Ui 的低 `stateVersion`，误以为 Open 尚未 ready。
+Claim operation 保持 `Preparing`，10 秒后在下一次 SOAP 入口 tick 时超时，
+owner 被清除；随后抖音 SetURI 被当作 FirstClaim 直接执行，所以没有确认框。
+
+修复后 `PendingMedia` 保存完整基线：
+
+```text
+baselinePlaybackGeneration
+baselineStateVersion
+```
+
+两处 readiness 入口统一使用字典序比较：
+
+```text
+snapshot.generation > baselineGeneration
+或
+snapshot.generation == baselineGeneration
+&& snapshot.stateVersion > baselineStateVersion
+```
+
+该规则同时满足：
+
+- 新 generation 的 `stateVersion=1` 可以完成 readiness；
+- 旧 generation 即使 `stateVersion` 更高，也不能完成当前 Open；
+- Ui 重连保持同 generation 时，仍要求 stateVersion 前进；
+- 不修改 Claim 身份、owner、Preparing/Active 状态机或 SOAP 语义。
+
+回归测试覆盖：
+
+```text
+baseline generation=10, stateVersion=100
+-> Open 后进入 generation=11, stateVersion=1
+-> generation=9/stateVersion=101 不能完成 readiness
+-> generation=11/stateVersion=1 可以完成 readiness
+-> 同 IP、不同 User-Agent 的新媒体必须进入确认
+```
+
+验证结果：
+
+```text
+Debug CTest:   51/51 passed
+Release CTest: 51/51 passed
+```
 
 ## 4. 真实交互
 
