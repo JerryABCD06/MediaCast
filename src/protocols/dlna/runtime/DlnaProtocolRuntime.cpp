@@ -24,6 +24,16 @@ bool sameMedia(
     return left.uri == right.uri;
 }
 
+bool isNewerPlaybackSnapshot(
+    const playback::PlaybackSnapshot &snapshot,
+    std::uint64_t baselineGeneration,
+    std::uint64_t baselineStateVersion)
+{
+    return snapshot.generation > baselineGeneration
+        || (snapshot.generation == baselineGeneration
+            && snapshot.stateVersion > baselineStateVersion);
+}
+
 std::string controlPointName(std::string_view userAgent)
 {
     const std::string value(userAgent);
@@ -513,8 +523,9 @@ void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
             }
             PendingMedia pending;
             pending.execution = task.media;
-            pending.baselineStateVersion =
-                m_playback.snapshot().stateVersion;
+            const auto baseline = m_playback.snapshot();
+            pending.baselinePlaybackGeneration = baseline.generation;
+            pending.baselineStateVersion = baseline.stateVersion;
             pending.generation = task.generation;
             m_pendingMedia = std::move(pending);
         }
@@ -559,8 +570,10 @@ void DlnaProtocolRuntime::mediaLoop(std::stop_token stop)
                         || snapshot.state == PlaybackState::Paused)
                     && sameMedia(
                         snapshot.current, task.media.media)
-                    && snapshot.stateVersion
-                        > m_pendingMedia->baselineStateVersion;
+                    && isNewerPlaybackSnapshot(
+                        snapshot,
+                        m_pendingMedia->baselinePlaybackGeneration,
+                        m_pendingMedia->baselineStateVersion);
                 if (readyFromSnapshot)
                     m_pendingMedia.reset();
             } else {
@@ -945,8 +958,10 @@ void DlnaProtocolRuntime::handlePlaybackEvent(
             && (m_pendingMedia->waitingForPlayer
                 || m_pendingMedia->waitingForSnapshot)
             && event.snapshot.playerAvailable
-            && event.snapshot.stateVersion
-                > m_pendingMedia->baselineStateVersion
+            && isNewerPlaybackSnapshot(
+                event.snapshot,
+                m_pendingMedia->baselinePlaybackGeneration,
+                m_pendingMedia->baselineStateVersion)
             && sameMedia(
                 event.snapshot.current,
                 m_pendingMedia->execution.media)) {

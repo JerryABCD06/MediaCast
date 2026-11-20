@@ -88,6 +88,7 @@ private:
 
     struct PendingMedia {
         claim::DlnaMediaExecution execution;
+        std::uint64_t baselinePlaybackGeneration = 0;
         std::uint64_t baselineStateVersion = 0;
         std::uint64_t generation = 0;
         std::uint64_t commandId = 0;

@@ -74,11 +74,14 @@ std::string setUriBody(const std::string &uri, const std::string &address)
 
 std::string httpRequest(
     const std::string &address, const std::string &body,
-    std::string action = "SetAVTransportURI")
+    std::string action = "SetAVTransportURI",
+    std::string userAgent = {})
 {
+    if (userAgent.empty())
+        userAgent = "Runtime-Test-" + address;
     return "POST /AVTransport/control HTTP/1.1\r\n"
         "Host: 127.0.0.1\r\n"
-        "User-Agent: Runtime-Test-" + address + "\r\n"
+        "User-Agent: " + userAgent + "\r\n"
         "SOAPACTION: \"urn:schemas-upnp-org:service:AVTransport:1#"
             + action + "\"\r\n"
         "Content-Type: text/xml; charset=utf-8\r\n"
@@ -328,6 +331,127 @@ private:
         std::function<void(const PlaybackEvent &)>> m_listeners;
     std::uint64_t m_nextCommandId = 0;
     std::uint64_t m_nextListenerId = 0;
+};
+
+class GenerationResetGateway final : public PlaybackGateway
+{
+public:
+    GenerationResetGateway()
+    {
+        m_snapshot.generation = 10;
+        m_snapshot.stateVersion = 100;
+        m_snapshot.playerAvailable = true;
+    }
+
+    PlaybackSnapshot snapshot() const override
+    {
+        std::lock_guard lock(m_mutex);
+        return m_snapshot;
+    }
+
+    PlaybackCommandSubmission submit(
+        const PlaybackCommand &command) override
+    {
+        std::vector<std::function<void(const PlaybackEvent &)>>
+            listeners;
+        PlaybackSnapshot snapshot;
+        std::uint64_t commandId = 0;
+        {
+            std::lock_guard lock(m_mutex);
+            commandId = ++m_nextCommandId;
+            if (command.type == PlaybackCommandType::Open) {
+                m_snapshot.generation = 11;
+                m_snapshot.stateVersion = 1;
+                m_snapshot.current = command.media;
+                m_snapshot.state = PlaybackState::Preparing;
+                m_snapshot.loadStatus = LoadStatus::Ok;
+            }
+            snapshot = m_snapshot;
+            for (const auto &[id, listener] : m_listeners) {
+                (void)id;
+                listeners.push_back(listener);
+            }
+        }
+
+        PlaybackEvent completed;
+        completed.kind = PlaybackEventKind::CommandCompleted;
+        completed.commandId = commandId;
+        completed.outcome = PlaybackOutcomeStatus::Applied;
+        completed.snapshot = snapshot;
+        for (const auto &listener : listeners)
+            listener(completed);
+
+        if (command.type == PlaybackCommandType::Open) {
+            {
+                std::lock_guard lock(m_mutex);
+                m_openSubmitted = true;
+            }
+            m_changed.notify_all();
+        }
+        return {
+            true,
+            PlaybackSubmissionStatus::Queued,
+            commandId,
+            snapshot.generation,
+            {},
+            snapshot.stateVersion,
+        };
+    }
+
+    std::uint64_t addEventListener(
+        std::function<void(const PlaybackEvent &)> listener) override
+    {
+        std::lock_guard lock(m_mutex);
+        const std::uint64_t id = ++m_nextListenerId;
+        m_listeners.emplace(id, std::move(listener));
+        return id;
+    }
+
+    void removeEventListener(std::uint64_t listenerId) override
+    {
+        std::lock_guard lock(m_mutex);
+        m_listeners.erase(listenerId);
+    }
+
+    bool waitForOpen()
+    {
+        std::unique_lock lock(m_mutex);
+        return m_changed.wait_for(lock, 2s, [this] {
+            return m_openSubmitted;
+        });
+    }
+
+    void emitSnapshot(
+        const PlaybackSnapshot &snapshot, bool authoritative)
+    {
+        std::vector<std::function<void(const PlaybackEvent &)>>
+            listeners;
+        {
+            std::lock_guard lock(m_mutex);
+            if (authoritative)
+                m_snapshot = snapshot;
+            for (const auto &[id, listener] : m_listeners) {
+                (void)id;
+                listeners.push_back(listener);
+            }
+        }
+        PlaybackEvent changed;
+        changed.kind = PlaybackEventKind::SnapshotChanged;
+        changed.snapshot = snapshot;
+        for (const auto &listener : listeners)
+            listener(changed);
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    std::condition_variable m_changed;
+    PlaybackSnapshot m_snapshot;
+    std::map<
+        std::uint64_t,
+        std::function<void(const PlaybackEvent &)>> m_listeners;
+    std::uint64_t m_nextCommandId = 0;
+    std::uint64_t m_nextListenerId = 0;
+    bool m_openSubmitted = false;
 };
 
 void processPlaybackUntil(
@@ -817,6 +941,115 @@ void testEarlyCommandCompletionDoesNotLoseWakeup()
     check(done.load()
               && response.starts_with("HTTP/1.1 200 OK"),
           "command completion before submit return does not lose readiness");
+    runtime.stop();
+}
+
+void testPlaybackGenerationResetCompletesReadiness()
+{
+    WinsockRuntime winsock;
+    std::string error;
+    check(winsock.initialize(error),
+          "generation reset test Winsock initializes");
+
+    GenerationResetGateway playback;
+    TestConfirmationPort port;
+    DlnaProtocolRuntime runtime(
+        playback, port,
+        DlnaProtocolRuntimeOptions{
+            "Generation Reset Test",
+            "uuid:generation-reset",
+            0,
+            1900,
+            true,
+            true,
+            true,
+            true,
+            10s,
+            [] { return true; },
+            [](const std::string &) {},
+        });
+    check(runtime.start(error),
+          "generation reset runtime starts: " + error);
+
+    const std::string ownerUri =
+        "http://example.test/generation-owner.mp4";
+    std::string ownerResponse;
+    std::atomic_bool ownerDone{false};
+    std::jthread ownerClient([&] {
+        ownerResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.10",
+                setUriBody(ownerUri, "192.0.2.10")));
+        ownerDone = true;
+    });
+    check(playback.waitForOpen(),
+          "generation reset Open reaches the playback gateway");
+    std::this_thread::sleep_for(50ms);
+    check(!ownerDone.load(),
+          "generation reset Open waits for an authoritative snapshot");
+
+    PlaybackSnapshot stale;
+    stale.generation = 9;
+    stale.stateVersion = 101;
+    stale.playerAvailable = true;
+    stale.current.uri = ownerUri;
+    stale.state = PlaybackState::Playing;
+    playback.emitSnapshot(stale, false);
+    std::this_thread::sleep_for(100ms);
+    if (ownerDone.load()) {
+        ownerClient.join();
+        check(false,
+              "an older playback generation cannot complete readiness: "
+                  + ownerResponse);
+    }
+
+    PlaybackSnapshot current;
+    current.generation = 11;
+    current.stateVersion = 1;
+    current.playerAvailable = true;
+    current.current.uri = ownerUri;
+    current.state = PlaybackState::Playing;
+    playback.emitSnapshot(current, true);
+    const auto readyDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!ownerDone.load()
+           && std::chrono::steady_clock::now() < readyDeadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    ownerClient.join();
+    check(ownerDone.load()
+              && ownerResponse.starts_with("HTTP/1.1 200 OK"),
+          "a newer generation completes readiness after stateVersion resets");
+
+    std::string candidateResponse;
+    std::atomic_bool candidateDone{false};
+    std::jthread candidateClient([&] {
+        candidateResponse = exchange(
+            runtime.localPort(),
+            httpRequest(
+                "192.0.2.10",
+                setUriBody(
+                    "http://example.test/generation-candidate.mp4",
+                    "192.0.2.10"),
+                "SetAVTransportURI",
+                "Runtime-Test-candidate"));
+        candidateDone = true;
+    });
+    check(port.waitForPrompt().has_value(),
+          "same-IP different-UA media requests confirmation after readiness");
+    port.decide(false);
+    const auto rejectDeadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (!candidateDone.load()
+           && std::chrono::steady_clock::now() < rejectDeadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    candidateClient.join();
+    check(candidateDone.load()
+              && candidateResponse.find("<errorCode>701</errorCode>")
+                  != std::string::npos,
+          "rejected candidate leaves the ready owner intact");
     runtime.stop();
 }
 
@@ -1334,6 +1567,8 @@ int main()
     testNewOwnerCancelsPendingOpen();
     std::cerr << "[ RUN ] early command completion\n";
     testEarlyCommandCompletionDoesNotLoseWakeup();
+    std::cerr << "[ RUN ] playback generation reset\n";
+    testPlaybackGenerationResetCompletesReadiness();
     std::cerr << "[ RUN ] receiving surface toggle\n";
     testReceivingSurfaceToggle();
     std::cerr << "[ RUN ] receiving starts paused\n";
